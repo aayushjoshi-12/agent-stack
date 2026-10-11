@@ -246,7 +246,7 @@ Milestone C — Real capabilities
 16b  Skills (SKILL.md)                    ✅
 16c  Agent instructions (AGENTS.md)       ✅
 16d  Memory files (MEMORY.md)             ⬜
-16e  Context wiring (make it real)        ⬜
+16e  Context wiring (make it real)        ✅
 
 Milestone D — Composition & application
  17  Composition root (bootstrap.py)      🟡
@@ -884,7 +884,7 @@ with the same three-level progressive disclosure as skills (P16b). Full survey +
 
 ---
 
-## Phase 16e — Context wiring (make it real) ⬜
+## Phase 16e — Context wiring (make it real) ✅
 
 **Goal.** The file-capability pieces (P16 builder, P16b skills, P16c instructions, P16d
 memory) are built and unit-tested, but **nothing wires them into a run**: the runtime
@@ -912,6 +912,8 @@ phase makes the composition real, so what the model actually sees is
 - `test_memory_index_reaches_model_prompt` — memory index lines reach the prompt (with P16d).
 
 **Defer:** semantic/vector retrieval; per-session instruction overrides.
+
+**Discovered — SKILL.md parser is a strict subset.** Real `SKILL.md` files use fuller YAML than P16b accepts, so at the composition boundary (`strict=False`) several vendored skills are silently skipped: `ponytail` uses a `>` block-scalar description, `web-design-guidelines` a nested `metadata:` map, and `image-to-code-skill`/`taste-skill` have a frontmatter name that differs from the directory name. Follow-up: accept `|`/`>` block scalars for `description`, tolerate (parse-and-ignore) a nested `metadata:` map, and decide whether a dir/name mismatch is a hard error or a warning. Until then only skills that match the subset reach the model's resident metadata.
 
 ---
 
