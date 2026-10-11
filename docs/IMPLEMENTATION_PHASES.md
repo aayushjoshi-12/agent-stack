@@ -230,17 +230,17 @@ Milestone A — The minimal loop
   6  Errors & limits                      ⬜
 
 Milestone B — Durability & state
-  7  Sessions & in-memory stores          🟡
-  8  Event model & event bus              ⬜
-  9  SQLite index + file transcripts      ⬜
+  7  Sessions & in-memory stores          ✅
+  8  Event model & event bus              ✅
+  9  SQLite index + file transcripts      ✅
  10  Checkpoints & tool executions        ⬜
  11  RunManager + RunHandle               ⬜
  12  Cancellation, session lock, version  ⬜
 
 Milestone C — Real capabilities
- 13  Workspace & filesystem tools         ⬜
- 14  Terminal tool subsystem              ⬜
- 15  Artifact store                       ⬜
+ 13  Workspace & filesystem tools         ✅
+ 14  Terminal tool subsystem              ✅
+ 15  Artifact store                       ✅
  16  Context builder & compaction         ⬜
 16b  Skills (SKILL.md)                    ⬜
 16c  Agent instructions (AGENTS.md)       ⬜
@@ -255,15 +255,19 @@ Milestone E — Multi-agent & memory
  21  Persistent memory                    ⬜
  22  Planning / TODOs                     ⬜
 
-Milestone F — Gateways
- 23  CLI / TUI gateway                    ⬜
- 24  Web gateway (FastAPI + SSE)          ⬜
- 25  Telegram gateway                     ⬜
+Milestone F — Gateways (**order: TUI → Telegram → Web**)
+ 23  TUI gateway (Textual + Rich)         ⬜   ← build first
+ 25  Telegram gateway                     ⬜   ← build second
+ 24  Web gateway (Next.js, SSE)           ⬜   ← build last
 
 Milestone G — Trust & operations
  26  Approval flow                        ⬜
  27  Observability & invariant tests      ⬜
  28  Hardening                             ⬜
+
+Milestone H — Time travel & branching (later)
+ 29  Durable event log & replay           ⬜
+ 30  Conversation branching               ⬜
 ```
 
 > **Build order one-liner** (keep visible):
@@ -271,7 +275,13 @@ Milestone G — Trust & operations
 > events → sessions → sqlite **index** + **file transcripts** → checkpoints →
 > run manager → cancellation → filesystem → terminal → artifacts → context →
 > **skills + AGENTS.md** → bootstrap → application → gateways →
-> subagents → memory → planning → approval → observability → hardening.
+> subagents → memory → planning → approval → observability → hardening →
+> **durable event log → branching (Milestone H)**.
+
+Gateway build order detail: **TUI first (P23)**, **Telegram second (P25)**, **Web last
+(P24)**. The web gateway is **Next.js + SSE** (no WebSocket) and its frontend design is
+driven by the vendored design skills in `.claude/skills/`; the user will share design
+inspiration before the web phase starts.
 
 ---
 
@@ -535,7 +545,7 @@ class SessionStore(Protocol):
 
 ---
 
-## Phase 8 — Event model & event bus ⬜
+## Phase 8 — Event model & event bus ✅
 
 **Goal.** Gateways consume a stable event protocol, never raw model payloads. §30–34.
 
@@ -563,7 +573,8 @@ class AgentEvent:
 - `async for event in bus.subscribe(run_id): ...` yields events in sequence order.
 - No raw `response.model_dump()` ever reaches a gateway (§30).
 
-**Defer:** durable event log / replay from DB (Phase 10+), Redis/NATS (§33).
+**Defer:** durable event log/replay (Phase 29 — Milestone H), branching (Phase 30),
+Redis/NATS (§33).
 
 ---
 
@@ -760,7 +771,9 @@ tests, and keeps large output out of context.
 **Deliverables**
 - `skills/models.py` (`SkillMetadata`, `Skill`, `SkillResource`), `skills/loader.py`
   (discover + parse YAML frontmatter + name validation), `skills/registry.py`.
-- Discovery roots: `<workspace>/.agent/skills/`, repo `skills/`, `~/.claude/skills/` (opt-in).
+- Discovery roots: `<workspace>/.agent/skills/`, repo `skills/`, repo `.claude/skills/`
+  (the vendored design skills live here — already in the repo tree), `~/.claude/skills/`
+  (opt-in).
 - Level-1 metadata appended to the system prompt (name + description only).
 - Tools: `load_skill(name)` (level 2 body), `read_skill_resource(name, path)` (level 3).
 - `scripts/` execute only via the terminal tool (P14) — never a bespoke executor.
@@ -939,39 +952,31 @@ def create_application(config: AppConfig) -> Application:
 
 ---
 
-## Phase 23 — CLI / TUI gateway ⬜
+## Phase 23 — TUI gateway (Textual + Rich) ⬜  ← FIRST gateway to build
 
-**Goal.** Prove the whole stack locally with the least protocol friction. §66.
+**Goal.** Prove the whole stack locally with a real terminal UI. §66, §143.
+**Stack decision:** [`Textual`](https://textual.textualize.io) app with
+[`Rich`](https://rich.readthedocs.io) rendering — no other gateway depends on this choice.
 
 **Deliverables**
-- `gateways/cli.py` (start here, simplest) then `gateways/tui/` (Textual, §143).
-- Renders `AgentEvent`s; never touches tools/models/stores.
+- `gateways/tui/` — a Textual app:
+  - chat pane (Rich-rendered message blocks: human/assistant/tool), input box,
+    run/tool status side panel, command palette.
+  - consumes `AgentEvent`s from `RunHandle.events()` (P11) and renders them live;
+    **never touches tools/models/stores**.
+  - `Ctrl+C` → cancel current run (`Application.cancel_run`); another `Ctrl+C` quits.
+- Keep a thin `gateways/cli.py` REPL for scripting/debug (same event consumption).
 
 **Acceptance**
-- Interactive session works; `Ctrl+C` maps to `Application.cancel_run`.
+- Interactive TUI session: messages stream in, tool calls show as status lines.
+- Cancelling a run stops tool/kill chains (P12 cancellation) and returns to the input.
+- Same `session_id` continues a conversation started earlier.
 
-**Defer:** rich execution trees until events are stable.
+**Defer:** rich execution trees until events are stable (they are — P08 done).
 
 ---
 
-## Phase 24 — Web gateway ⬜
-
-**Goal.** HTTP commands + SSE event stream. §62–63.
-
-**Deliverables**
-- `gateways/web/app.py` — FastAPI routes:
-  `POST /sessions`, `GET /sessions`, `POST /sessions/{id}/messages`,
-  `GET /sessions/{id}`, `GET /runs/{id}/events` (SSE), `POST /runs/{id}/cancel`.
-- Add `fastapi`/`uvicorn` to dependencies only now.
-
-**Acceptance**
-- `send_message` returns `run_id`; SSE replays from `last_event_sequence` (§104).
-
-**Defer:** WebSocket approvals (until Phase 26).
-
----
-
-## Phase 25 — Telegram gateway ⬜
+## Phase 25 — Telegram gateway ⬜  ← SECOND gateway to build
 
 **Goal.** Adapter only; quirks stay at the edge. §64–65.
 
@@ -981,9 +986,39 @@ def create_application(config: AppConfig) -> Application:
 - External-message idempotency key mapping (§105).
 
 **Acceptance**
-- Same `session_id` continues a conversation started in the Web/TUI gateway.
+- Same `session_id` continues a conversation started in the TUI gateway.
 
 **Defer:** inline-keyboard approvals until Phase 26.
+
+---
+
+## Phase 24 — Web gateway (Next.js + SSE) ⬜  ← LAST gateway to build
+
+**Goal.** HTTP commands + **SSE** event stream. §62–63.
+**Stack decisions** (user-specified):
+- **Next.js** frontend (`web/` app) — design driven by the **vendored design skills in
+  `.claude/skills/`** (awesome-design-md, image-to-code, taste-skill,
+  web-design-guidelines, playwright-cli). The user will share design inspiration before
+  this phase starts.
+- **SSE, not WebSocket**, for the event stream.
+
+**Deliverables**
+- Backend `gateways/web/app.py` — FastAPI routes:
+  `POST /sessions`, `GET /sessions`, `POST /sessions/{id}/messages`,
+  `GET /sessions/{id}`, `GET /runs/{id}/events` (**SSE**, resume from
+  `Last-Event-ID`/`last_event_sequence`), `POST /runs/{id}/cancel`.
+- `web/` — Next.js app consuming `POST /sessions/{id}/messages` + the SSE stream;
+  design system anchored on the vendored skills; visual regression via
+  playwright-cli skill.
+- Add `fastapi`/`uvicorn` to dependencies only now; Node toolchain is managed via the
+  Next.js app's own `package.json`.
+
+**Acceptance**
+- `send_message` returns `run_id`; SSE replays from `last_event_sequence` (§104).
+- UI survives reconnect: after a dropped SSE connection it resumes from the last
+  received event id.
+
+**Defer:** SSE-based approvals (Phase 26).
 
 ---
 
@@ -1054,6 +1089,68 @@ large conversation     gateway reconnect       approval race
 
 **Acceptance**
 - The hardening matrix is green; a documented delete-session path leaves no orphans.
+
+---
+
+# Milestone H — Time travel & branching (later phases)
+
+> These are **documented now, implemented later** (after the gateways land). They turn the
+> event bus + conversation store into a *timeline* you can rewind and fork.
+> See [`design/event-log-and-branching.md`](design/event-log-and-branching.md).
+
+---
+
+## Phase 29 — Durable event log & replay ⬜
+
+**Goal.** The event bus captures **all** events durably so any past moment can be
+revisited. Extends P08 (in-memory only today) — this is the "back to the past" layer.
+
+**Deliverables**
+- `persistence/event_log.py` — `events` table (append-only): `(id, run_id, session_id,
+  parent_branch_id, sequence, type, timestamp, data_json)`. **Design tension:** replay
+  needs payloads, but the SQLite-is-index rule (ADR-008) forbids conversation content in
+  SQLite. Resolution: the durable log stores **structured event metadata + references**
+  (offsets into `transcript.jsonl`); payloads rehydrate from the file store. Exact schema
+  decided during the phase.
+- `EventLogStore` protocol + SQLite impl; `EventStoreBus` — an `EventBus` wrapper that
+  publishes in-memory **and** appends to the log.
+- Replay API: `bus.replay(run_id) / replay(session_id, up_to_sequence) ->
+  AsyncIterator[AgentEvent]`; `GET /runs/{id}/events` (P24 SSE) can resume from any
+  past event id.
+
+**Acceptance**
+- Every event type P08 emits is found in the log after a run.
+- Replay reproduces a run's events exactly, in sequence order.
+- Events survive process restart (log read from SQLite + JSONL offsets).
+
+**Defer:** event compaction, retention, event-level permissions.
+
+---
+
+## Phase 30 — Conversation branching ⬜
+
+**Goal.** Fork a conversation at any event and run the branch — "go back in the past and
+branch" — like a versioned timeline, not a linear chat.
+
+**Deliverables**
+- Branch model: a conversation is a **tree of branches**; each branch is a linear
+  sequence of events/messages rooted at a parent event.
+- `SessionStore`/`ConversationStore` additions:
+  - `Session.branch_of: str | None`, `Session.branch_point_event_id: str | None`;
+  - `branch(session_id, branch_point) -> Session` clones messages up to the fork point
+    (files: new `sessions/<id>` dir with copied prefix of `transcript.jsonl`/`.md`).
+  - message `seq` stays monotonic **within a branch**; `(session_id, branch_id)` keys the
+    message index.
+- Runtime: starting a run on a branch continues from the branch point; a queued run that
+  started earlier never writes into a forked sibling (per-session lock, P12).
+
+**Acceptance**
+- `test_branch_forks_at_event_and_preserves_prefix`
+- `test_branch_and_parent_diverge_after_fork`
+- `test_branch_writes_do_not_touch_parent`
+- TUI/Web: an event in the past can be forked and continued (UI affordance, P23/P24+).
+
+**Defer:** branch merging/diffing, GC of dead branches.
 
 ---
 

@@ -6,6 +6,7 @@
 | [`WORKFLOW.md`](WORKFLOW.md) | How work is planned, executed, verified (smoke tests), and committed. |
 | [`TEST_PLAN.md`](TEST_PLAN.md) | Test layers, the deterministic fake model, and coverage per phase. |
 | [`design/conversation-storage.md`](design/conversation-storage.md) | File-based transcripts/artifacts; SQLite as index. |
+| [`design/event-log-and-branching.md`](design/event-log-and-branching.md) | Durable event log + conversation branching (Milestone H, later). |
 | [`design/skills-and-instructions.md`](design/skills-and-instructions.md) | `SKILL.md` + `AGENTS.md` support. |
 | [`design/source-design-document.md`](design/source-design-document.md) | Original architecture design document (snapshot). |
 | [`decisions/`](decisions/) | Architecture Decision Records (ADRs). |
@@ -17,3 +18,10 @@
 3. Smoke-test what touches a real service/DB/filesystem/LLM; keep `make check` green.
 4. Commit with the phase key.
 5. Record any non-obvious choice as an ADR in `decisions/`.
+
+## Gateway stack (user decisions)
+
+- **TUI first** (Textual + Rich), then **Telegram**, then **Web** (Next.js + SSE — no
+  WebSocket).
+- Web design is driven by the **vendored design skills** in `.claude/skills/`; the user
+  will share design inspiration before the web phase starts.

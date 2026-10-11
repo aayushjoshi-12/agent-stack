@@ -69,3 +69,6 @@ src/agent_stack/
 ├── gateways/     # CLI/TUI, Web, Telegram
 └── app/          # config, application service, bootstrap (composition root)
 ```
+
+Note: `.claude/skills/` holds the vendored design skills (repo-scoped copies used by the
+web phase; never reference the external source repo).
