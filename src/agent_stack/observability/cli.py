@@ -32,6 +32,8 @@ def _parser() -> argparse.ArgumentParser:
     tail_parser.add_argument(
         "--from-sequence", type=int, default=0, help="skip sequences below this"
     )
+    sub.add_parser("tui", help="run the Textual terminal UI gateway")
+    sub.add_parser("chat", help="run the line REPL gateway")
     return parser
 
 
@@ -68,6 +70,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     if parsed.command == "audit" and parsed.audit_command == "tail":
         path = audit_log_path(AppConfig.from_env().workspace)
         tail(path, run_id=parsed.run_id, from_sequence=parsed.from_sequence)
+        return 0
+    if parsed.command == "tui":
+        from agent_stack.app.bootstrap import build_application
+        from agent_stack.gateways.tui import run_tui
+
+        run_tui(build_application())
+        return 0
+    if parsed.command == "chat":
+        import asyncio
+
+        from agent_stack.app.bootstrap import build_application
+        from agent_stack.gateways.cli import run_cli
+
+        asyncio.run(run_cli(build_application()))
         return 0
 
     _parser().print_help()
