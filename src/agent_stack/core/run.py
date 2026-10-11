@@ -25,7 +25,7 @@ from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.runtime import AgentRuntime
 
 if TYPE_CHECKING:
-    from agent_stack.persistence.base import RunStore
+    from agent_stack.persistence.base import CheckpointStore, RunStore
 
 __all__ = ["Run", "RunHandle", "RunManager", "RunRequest", "RunStatus"]
 
@@ -106,10 +106,12 @@ class RunManager:
         runtime: AgentRuntime,
         run_store: RunStore,
         event_bus: EventBus | None = None,
+        checkpoint_store: CheckpointStore | None = None,
     ) -> None:
         self._runtime = runtime
         self._run_store = run_store
         self._event_bus = event_bus
+        self._checkpoint_store = checkpoint_store
 
         self._tasks: dict[str, asyncio.Task[AIMessage]] = {}
         self._tokens: dict[str, CancellationToken] = {}
@@ -169,6 +171,7 @@ class RunManager:
                 run_id=run.id,
                 cancel=token,
                 counters=self._record_counters(run),
+                checkpoint_store=self._checkpoint_store,
             )
             run.status = RunStatus.COMPLETED
             return result

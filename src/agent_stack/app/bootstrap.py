@@ -11,6 +11,7 @@ from agent_stack.core.locks import SessionLockManager
 from agent_stack.core.run import RunManager
 from agent_stack.persistence.conversation import FileConversationStore
 from agent_stack.persistence.sqlite import (
+    SqliteCheckpointStore,
     SqliteDatabase,
     SqliteRunStore,
     SqliteSessionStore,
@@ -43,6 +44,7 @@ def build_application(config: AppConfig | None = None) -> Application:
     conversation = FileConversationStore(sessions_root)
     session_store = SqliteSessionStore(db, conversation)
     run_store = SqliteRunStore(db)
+    checkpoint_store = SqliteCheckpointStore(db)
     event_bus = InMemoryEventBus()
     locks = SessionLockManager()
 
@@ -61,6 +63,7 @@ def build_application(config: AppConfig | None = None) -> Application:
     run_manager = RunManager(
         runtime=runtime,
         run_store=run_store,
+        checkpoint_store=checkpoint_store,
         event_bus=event_bus,
     )
 
@@ -70,6 +73,7 @@ def build_application(config: AppConfig | None = None) -> Application:
         factory=factory,
         session_store=session_store,
         run_manager=run_manager,
+        event_bus=event_bus,
     )
 
 

@@ -23,8 +23,10 @@ from langchain_core.messages import BaseMessage
 from agent_stack.core.errors import SessionVersionConflictError
 from agent_stack.core.run import Run, RunStatus
 from agent_stack.core.session import Session, SessionStore
+from agent_stack.core.state import Checkpoint, CheckpointStatus
 from agent_stack.persistence.conversation import ConversationStore
 from agent_stack.persistence.migrations import create_schema
+from agent_stack.tools.executor import ToolExecutionResult
 
 _RUN_COLUMNS = (
     "id, session_id, parent_run_id, status, step_count, tool_call_count, "
@@ -66,11 +68,20 @@ class ArtifactIndexEntry:
 class SqliteDatabase:
     """A tiny async-friendly wrapper around a single ``sqlite3`` connection."""
 
-    def __init__(self, path: Path | str) -> None:
+    def __init__(
+        self,
+        path: Path | str,
+        *,
+        factory: type[sqlite3.Connection] | None = None,
+    ) -> None:
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(self._path, check_same_thread=False)
+        # ``factory`` is sqlite3's standard extension point (tests count commits with a
+        # subclass); None means the default Connection class.
+        self._conn = sqlite3.connect(
+            self._path, check_same_thread=False, factory=factory or sqlite3.Connection
+        )
         self._conn.row_factory = sqlite3.Row
         create_schema(self._conn)
 
@@ -159,6 +170,78 @@ class SqliteRunStore:
             (RunStatus.PENDING.value, RunStatus.RUNNING.value),
         )
         return [_row_to_run(row) for row in rows]
+
+
+class SqliteCheckpointStore:
+    """Persist run checkpoints and idempotent tool-execution records.
+
+    Both tables hold run *state* metadata only — never conversation content.
+    """
+
+    def __init__(self, db: SqliteDatabase) -> None:
+        self._db = db
+
+    async def save(self, checkpoint: Checkpoint) -> None:
+        await self._db.execute(
+            """
+            INSERT INTO checkpoints (run_id, session_id, step, tool_call_count, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                checkpoint.run_id,
+                checkpoint.session_id,
+                checkpoint.step,
+                checkpoint.tool_call_count,
+                checkpoint.status.value,
+                checkpoint.created_at,
+            ),
+        )
+
+    async def get_latest(self, run_id: str) -> Checkpoint | None:
+        rows = await self._db.query(
+            "SELECT * FROM checkpoints WHERE run_id = ? ORDER BY id DESC LIMIT 1",
+            (run_id,),
+        )
+        if not rows:
+            return None
+        return _row_to_checkpoint(rows[0])
+
+    async def record_tool_executions(
+        self, run_id: str, results: Sequence[ToolExecutionResult]
+    ) -> None:
+        """Persist a whole tool batch in one transaction.
+
+        ``(run_id, tool_call_id)`` is the idempotency key, so ``INSERT OR IGNORE``
+        keeps a completed tool from ever being recorded twice. One ``executemany``
+        call means one commit for the entire batch (see ``SqliteDatabase``).
+        """
+        rows = [
+            (
+                run_id,
+                result.tool_call_id,
+                result.tool_name,
+                "success" if result.success else "error",
+                result.error,
+                _now_iso(),
+            )
+            for result in results
+        ]
+        await self._db.executemany(
+            """
+            INSERT OR IGNORE INTO tool_executions
+                (run_id, tool_call_id, tool_name, status, error, ts)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+
+    async def completed_tool_call_ids(self, run_id: str) -> set[str]:
+        """Every ``tool_call_id`` already recorded for a run (the idempotency set)."""
+        rows = await self._db.query(
+            "SELECT tool_call_id FROM tool_executions WHERE run_id = ?",
+            (run_id,),
+        )
+        return {str(row["tool_call_id"]) for row in rows}
 
 
 class SqliteIndex:
@@ -386,8 +469,12 @@ class SqliteSessionStore:
     async def delete(self, session_id: str) -> None:
         await self._conversation.delete(session_id)
         await self._db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-        for table in ("runs", "message_index", "artifacts_index"):
+        for table in ("runs", "message_index", "artifacts_index", "checkpoints"):
             await self._db.execute(f"DELETE FROM {table} WHERE session_id = ?", (session_id,))
+        # tool_executions rows belong to runs (no session column): drop the orphans above.
+        await self._db.execute(
+            "DELETE FROM tool_executions WHERE run_id NOT IN (SELECT id FROM runs)"
+        )
 
 
 def _row_to_run(row: sqlite3.Row) -> Run:
@@ -401,4 +488,15 @@ def _row_to_run(row: sqlite3.Row) -> Run:
         tool_call_count=int(row["tool_call_count"]),
         error=None if error_value is None else str(error_value),
         parent_run_id=None if parent_run_id_value is None else str(parent_run_id_value),
+    )
+
+
+def _row_to_checkpoint(row: sqlite3.Row) -> Checkpoint:
+    return Checkpoint(
+        run_id=str(row["run_id"]),
+        session_id=str(row["session_id"]),
+        step=int(row["step"]),
+        tool_call_count=int(row["tool_call_count"]),
+        status=CheckpointStatus(str(row["status"])),
+        created_at=str(row["created_at"]),
     )

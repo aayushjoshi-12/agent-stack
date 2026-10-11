@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Callable, Mapping
-from typing import Any
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
 from agent_stack.core.agent import Agent
 from agent_stack.core.cancellation import CancellationToken
@@ -19,7 +20,11 @@ from agent_stack.core.event_bus import EventBus
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.locks import SessionLockManager
 from agent_stack.core.session import Session, SessionStore
+from agent_stack.core.state import Checkpoint, CheckpointStatus
 from agent_stack.tools.executor import ToolExecutor
+
+if TYPE_CHECKING:
+    from agent_stack.persistence.base import CheckpointStore
 
 
 class AgentRuntime:
@@ -43,6 +48,12 @@ class AgentRuntime:
     an optional ``cancel`` token that is polled between loop iterations and around
     tool execution, and an optional ``counters`` callback that receives the run's final
     ``(step_count, tool_call_count)`` on success. Omitted, all behave exactly as before.
+
+    An optional ``checkpoint_store`` on ``run`` makes the loop durable: it writes
+    semantic checkpoints (AI message accepted, tool batch completed, run completed) and
+    records every executed tool call under the ``(run_id, tool_call_id)`` idempotency key,
+    so a resumed run skips calls that already completed instead of re-executing them.
+    With no store, the loop behaves exactly as before.
     """
 
     def __init__(
@@ -71,6 +82,7 @@ class AgentRuntime:
         run_id: str | None = None,
         cancel: CancellationToken | None = None,
         counters: Callable[[int, int], None] | None = None,
+        checkpoint_store: CheckpointStore | None = None,
     ) -> AIMessage:
         resolved_run_id = run_id or str(uuid4())
 
@@ -82,6 +94,7 @@ class AgentRuntime:
                 run_id=resolved_run_id,
                 cancel=cancel,
                 counters=counters,
+                checkpoint_store=checkpoint_store,
             )
 
         if self._session_lock is None:
@@ -98,6 +111,7 @@ class AgentRuntime:
         run_id: str,
         cancel: CancellationToken | None,
         counters: Callable[[int, int], None] | None,
+        checkpoint_store: CheckpointStore | None,
     ) -> AIMessage:
         session = await self._session_store.get(session_id)
         if session is None:
@@ -142,6 +156,15 @@ class AgentRuntime:
                     },
                 )
 
+                await self._checkpoint(
+                    checkpoint_store,
+                    run_id=run_id,
+                    session_id=session_id,
+                    step=step_count,
+                    tool_call_count=tool_call_count,
+                    status=CheckpointStatus.AI_MESSAGE,
+                )
+
                 if not response.tool_calls:
                     break
 
@@ -156,7 +179,20 @@ class AgentRuntime:
                         f"Tool call limit exceeded: {tool_call_count} > {limits.max_tool_calls}"
                     )
 
-                for tool_call in response.tool_calls:
+                # Idempotency: calls already recorded for this run (by a previous attempt
+                # that crashed mid-loop) are skipped, so a mutating tool never runs twice.
+                completed_ids = (
+                    await checkpoint_store.completed_tool_call_ids(run_id)
+                    if checkpoint_store is not None
+                    else set()
+                )
+                pending = [
+                    tool_call
+                    for tool_call in response.tool_calls
+                    if tool_call["id"] not in completed_ids
+                ]
+
+                for tool_call in pending:
                     await self._emit(
                         EventType.TOOL_STARTED,
                         run_id=run_id,
@@ -168,15 +204,47 @@ class AgentRuntime:
                 # the model was thinking still stops the tools from running.
                 self._check_cancelled(cancel)
 
-                tool_messages = await self._tool_executor.execute_many(response.tool_calls)
-                new_messages.extend(tool_messages)
+                tool_results = await self._tool_executor.execute_many(pending)
 
-                for tool_call in response.tool_calls:
+                if checkpoint_store is not None and tool_results:
+                    # The whole batch lands in one transaction, atomically visible to recovery.
+                    await checkpoint_store.record_tool_executions(run_id, tool_results)
+
+                for result in tool_results:
                     await self._emit(
                         EventType.TOOL_COMPLETED,
                         run_id=run_id,
                         session_id=session_id,
-                        data={"tool": tool_call["name"], "tool_call_id": tool_call["id"]},
+                        data={
+                            "tool": result.tool_name,
+                            "tool_call_id": result.tool_call_id,
+                        },
+                    )
+
+                # Project executed results back into the conversation in the model's call
+                # order; skipped calls get a placeholder (SQLite holds no tool content to
+                # replay, so the previous result is not reconstructed here).
+                result_by_id = {result.tool_call_id: result.message for result in tool_results}
+                for tool_call in response.tool_calls:
+                    tool_call_id = tool_call["id"]
+                    if tool_call_id is None:
+                        raise AgentStackError("Model returned a tool call without an id")
+                    tool_message = result_by_id.get(tool_call_id)
+                    if tool_message is None:
+                        tool_message = ToolMessage(
+                            content="(skipped: already completed in a previous attempt of this run)",
+                            tool_call_id=tool_call_id,
+                        )
+                    new_messages.append(tool_message)
+
+                if tool_results:
+                    await self._checkpoint(
+                        checkpoint_store,
+                        run_id=run_id,
+                        session_id=session_id,
+                        step=step_count,
+                        tool_call_count=tool_call_count,
+                        status=CheckpointStatus.TOOL_BATCH_COMPLETED,
                     )
 
             # Persist only the messages produced by this run; the loaded history is already
@@ -184,6 +252,15 @@ class AgentRuntime:
             await self._session_store.append_messages(session_id, new_messages)
             session.version += 1
             await self._session_store.save(session, expected_version=stored_version)
+
+            await self._checkpoint(
+                checkpoint_store,
+                run_id=run_id,
+                session_id=session_id,
+                step=step_count,
+                tool_call_count=tool_call_count,
+                status=CheckpointStatus.RUN_COMPLETED,
+            )
 
             await self._emit(
                 EventType.RUN_COMPLETED,
@@ -233,3 +310,27 @@ class AgentRuntime:
         )
         with contextlib.suppress(Exception):
             await self._event_bus.publish(event)
+
+    async def _checkpoint(
+        self,
+        checkpoint_store: CheckpointStore | None,
+        *,
+        run_id: str,
+        session_id: str,
+        step: int,
+        tool_call_count: int,
+        status: CheckpointStatus,
+    ) -> None:
+        """Persist a checkpoint at a loop boundary when a store is wired."""
+        if checkpoint_store is None:
+            return
+        await checkpoint_store.save(
+            Checkpoint(
+                run_id=run_id,
+                session_id=session_id,
+                step=step,
+                tool_call_count=tool_call_count,
+                status=status,
+                created_at=datetime.now(UTC).isoformat(),
+            )
+        )

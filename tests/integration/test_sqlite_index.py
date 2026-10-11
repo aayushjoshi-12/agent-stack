@@ -64,6 +64,23 @@ EXPECTED_COLUMNS: dict[str, set[str]] = {
         "size_bytes",
         "created_at",
     },
+    "checkpoints": {
+        "id",
+        "run_id",
+        "session_id",
+        "step",
+        "tool_call_count",
+        "status",
+        "created_at",
+    },
+    "tool_executions": {
+        "run_id",
+        "tool_call_id",
+        "tool_name",
+        "status",
+        "error",
+        "ts",
+    },
 }
 
 # Occurring in a column name would mean the payload leaks into SQLite.

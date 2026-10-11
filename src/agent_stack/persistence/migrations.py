@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -62,6 +62,29 @@ CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(session_id);
 CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
 CREATE INDEX IF NOT EXISTS idx_message_index_session ON message_index(session_id, seq);
 CREATE INDEX IF NOT EXISTS idx_artifacts_index_session ON artifacts_index(session_id);
+
+CREATE TABLE IF NOT EXISTS checkpoints (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id           TEXT NOT NULL,
+    session_id       TEXT NOT NULL,
+    step             INTEGER NOT NULL,
+    tool_call_count  INTEGER NOT NULL,
+    status           TEXT NOT NULL,
+    created_at       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tool_executions (
+    run_id       TEXT NOT NULL,
+    tool_call_id TEXT NOT NULL,
+    tool_name    TEXT NOT NULL,
+    status       TEXT NOT NULL,
+    error        TEXT,
+    ts           TEXT NOT NULL,
+    PRIMARY KEY (run_id, tool_call_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_checkpoints_run ON checkpoints(run_id);
+CREATE INDEX IF NOT EXISTS idx_tool_executions_run ON tool_executions(run_id);
 """
 
 
