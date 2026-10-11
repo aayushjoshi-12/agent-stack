@@ -232,7 +232,7 @@ Milestone A — The minimal loop
 Milestone B — Durability & state
   7  Sessions & in-memory stores          ✅
   8  Event model & event bus              ✅
- 8b Audit log on the event bus            ⬜
+ 8b Audit log on the event bus            ✅
   9  SQLite index + file transcripts      ✅
  10  Checkpoints & tool executions        ✅
  11  RunManager + RunHandle               ✅
@@ -584,7 +584,7 @@ point, so nothing can emit without leaving a trace.
 
 ---
 
-## Phase 8b — Audit log on the event bus ⬜
+## Phase 8b — Audit log on the event bus ✅
 
 **Goal.** Every published event leaves a durable, greppable trace so the system is
 debuggable on the fly. The bus is the single choke point — audit it there, not in each
