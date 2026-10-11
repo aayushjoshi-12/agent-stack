@@ -173,6 +173,20 @@ async def test_list_incomplete_finds_running_runs(db: SqliteDatabase) -> None:
 
 
 @pytest.mark.integration
+async def test_list_runs_finds_children_of_a_parent(db: SqliteDatabase) -> None:
+    store = SqliteRunStore(db)
+    await store.save(Run(id="parent", session_id="s1", status=RunStatus.RUNNING))
+    await store.save(Run(id="c1", session_id="s1", parent_run_id="parent"))
+    await store.save(Run(id="c2", session_id="s1", parent_run_id="parent"))
+    await store.save(Run(id="other", session_id="s1"))
+
+    children = await store.list_runs("parent")
+
+    assert {run.id for run in children} == {"c1", "c2"}
+    assert all(run.parent_run_id == "parent" for run in children)
+
+
+@pytest.mark.integration
 async def test_get_unknown_run_returns_none(db: SqliteDatabase) -> None:
     store = SqliteRunStore(db)
     assert await store.get("missing") is None

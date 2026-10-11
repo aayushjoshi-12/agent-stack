@@ -163,6 +163,14 @@ class SqliteRunStore:
             return None
         return _row_to_run(rows[0])
 
+    async def list_runs(self, parent_run_id: str) -> list[Run]:
+        """Return the child runs spawned by ``parent_run_id`` (subagent listing)."""
+        rows = await self._db.query(
+            "SELECT * FROM runs WHERE parent_run_id = ? ORDER BY id",
+            (parent_run_id,),
+        )
+        return [_row_to_run(row) for row in rows]
+
     async def list_incomplete(self) -> list[Run]:
         """Return runs that are still pending or running (recovery dropdown for P11)."""
         rows = await self._db.query(

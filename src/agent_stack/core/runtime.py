@@ -73,6 +73,11 @@ class AgentRuntime:
         self._event_bus = event_bus
         self._session_lock = session_lock
 
+    @property
+    def agent(self) -> Agent:
+        """The agent definition this runtime executes (used for delegation linkage)."""
+        return self._agent
+
     async def run(
         self,
         *,
@@ -83,6 +88,8 @@ class AgentRuntime:
         cancel: CancellationToken | None = None,
         counters: Callable[[int, int], None] | None = None,
         checkpoint_store: CheckpointStore | None = None,
+        parent_run_id: str | None = None,
+        inbox: Callable[[], list[str]] | None = None,
     ) -> AIMessage:
         resolved_run_id = run_id or str(uuid4())
 
@@ -95,6 +102,8 @@ class AgentRuntime:
                 cancel=cancel,
                 counters=counters,
                 checkpoint_store=checkpoint_store,
+                parent_run_id=parent_run_id,
+                inbox=inbox,
             )
 
         if self._session_lock is None:
@@ -112,6 +121,8 @@ class AgentRuntime:
         cancel: CancellationToken | None,
         counters: Callable[[int, int], None] | None,
         checkpoint_store: CheckpointStore | None,
+        parent_run_id: str | None = None,
+        inbox: Callable[[], list[str]] | None = None,
     ) -> AIMessage:
         session = await self._session_store.get(session_id)
         if session is None:
@@ -130,12 +141,19 @@ class AgentRuntime:
             EventType.RUN_STARTED,
             run_id=run_id,
             session_id=session_id,
+            parent_run_id=parent_run_id,
             data={"agent": self._agent.name, "user_id": user_id},
         )
 
         try:
             while True:
                 self._check_cancelled(cancel)
+                # Cooperative input injection (P20): drain anything the parent pushed at
+                # this boundary — right before the model call, which also covers the gap
+                # between tool batches. The callable is the seam; no asyncio here.
+                if inbox is not None:
+                    for text in inbox():
+                        new_messages.append(HumanMessage(content=text))
                 response = await self._model.ainvoke(
                     [SystemMessage(content=self._agent.system_prompt), *history, *new_messages]
                 )
@@ -150,6 +168,7 @@ class AgentRuntime:
                     EventType.ASSISTANT_MESSAGE,
                     run_id=run_id,
                     session_id=session_id,
+                    parent_run_id=parent_run_id,
                     data={
                         "content": response.content,
                         "tool_calls": [tool_call["name"] for tool_call in response.tool_calls],
@@ -197,6 +216,7 @@ class AgentRuntime:
                         EventType.TOOL_STARTED,
                         run_id=run_id,
                         session_id=session_id,
+                        parent_run_id=parent_run_id,
                         data={"tool": tool_call["name"], "tool_call_id": tool_call["id"]},
                     )
 
@@ -215,6 +235,7 @@ class AgentRuntime:
                         EventType.TOOL_COMPLETED,
                         run_id=run_id,
                         session_id=session_id,
+                        parent_run_id=parent_run_id,
                         data={
                             "tool": result.tool_name,
                             "tool_call_id": result.tool_call_id,
@@ -266,6 +287,7 @@ class AgentRuntime:
                 EventType.RUN_COMPLETED,
                 run_id=run_id,
                 session_id=session_id,
+                parent_run_id=parent_run_id,
                 data={"steps": step_count, "tool_calls": tool_call_count},
             )
         except Exception as exc:
@@ -273,6 +295,7 @@ class AgentRuntime:
                 EventType.RUN_FAILED,
                 run_id=run_id,
                 session_id=session_id,
+                parent_run_id=parent_run_id,
                 data={"error": repr(exc)},
             )
             raise
@@ -292,6 +315,7 @@ class AgentRuntime:
         run_id: str,
         session_id: str,
         data: Mapping[str, Any],
+        parent_run_id: str | None = None,
     ) -> None:
         """Publish an event if a bus is wired.
 
@@ -307,6 +331,7 @@ class AgentRuntime:
             session_id=session_id,
             sequence=0,
             data=data,
+            parent_run_id=parent_run_id,
         )
         with contextlib.suppress(Exception):
             await self._event_bus.publish(event)

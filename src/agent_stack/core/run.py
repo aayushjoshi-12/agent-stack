@@ -22,9 +22,12 @@ from agent_stack.core.cancellation import CancellationToken
 from agent_stack.core.errors import RunCancelled
 from agent_stack.core.event_bus import EventBus
 from agent_stack.core.events import AgentEvent, EventType
+from agent_stack.core.run_context import RunContext, RunView, SubagentRun, run_context
 from agent_stack.core.runtime import AgentRuntime
 
 if TYPE_CHECKING:
+    from agent_stack.core.agent import Agent
+    from agent_stack.core.factory import AgentFactory
     from agent_stack.persistence.base import CheckpointStore, RunStore
 
 __all__ = ["Run", "RunHandle", "RunManager", "RunRequest", "RunStatus"]
@@ -69,6 +72,16 @@ class RunRequest:
     user_id: str
     message: str
     parent_run_id: str | None = None
+    depth: int = 0
+
+
+@dataclass
+class _Progress:
+    """Live counters derived from a run's event stream (before the run is persisted)."""
+
+    steps: int = 0
+    tools: int = 0
+    last_event: str | None = None
 
 
 class RunHandle:
@@ -107,18 +120,36 @@ class RunManager:
         run_store: RunStore,
         event_bus: EventBus | None = None,
         checkpoint_store: CheckpointStore | None = None,
+        agent_factory: AgentFactory | None = None,
     ) -> None:
         self._runtime = runtime
         self._run_store = run_store
         self._event_bus = event_bus
         self._checkpoint_store = checkpoint_store
+        self._agent_factory = agent_factory
 
         self._tasks: dict[str, asyncio.Task[AIMessage]] = {}
         self._tokens: dict[str, CancellationToken] = {}
         self._pumps: dict[str, asyncio.Task[None]] = {}
         self._queues: dict[str, asyncio.Queue[AgentEvent | None]] = {}
+        self._inboxes: dict[str, asyncio.Queue[str]] = {}
+        self._progress: dict[str, _Progress] = {}
+        self._agent_names: dict[str, str] = {}
 
-    async def start(self, request: RunRequest) -> RunHandle:
+    async def start(
+        self,
+        request: RunRequest,
+        *,
+        runtime: AgentRuntime | None = None,
+    ) -> RunHandle:
+        """Start a run against the wired runtime (or an explicit override).
+
+        The override is how a subagent run executes against *its own* agent runtime;
+        everything else (persistence, events, cancellation, inbox) is identical.
+        """
+        return await self._start(request, runtime or self._runtime)
+
+    async def _start(self, request: RunRequest, runtime: AgentRuntime) -> RunHandle:
         """Persist the run, subscribe for its events, and start executing it."""
         run = Run(
             id=uuid4().hex,
@@ -130,9 +161,21 @@ class RunManager:
 
         token = CancellationToken()
         self._tokens[run.id] = token
+        self._inboxes[run.id] = asyncio.Queue()
+        self._agent_names[run.id] = runtime.agent.name
 
         run.status = RunStatus.RUNNING
         await self._run_store.save(run)
+
+        # A child run announces itself on the *parent's* run scope so the parent's stream
+        # (and the TUI) learns a subagent exists. The child's own lifecycle events stream
+        # on its own run id, tagged with parent_run_id.
+        if request.parent_run_id is not None:
+            await self._publish_subagent_started(
+                child_run_id=run.id,
+                agent_name=runtime.agent.name,
+                parent_run_id=request.parent_run_id,
+            )
 
         queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
         self._queues[run.id] = queue
@@ -140,7 +183,9 @@ class RunManager:
         # The drive task waits for the pump to register with the bus before the runtime
         # publishes anything, so no event is ever lost to a late subscriber.
         registered = asyncio.Event()
-        drive_task = asyncio.create_task(self._drive(run, request, token, queue, registered))
+        drive_task = asyncio.create_task(
+            self._drive(run, request, token, queue, registered, runtime)
+        )
         self._tasks[run.id] = drive_task
         # Mark the outcome as retrieved even if nobody awaits the task, so asyncio never
         # warns about an unretrieved exception; ``result()`` can still re-raise it.
@@ -159,20 +204,33 @@ class RunManager:
         token: CancellationToken,
         queue: asyncio.Queue[AgentEvent | None],
         registered: asyncio.Event,
+        runtime: AgentRuntime,
     ) -> AIMessage:
         """Run the runtime and transition the run to its terminal state."""
         try:
             if self._event_bus is not None:
                 await registered.wait()
-            result = await self._runtime.run(
+            context = RunContext(
+                run_id=run.id,
                 session_id=request.session_id,
                 user_id=request.user_id,
-                message=request.message,
-                run_id=run.id,
-                cancel=token,
-                counters=self._record_counters(run),
-                checkpoint_store=self._checkpoint_store,
+                depth=request.depth,
+                parent_run_id=request.parent_run_id,
+                agent=runtime.agent,
+                services=self,
             )
+            with run_context(context):
+                result = await runtime.run(
+                    session_id=request.session_id,
+                    user_id=request.user_id,
+                    message=request.message,
+                    run_id=run.id,
+                    cancel=token,
+                    counters=self._record_counters(run),
+                    checkpoint_store=self._checkpoint_store,
+                    parent_run_id=request.parent_run_id,
+                    inbox=lambda: self._drain_inbox(run.id),
+                )
             run.status = RunStatus.COMPLETED
             return result
         except asyncio.CancelledError:
@@ -194,6 +252,8 @@ class RunManager:
             try:
                 await self._run_store.save(run)
             finally:
+                if request.parent_run_id is not None:
+                    await self._publish_subagent_completed(run, request.parent_run_id)
                 if self._event_bus is None:
                     # No pump to close it: end the event stream right here.
                     self._end_stream(run.id)
@@ -226,6 +286,14 @@ class RunManager:
                     event = await next_event
                 except StopAsyncIteration:
                     break
+                # Live progress for the parent's status tool: the run store only learns
+                # the final counts, so derive running counts from the event stream.
+                progress = self._progress.setdefault(run_id, _Progress())
+                if event.type is EventType.ASSISTANT_MESSAGE:
+                    progress.steps += 1
+                elif event.type is EventType.TOOL_COMPLETED:
+                    progress.tools += 1
+                progress.last_event = event.type.value
                 queue.put_nowait(event)
                 if event.type in _TERMINAL_EVENTS:
                     break
@@ -270,9 +338,135 @@ class RunManager:
         if run is not None and run.status not in _TERMINAL_RUN_STATUSES:
             run.status = RunStatus.CANCELLED
             await self._run_store.save(run)
+            if run.parent_run_id is not None:
+                await self._publish_subagent_completed(run, run.parent_run_id)
             self._stop_pump(run_id)
             self._end_stream(run_id)
             self._finish(run_id)
+
+    async def send_input(self, run_id: str, message: str) -> bool:
+        """Inject ``message`` into a running run's inbox.
+
+        Returns ``False`` for an unknown or already-finished run; the runtime drains the
+        inbox at the top of each loop iteration (before the model call).
+        """
+        inbox = self._inboxes.get(run_id)
+        if inbox is None:
+            return False
+        inbox.put_nowait(message)
+        return True
+
+    async def start_subagent(
+        self,
+        agent: Agent,
+        *,
+        parent_run_id: str,
+        user_id: str,
+        message: str,
+        depth: int,
+    ) -> SubagentRun:
+        """Start a child run against the child agent's own runtime.
+
+        The child gets its own session (so it never shares the parent's transcript or
+        version), its own ``run_id``, and a ``parent_run_id`` back-link.
+        """
+        if self._agent_factory is None:
+            raise RuntimeError("RunManager has no agent factory; cannot start a subagent")
+        child_runtime = self._agent_factory.create(agent)
+        request = RunRequest(
+            session_id=f"{parent_run_id}::{agent.name}::{uuid4().hex}",
+            user_id=user_id,
+            message=message,
+            parent_run_id=parent_run_id,
+            depth=depth,
+        )
+        handle = await self._start(request, child_runtime)
+        return SubagentRun(run_id=handle.run_id, result=handle.result())
+
+    async def get_run_view(self, run_id: str) -> RunView | None:
+        """A run's status, live step/tool counts, and last event (or ``None``)."""
+        run = await self._run_store.get(run_id)
+        if run is None:
+            return None
+        progress = self._progress.get(run_id)
+        if run.status in _TERMINAL_RUN_STATUSES:
+            steps, tools = run.step_count, run.tool_call_count
+        else:
+            steps = progress.steps if progress else 0
+            tools = progress.tools if progress else 0
+        return RunView(
+            run_id=run.id,
+            status=run.status.value,
+            steps=steps,
+            tool_calls=tools,
+            last_event=progress.last_event if progress else None,
+            error=run.error,
+            parent_run_id=run.parent_run_id,
+        )
+
+    async def list_child_ids(self, parent_run_id: str) -> list[str]:
+        """The ids of runs whose ``parent_run_id`` is ``parent_run_id``."""
+        return [run.id for run in await self._run_store.list_runs(parent_run_id)]
+
+    async def get_run(self, run_id: str) -> Run | None:
+        """Fetch a run's persisted record (for the UI)."""
+        return await self._run_store.get(run_id)
+
+    async def list_children(self, parent_run_id: str) -> list[Run]:
+        """Fetch the persisted records of a parent's child runs (for the UI)."""
+        return await self._run_store.list_runs(parent_run_id)
+
+    def _drain_inbox(self, run_id: str) -> list[str]:
+        """Non-blocking read of a run's pending injected messages."""
+        inbox = self._inboxes.get(run_id)
+        if inbox is None:
+            return []
+        items: list[str] = []
+        while not inbox.empty():
+            items.append(inbox.get_nowait())
+        return items
+
+    async def _publish_subagent_started(
+        self,
+        *,
+        child_run_id: str,
+        agent_name: str,
+        parent_run_id: str,
+    ) -> None:
+        if self._event_bus is None:
+            return
+        # This event lives on the parent's run scope, so it carries the parent's session
+        # (not the child's) — every event's session_id matches its run_id.
+        parent = await self._run_store.get(parent_run_id)
+        event = AgentEvent.create(
+            EventType.SUBAGENT_STARTED,
+            run_id=parent_run_id,
+            session_id=parent.session_id if parent is not None else parent_run_id,
+            sequence=0,
+            data={"child_run_id": child_run_id, "agent_name": agent_name},
+        )
+        with contextlib.suppress(Exception):
+            await self._event_bus.publish(event)
+
+    async def _publish_subagent_completed(self, run: Run, parent_run_id: str) -> None:
+        if self._event_bus is None:
+            return
+        parent = await self._run_store.get(parent_run_id)
+        event = AgentEvent.create(
+            EventType.SUBAGENT_COMPLETED,
+            run_id=parent_run_id,
+            session_id=parent.session_id if parent is not None else run.session_id,
+            sequence=0,
+            data={
+                "child_run_id": run.id,
+                "agent_name": self._agent_names.get(run.id, run.id),
+                "status": run.status.value,
+                "steps": run.step_count,
+                "tool_calls": run.tool_call_count,
+            },
+        )
+        with contextlib.suppress(Exception):
+            await self._event_bus.publish(event)
 
     @staticmethod
     def _record_counters(run: Run) -> Callable[[int, int], None]:
@@ -318,6 +512,9 @@ class RunManager:
         self._tokens.pop(run_id, None)
         self._pumps.pop(run_id, None)
         self._queues.pop(run_id, None)
+        self._inboxes.pop(run_id, None)
+        self._progress.pop(run_id, None)
+        self._agent_names.pop(run_id, None)
 
 
 def _consume_outcome(task: asyncio.Task[AIMessage]) -> None:

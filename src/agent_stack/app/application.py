@@ -18,7 +18,7 @@ from agent_stack.core.agent import Agent
 from agent_stack.core.event_bus import EventBus
 from agent_stack.core.events import AgentEvent
 from agent_stack.core.factory import AgentFactory
-from agent_stack.core.run import RunHandle, RunManager, RunRequest
+from agent_stack.core.run import Run, RunHandle, RunManager, RunRequest
 from agent_stack.core.session import Session, SessionStore
 from agent_stack.gateways.base import MessageEnvelope
 
@@ -59,6 +59,18 @@ class Application:
     async def cancel_run(self, run_id: str) -> None:
         """Cancel a running run; unknown or finished runs are an idempotent no-op."""
         await self.run_manager.cancel(run_id)
+
+    async def send_input(self, run_id: str, message: str) -> bool:
+        """Inject a message into a running run (P20); ``False`` for unknown/finished."""
+        return await self.run_manager.send_input(run_id, message)
+
+    async def get_run(self, run_id: str) -> Run | None:
+        """Fetch a run's persisted record, or ``None``."""
+        return await self.run_manager.get_run(run_id)
+
+    async def child_runs(self, parent_run_id: str) -> list[Run]:
+        """A parent run's child runs (subagent listing for the UI)."""
+        return await self.run_manager.list_children(parent_run_id)
 
     async def get_session(self, session_id: str) -> Session | None:
         """Return a session's metadata, or ``None`` when it does not exist."""

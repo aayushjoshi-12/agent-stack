@@ -26,6 +26,11 @@ class InMemoryRunStore:
         run = self._runs.get(run_id)
         return replace(run) if run is not None else None
 
+    async def list_runs(self, parent_run_id: str) -> list[Run]:
+        """Return copies of the child runs spawned by ``parent_run_id``."""
+        children = (run for run in self._runs.values() if run.parent_run_id == parent_run_id)
+        return [replace(run) for run in children]
+
     async def list_incomplete(self) -> list[Run]:
         """Return copies of runs still pending or running (recovery dropdown)."""
         incomplete = (

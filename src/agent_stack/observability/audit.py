@@ -61,6 +61,7 @@ def audit_record(event: AgentEvent) -> dict[str, Any]:
         "ts": event.timestamp.isoformat(),
         "run_id": event.run_id,
         "session_id": event.session_id,
+        "parent_run_id": event.parent_run_id,
         "sequence": event.sequence,
         "type": event.type.value,
         "data": _sanitize(dict(event.data)),

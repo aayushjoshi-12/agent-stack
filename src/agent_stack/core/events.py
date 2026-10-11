@@ -26,6 +26,10 @@ class EventType(StrEnum):
     ASSISTANT_MESSAGE = "assistant.message"
     TOOL_STARTED = "tool.started"
     TOOL_COMPLETED = "tool.completed"
+    # Subagent lifecycle, published on the *parent's* run scope (Phase 20). Neither is
+    # terminal for any stream — a child finishing must never end its parent's stream.
+    SUBAGENT_STARTED = "subagent.started"
+    SUBAGENT_COMPLETED = "subagent.completed"
 
 
 @dataclass(frozen=True)
@@ -43,6 +47,7 @@ class AgentEvent:
     sequence: int
     timestamp: datetime
     data: Mapping[str, Any] = field(default_factory=dict)
+    parent_run_id: str | None = None
 
     @classmethod
     def create(
@@ -53,6 +58,7 @@ class AgentEvent:
         session_id: str,
         sequence: int,
         data: Mapping[str, Any] | None = None,
+        parent_run_id: str | None = None,
     ) -> AgentEvent:
         """Build an event with a fresh id and timestamp."""
         return cls(
@@ -63,4 +69,5 @@ class AgentEvent:
             sequence=sequence,
             timestamp=datetime.now(UTC),
             data=dict(data) if data is not None else {},
+            parent_run_id=parent_run_id,
         )

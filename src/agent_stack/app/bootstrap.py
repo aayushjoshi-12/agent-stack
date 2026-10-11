@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 from agent_stack.app.application import Application
 from agent_stack.app.config import AppConfig
-from agent_stack.core.agent import Agent
+from agent_stack.core.agent import Agent, SubAgentSpec
 from agent_stack.core.event_bus import InMemoryEventBus
 from agent_stack.core.factory import AgentFactory
 from agent_stack.core.locks import SessionLockManager
@@ -18,6 +18,7 @@ from agent_stack.persistence.sqlite import (
     SqliteRunStore,
     SqliteSessionStore,
 )
+from agent_stack.subagents.delegation import control_tools
 from agent_stack.tools.builtins.filesystem import filesystem_tools
 from agent_stack.tools.builtins.terminal import run_command_tool
 
@@ -31,6 +32,10 @@ Tools:
 - Prefer the dedicated tools (list_directory, read_file, write_file, edit_file,
   search_files) over run_command for the same job: they are safer, scoped to the
   workspace, and easier to review.
+- To read or explore the codebase without changing it, delegate to the `explorer`
+  subagent with `delegate` instead of doing the reads yourself. While an `explorer`
+  run is active you can check it with `subagent_status`, steer it with
+  `subagent_feed`, or stop it with `subagent_interrupt`.
 - When you make several independent tool calls, put them in a single message so
   they run in parallel. Chain dependent commands with `&&` inside run_command.
 - Read only the parts of files you need. Use search_files to find files instead
@@ -46,6 +51,15 @@ Code style:
   unless the user asks.
 - Default to no comments in code — one short line max when one is needed.
 """
+
+EXPLORER_SYSTEM_PROMPT = """\
+You are a read-only codebase explorer. Investigate exactly what was asked using
+list_directory, read_file, and search_files, then report concise findings with the
+file paths that justify them. You cannot modify anything.
+"""
+
+#: The read-only slice of the filesystem toolset handed to the explorer subagent.
+_READ_ONLY_TOOLS = frozenset({"list_directory", "read_file", "search_files"})
 
 
 def build_application(config: AppConfig | None = None) -> Application:
@@ -73,11 +87,25 @@ def build_application(config: AppConfig | None = None) -> Application:
     locks = SessionLockManager()
 
     policy = WorkspacePolicy(root=workspace)
+    fs_tools = filesystem_tools(policy)
 
+    explorer = Agent(
+        name="explorer",
+        model=resolved.model,
+        tools=tuple(tool for tool in fs_tools if tool.name in _READ_ONLY_TOOLS),
+        system_prompt=EXPLORER_SYSTEM_PROMPT,
+    )
     agent = Agent(
         name="assistant",
         model=resolved.model,
-        tools=(*filesystem_tools(policy), run_command_tool(policy)),
+        tools=(*fs_tools, run_command_tool(policy), *control_tools()),
+        subagents=(
+            SubAgentSpec(
+                name="explorer",
+                description="Read-only codebase exploration.",
+                agent=explorer,
+            ),
+        ),
         system_prompt=DEFAULT_SYSTEM_PROMPT,
     )
     factory = AgentFactory(
@@ -91,6 +119,7 @@ def build_application(config: AppConfig | None = None) -> Application:
         run_store=run_store,
         checkpoint_store=checkpoint_store,
         event_bus=event_bus,
+        agent_factory=factory,
     )
 
     return Application(

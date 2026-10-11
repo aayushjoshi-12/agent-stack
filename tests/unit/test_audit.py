@@ -80,6 +80,7 @@ async def test_every_published_event_has_one_audit_line(tmp_path: Path) -> None:
     assert [line["type"] for line in lines] == [event.type.value for event in events]
     assert [line["run_id"] for line in lines] == [handle.run_id] * len(lines)
     assert [line["session_id"] for line in lines] == ["s1"] * len(lines)
+    assert all(line["parent_run_id"] is None for line in lines)
 
 
 def test_audit_file_survives_restart_and_replays_in_order(tmp_path: Path) -> None:

@@ -25,6 +25,10 @@ class RunStore(Protocol):
 
     async def get(self, run_id: str) -> Run | None: ...
 
+    async def list_runs(self, parent_run_id: str) -> list[Run]:
+        """Return the child runs spawned by ``parent_run_id`` (subagent listing)."""
+        ...
+
     async def list_incomplete(self) -> list[Run]:
         """Return runs still pending or running (startup recovery dropdown)."""
         ...
