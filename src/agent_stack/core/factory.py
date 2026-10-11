@@ -40,4 +40,5 @@ class AgentFactory:
             model=model_with_tools,
             tool_executor=executor,
             session_store=self._session_store,
+            event_bus=self._event_bus,
         )

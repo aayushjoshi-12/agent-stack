@@ -41,3 +41,35 @@ class TimeoutExceeded(LimitExceededError):
 
 class SessionNotFoundError(AgentStackError):
     """Raised when a session id cannot be resolved."""
+
+
+class ModelError(AgentStackError):
+    """Raised when the model call itself fails (transport, provider error)."""
+
+
+class ToolTimeoutError(ToolError):
+    """Raised when a tool exceeds its individual time budget."""
+
+
+class WorkspaceEscapeError(ToolError):
+    """Raised when a path resolves outside the configured workspace."""
+
+
+class CommandTimeoutError(ToolError):
+    """Raised when a terminal command exceeds its time budget."""
+
+
+class PersistenceError(AgentStackError):
+    """Base class for store/persistence failures."""
+
+
+class CheckpointError(PersistenceError):
+    """Raised when a checkpoint cannot be written or read."""
+
+
+class ArtifactError(AgentStackError):
+    """Raised when an artifact cannot be stored or retrieved."""
+
+
+class RunCancelled(AgentStackError):
+    """Raised when a run is cancelled cooperatively."""
