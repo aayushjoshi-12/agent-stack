@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from dotenv import load_dotenv
 
 from agent_stack.app.application import Application
 from agent_stack.app.config import AppConfig
+from agent_stack.context.composer import SystemPromptComposer
+from agent_stack.context.instructions import InstructionsLoader
 from agent_stack.core.agent import Agent, SubAgentSpec
+from agent_stack.core.context import ContextBuilder
 from agent_stack.core.event_bus import InMemoryEventBus
 from agent_stack.core.factory import AgentFactory
 from agent_stack.core.locks import SessionLockManager
@@ -18,11 +23,15 @@ from agent_stack.persistence.sqlite import (
     SqliteRunStore,
     SqliteSessionStore,
 )
+from agent_stack.skills import SkillLoader, SkillRegistry, skill_tools
 from agent_stack.subagents.delegation import control_tools
 from agent_stack.tools.builtins.filesystem import filesystem_tools
 from agent_stack.tools.builtins.terminal import run_command_tool
 
 load_dotenv()
+
+#: Repo root (``src/agent_stack/app/bootstrap.py`` → up four levels).
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 DEFAULT_SYSTEM_PROMPT = """\
 You are a helpful personal assistant. Answer the user's request directly and
@@ -89,6 +98,27 @@ def build_application(config: AppConfig | None = None) -> Application:
     policy = WorkspacePolicy(root=workspace)
     fs_tools = filesystem_tools(policy)
 
+    # Context wiring (P16e): instructions + skill metadata become resident system parts,
+    # and a ContextBuilder bounds the message window. Discovery is non-strict so one
+    # non-conforming skill (e.g. a vendored one) cannot break every root; user-global
+    # `~/.claude/skills/` is intentionally omitted until config opts it in.
+    skills = SkillRegistry(
+        SkillLoader(
+            [
+                workspace / ".agent" / "skills",
+                _REPO_ROOT / "skills",
+                _REPO_ROOT / ".claude" / "skills",
+            ],
+            strict=False,
+        )
+    )
+    composer = SystemPromptComposer(
+        instructions=InstructionsLoader(),
+        skills=skills,
+        workspace_root=workspace,
+    )
+    context_builder = ContextBuilder()
+
     explorer = Agent(
         name="explorer",
         model=resolved.model,
@@ -98,7 +128,12 @@ def build_application(config: AppConfig | None = None) -> Application:
     agent = Agent(
         name="assistant",
         model=resolved.model,
-        tools=(*fs_tools, run_command_tool(policy), *control_tools()),
+        tools=(
+            *fs_tools,
+            run_command_tool(policy),
+            *control_tools(),
+            *skill_tools(skills),
+        ),
         subagents=(
             SubAgentSpec(
                 name="explorer",
@@ -112,6 +147,8 @@ def build_application(config: AppConfig | None = None) -> Application:
         session_store=session_store,
         event_bus=event_bus,
         session_lock=locks,
+        context_builder=context_builder,
+        system_parts=composer,
     )
     runtime = factory.create(agent)
     run_manager = RunManager(

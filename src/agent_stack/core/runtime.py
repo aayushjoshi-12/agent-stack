@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -11,6 +11,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 
 from agent_stack.core.agent import Agent
 from agent_stack.core.cancellation import CancellationToken
+from agent_stack.core.context import ContextBuilder, SystemPartsProvider
 from agent_stack.core.errors import (
     AgentStackError,
     StepLimitExceeded,
@@ -54,6 +55,12 @@ class AgentRuntime:
     records every executed tool call under the ``(run_id, tool_call_id)`` idempotency key,
     so a resumed run skips calls that already completed instead of re-executing them.
     With no store, the loop behaves exactly as before.
+
+    An optional ``context_builder`` bounds what the model sees: the loaded history is
+    ``compact``ed once, ``system_parts`` supplies the ordered resident system blocks, and
+    each iteration's input is built through the builder (system parts joined into one
+    ``SystemMessage`` followed by the recent window of history + new messages). With both
+    omitted, the loop sends the base prompt over the raw messages exactly as before.
     """
 
     def __init__(
@@ -65,6 +72,8 @@ class AgentRuntime:
         session_store: SessionStore,
         event_bus: EventBus | None = None,
         session_lock: SessionLockManager | None = None,
+        context_builder: ContextBuilder | None = None,
+        system_parts: SystemPartsProvider | None = None,
     ) -> None:
         self._agent = agent
         self._model = model
@@ -72,6 +81,8 @@ class AgentRuntime:
         self._session_store = session_store
         self._event_bus = event_bus
         self._session_lock = session_lock
+        self._context_builder = context_builder
+        self._system_parts = system_parts
 
     @property
     def agent(self) -> Agent:
@@ -133,6 +144,19 @@ class AgentRuntime:
         history = await self._session_store.get_messages(session_id)
         new_messages: list[BaseMessage] = [HumanMessage(content=message)]
 
+        # Bound what the model sees. Resident system parts are computed once per run;
+        # the message window is rebuilt each iteration as tool results accumulate.
+        resident: Sequence[str] = ()
+        if self._context_builder is not None:
+            resident = await self._resident_parts()
+            compacted = await self._context_builder.compact(history)
+            # A summarizer prepends the compaction summary as a SystemMessage; lift it
+            # into the resident parts so re-windowing below cannot drop it.
+            if compacted and isinstance(compacted[0], SystemMessage):
+                resident = (*resident, str(compacted[0].content))
+                compacted = compacted[1:]
+            history = compacted
+
         limits = self._agent.limits
         step_count = 0
         tool_call_count = 0
@@ -155,7 +179,7 @@ class AgentRuntime:
                     for text in inbox():
                         new_messages.append(HumanMessage(content=text))
                 response = await self._model.ainvoke(
-                    [SystemMessage(content=self._agent.system_prompt), *history, *new_messages]
+                    self._model_input(resident=resident, history=history, new_messages=new_messages)
                 )
                 if not isinstance(response, AIMessage):
                     raise AgentStackError(
@@ -303,6 +327,30 @@ class AgentRuntime:
         if counters is not None:
             counters(step_count, tool_call_count)
         return response
+
+    async def _resident_parts(self) -> Sequence[str]:
+        """The ordered resident system parts, or just the base prompt when unwired."""
+        if self._system_parts is None:
+            return (self._agent.system_prompt,)
+        return await self._system_parts.parts(base_prompt=self._agent.system_prompt)
+
+    def _model_input(
+        self,
+        *,
+        resident: Sequence[str],
+        history: Sequence[BaseMessage],
+        new_messages: Sequence[BaseMessage],
+    ) -> list[BaseMessage]:
+        """Build one model input: system parts plus the (windowed) messages.
+
+        Unwired (no builder), this is exactly the legacy single ``SystemMessage`` over
+        the raw messages. With a builder the system parts are joined into one
+        ``SystemMessage`` and the messages are the recent window of ``history + new``.
+        """
+        if self._context_builder is None:
+            return [SystemMessage(content=self._agent.system_prompt), *history, *new_messages]
+        ctx = self._context_builder.build(system_parts=resident, history=[*history, *new_messages])
+        return [SystemMessage(content="\n\n".join(ctx.system)), *ctx.messages]
 
     def _check_cancelled(self, cancel: CancellationToken | None) -> None:
         if cancel is not None:

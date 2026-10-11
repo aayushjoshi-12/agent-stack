@@ -118,17 +118,24 @@ class SkillLoader:
     """Discovers and loads skills from a sequence of directory roots.
 
     Roots are normalized to absolute paths on construction. Directories without a
-    ``SKILL.md`` are ignored; malformed skills fail loudly with :class:`SkillsError`.
+    ``SKILL.md`` are ignored; malformed skills fail loudly with :class:`SkillsError`
+    unless ``strict=False`` (used at the runtime composition boundary, where a single
+    non-conforming skill must not break every other root).
     """
 
-    def __init__(self, roots: Sequence[Path]) -> None:
+    def __init__(self, roots: Sequence[Path], *, strict: bool = True) -> None:
         self._roots: tuple[Path, ...] = tuple(Path(root).expanduser().resolve() for root in roots)
+        self._strict = strict
 
     def discover(self) -> list[SkillMetadata]:
         """Parse every ``SKILL.md`` under the roots into metadata (level 1).
 
         Duplicate skill names across roots raise :class:`SkillsError`. The result is
         sorted by name for determinism.
+
+        With ``strict=False`` (the runtime composition root uses it so one non-conforming
+        vendored skill cannot poison discovery) a malformed skill or a duplicate name is
+        skipped instead of raising.
         """
         by_name: dict[str, SkillMetadata] = {}
         for root in self._roots:
@@ -137,12 +144,19 @@ class SkillLoader:
             for child in sorted(root.iterdir()):
                 if not child.is_dir() or not (child / "SKILL.md").is_file():
                     continue
-                metadata = _parse_skill(child)
+                try:
+                    metadata = _parse_skill(child)
+                except SkillsError:
+                    if self._strict:
+                        raise
+                    continue
                 if metadata.name in by_name:
-                    raise SkillsError(
-                        f"Duplicate skill name {metadata.name!r}: {metadata.path} and "
-                        f"{by_name[metadata.name].path}"
-                    )
+                    if self._strict:
+                        raise SkillsError(
+                            f"Duplicate skill name {metadata.name!r}: {metadata.path} and "
+                            f"{by_name[metadata.name].path}"
+                        )
+                    continue
                 by_name[metadata.name] = metadata
         return [by_name[name] for name in sorted(by_name)]
 

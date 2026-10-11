@@ -61,6 +61,18 @@ class Summarizer(Protocol):
     async def summarize(self, messages: Sequence[BaseMessage]) -> str: ...
 
 
+class SystemPartsProvider(Protocol):
+    """Supplies the ordered resident system-prompt parts for a run.
+
+    ``parts`` returns already-composed resident blocks in order — the base prompt first,
+    then instructions, skills metadata, and memory — for the runtime to hand to
+    :meth:`ContextBuilder.build`. ``core`` only knows this protocol; ``context``
+    implements it, so the dependency between the two stays one-way.
+    """
+
+    async def parts(self, *, base_prompt: str) -> Sequence[str]: ...
+
+
 class ContextBuilder:
     """Assembles bounded contexts and compacts oversized conversation history.
 

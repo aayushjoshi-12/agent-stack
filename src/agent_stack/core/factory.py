@@ -5,6 +5,7 @@ from typing import cast
 from langchain_core.language_models import BaseChatModel
 
 from agent_stack.core.agent import Agent
+from agent_stack.core.context import ContextBuilder, SystemPartsProvider
 from agent_stack.core.event_bus import EventBus
 from agent_stack.core.locks import SessionLockManager
 from agent_stack.core.runtime import AgentRuntime
@@ -18,7 +19,9 @@ class AgentFactory:
     """Builds a runnable ``AgentRuntime`` from an ``Agent`` definition.
 
     Shared stores are injected once; each ``create`` wires a model (bound to the agent's
-    tools) and a tool executor around them.
+    tools) and a tool executor around them. The optional ``context_builder`` and
+    ``system_parts`` are threaded through to every runtime it builds, so subagent runtimes
+    see the same instructions/skills context as their parent.
     """
 
     def __init__(
@@ -27,10 +30,14 @@ class AgentFactory:
         session_store: SessionStore,
         event_bus: EventBus | None = None,
         session_lock: SessionLockManager | None = None,
+        context_builder: ContextBuilder | None = None,
+        system_parts: SystemPartsProvider | None = None,
     ) -> None:
         self._session_store = session_store
         self._event_bus = event_bus
         self._session_lock = session_lock
+        self._context_builder = context_builder
+        self._system_parts = system_parts
 
     def create(self, agent: Agent) -> AgentRuntime:
         model = build_model(agent.model)
@@ -44,4 +51,6 @@ class AgentFactory:
             session_store=self._session_store,
             event_bus=self._event_bus,
             session_lock=self._session_lock,
+            context_builder=self._context_builder,
+            system_parts=self._system_parts,
         )

@@ -7,6 +7,7 @@ produces immutable :class:`InstructionFile` data consumed by the
 
 from __future__ import annotations
 
+from agent_stack.context.composer import SystemPromptComposer
 from agent_stack.context.instructions import InstructionFile, InstructionsLoader
 
-__all__ = ["InstructionFile", "InstructionsLoader"]
+__all__ = ["InstructionFile", "InstructionsLoader", "SystemPromptComposer"]
