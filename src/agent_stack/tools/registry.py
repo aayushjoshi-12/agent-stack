@@ -1,9 +1,17 @@
-from langchain.tools import BaseTool
+"""Name → ``BaseTool`` lookup with collision and unknown-name rejection."""
+
+from __future__ import annotations
+
+from langchain_core.tools import BaseTool
+
+__all__ = ["ToolRegistry"]
 
 
 class ToolRegistry:
-    def __init__(self, tools: tuple[BaseTool, ...]):
-        self._tools = {}
+    """An immutable-by-convention collection of tools keyed by name."""
+
+    def __init__(self, tools: tuple[BaseTool, ...]) -> None:
+        self._tools: dict[str, BaseTool] = {}
 
         for tool in tools:
             if tool.name in self._tools:
@@ -15,7 +23,7 @@ class ToolRegistry:
         try:
             return self._tools[name]
         except KeyError:
-            raise KeyError(f"Unknown tool: {name}")
+            raise KeyError(f"Unknown tool: {name}") from None
 
     def all(self) -> list[BaseTool]:
         return list(self._tools.values())

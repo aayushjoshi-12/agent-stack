@@ -1,55 +1,50 @@
-import asyncio
-import os
+from __future__ import annotations
 
 from dotenv import load_dotenv
-from langchain.tools import tool
 
-from agent_stack.core.agent import AgentConfig
+from agent_stack.app.application import Application
+from agent_stack.app.config import AppConfig
+from agent_stack.core.agent import Agent
 from agent_stack.core.factory import AgentFactory
-from agent_stack.core.session import SessionStore
+from agent_stack.core.session import InMemorySessionStore
 
 load_dotenv()
 
-
-@tool
-def ls_repo(repo_name: str) -> int:
-    """ls command in the given repo name"""
-    return os.listdir(path=f"/Users/aayushjoshi_12/repos/{repo_name}")
-
-
-@tool
-def list_repos():
-    """see all the repos"""
-    return os.listdir(path="/Users/aayushjoshi_12/repos")
-
-
-agent_config = AgentConfig(
-    name="test_agent",
-    model="openrouter:z-ai/glm-5.3",
-    tools=[ls_repo, list_repos],
-    system_prompt="You are a helpful assistant that can add numbers.",
+DEFAULT_SYSTEM_PROMPT = (
+    "You are a helpful personal assistant. Answer the user's request directly and "
+    "concisely. Use the tools available to you when they help."
 )
 
 
-session_store = SessionStore()
-factory = AgentFactory(event_bus=None, session_store=session_store, checkpoint_store=None)
+def build_application(config: AppConfig | None = None) -> Application:
+    """Construct the full object graph.
 
-test_agent = factory.create(agent_config)
+    This is the single composition root: tools, stores, the agent definition, and the
+    agent factory are wired here and nowhere else.
+    """
+    resolved = config or AppConfig.from_env()
 
-
-async def run():
-    response1 = await test_agent.run("can you list all the repos", session_id="test-123-123")
-    response2 = await test_agent.run(
-        "can you show all the files in agent-stack repo", session_id="test-123-123"
+    session_store = InMemorySessionStore()
+    agent = Agent(
+        name="assistant",
+        model=resolved.model,
+        tools=(),
+        system_prompt=DEFAULT_SYSTEM_PROMPT,
     )
-    response3 = await test_agent.run("what was my first question", session_id="test-123-123")
+    factory = AgentFactory(session_store=session_store)
 
-    print(response1)
-    print("==" * 50)
-    print(response2)
-    print("==" * 50)
-    print(response3)
+    return Application(
+        config=resolved,
+        agent=agent,
+        factory=factory,
+        session_store=session_store,
+    )
 
 
-if __name__ == "__main__":
-    asyncio.run(run())
+def main() -> None:
+    """Build the application and print a readiness line.
+
+    No model call and no network access happen here.
+    """
+    application = build_application()
+    print(f"agent-stack ready (agent={application.agent.name}, model={application.config.model})")

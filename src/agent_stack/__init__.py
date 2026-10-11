@@ -1,2 +1,8 @@
+from __future__ import annotations
+
+
 def main() -> None:
-    print("Hello from agent-stack!")
+    """Console-script entry point (``agent-stack``)."""
+    from agent_stack.app.bootstrap import main as _main
+
+    _main()

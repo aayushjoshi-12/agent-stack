@@ -1,22 +1,43 @@
-from langchain.chat_models import init_chat_model
+from __future__ import annotations
 
-from agent_stack.core.agent import AgentConfig
+from typing import Any, cast
+
+from langchain_core.language_models import BaseChatModel
+
+from agent_stack.core.agent import Agent
 from agent_stack.core.runtime import AgentRuntime
+from agent_stack.core.session import SessionStore
+from agent_stack.models.factory import build_model
 from agent_stack.tools.executor import ToolExecutor
 from agent_stack.tools.registry import ToolRegistry
 
 
 class AgentFactory:
-    def __init__(self, event_bus, session_store, checkpoint_store):
-        self.event_bus = event_bus
-        self.session_store = session_store
-        self.checkpoint_store = checkpoint_store
+    """Builds a runnable ``AgentRuntime`` from an ``Agent`` definition.
 
-    def create(self, agent_config: AgentConfig) -> AgentRuntime:
-        model = init_chat_model(agent_config.model)
-        model_with_tools = model.bind_tools(agent_config.tools)
-        tool_registry = ToolRegistry(agent_config.tools)
-        tool_executor = ToolExecutor(tool_registry)
+    Shared stores are injected once; each ``create`` wires a model (bound to the agent's
+    tools) and a tool executor around them.
+    """
+
+    def __init__(
+        self,
+        *,
+        session_store: SessionStore,
+        event_bus: Any = None,
+        checkpoint_store: Any = None,
+    ) -> None:
+        self._session_store = session_store
+        self._event_bus = event_bus
+        self._checkpoint_store = checkpoint_store
+
+    def create(self, agent: Agent) -> AgentRuntime:
+        model = build_model(agent.model)
+        model_with_tools = cast(BaseChatModel, model.bind_tools(list(agent.tools)))
+        registry = ToolRegistry(agent.tools)
+        executor = ToolExecutor(registry)
         return AgentRuntime(
-            agent_config, model_with_tools, tool_executor, session_store=self.session_store
+            agent=agent,
+            model=model_with_tools,
+            tool_executor=executor,
+            session_store=self._session_store,
         )
