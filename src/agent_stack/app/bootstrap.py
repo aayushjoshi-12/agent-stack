@@ -10,6 +10,7 @@ from agent_stack.core.factory import AgentFactory
 from agent_stack.core.locks import SessionLockManager
 from agent_stack.core.run import RunManager
 from agent_stack.core.workspace import WorkspacePolicy
+from agent_stack.observability.audit import AuditLogger, audit_log_path
 from agent_stack.persistence.conversation import FileConversationStore
 from agent_stack.persistence.sqlite import (
     SqliteCheckpointStore,
@@ -67,7 +68,8 @@ def build_application(config: AppConfig | None = None) -> Application:
     session_store = SqliteSessionStore(db, conversation)
     run_store = SqliteRunStore(db)
     checkpoint_store = SqliteCheckpointStore(db)
-    event_bus = InMemoryEventBus()
+    audit = AuditLogger(audit_log_path(workspace))
+    event_bus = InMemoryEventBus(audit=audit)
     locks = SessionLockManager()
 
     policy = WorkspacePolicy(root=workspace)

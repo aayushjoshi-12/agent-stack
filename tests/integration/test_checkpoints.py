@@ -68,7 +68,9 @@ def _runtime(model: Any, tools: list[Any], store: InMemorySessionStore) -> Agent
     )
 
 
-def _result(tool_call_id: str, tool_name: str, *, success: bool, error: str | None = None) -> ToolExecutionResult:
+def _result(
+    tool_call_id: str, tool_name: str, *, success: bool, error: str | None = None
+) -> ToolExecutionResult:
     content = f"ok: {tool_call_id}" if success else "Error: boom"
     return ToolExecutionResult(
         tool_call_id=tool_call_id,

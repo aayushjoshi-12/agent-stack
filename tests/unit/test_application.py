@@ -157,9 +157,7 @@ async def test_get_session_round_trips_a_created_session() -> None:
     app, _run_store, _session_store = _build_application(FakeChatModel([ai("done")]))
     assert await app.get_session("s1") is None
 
-    handle = await app.send_message(
-        MessageEnvelope(principal="u1", session="s1", text="hi")
-    )
+    handle = await app.send_message(MessageEnvelope(principal="u1", session="s1", text="hi"))
     await handle.result()  # the runtime creates the session lazily during the run
 
     session = await app.get_session("s1")
