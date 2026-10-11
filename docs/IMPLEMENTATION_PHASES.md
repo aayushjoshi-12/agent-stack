@@ -226,7 +226,7 @@ Milestone A — The minimal loop
   2  Tool registry                        ✅
   3  Tool executor                        🟡
   4  Agent definition (Agent/limits)      🟡
-  5  AgentRuntime loop + AgentState       🟡
+  5  AgentRuntime loop                    🟡
   6  Errors & limits                      ⬜
 
 Milestone B — Durability & state
@@ -234,7 +234,7 @@ Milestone B — Durability & state
   8  Event model & event bus              ✅
  8b Audit log on the event bus            ⬜
   9  SQLite index + file transcripts      ✅
- 10  Checkpoints & tool executions        ⬜
+ 10  Checkpoints & tool executions        ✅
  11  RunManager + RunHandle               ✅
  12  Cancellation, session lock, version  ✅
 
@@ -249,8 +249,8 @@ Milestone C — Real capabilities
 
 Milestone D — Composition & application
  17  Composition root (bootstrap.py)      🟡
- 18  Application service layer            ⬜
- 19  Gateway contract (base.py)           ⬜
+ 18  Application service layer            ✅
+ 19  Gateway contract (base.py)           ✅
 
 Milestone E — Multi-agent & memory
  20  Subagents (delegation)               ⬜
@@ -653,7 +653,7 @@ payloads or artifacts.
 
 ---
 
-## Phase 10 — Checkpoints & tool executions ⬜
+## Phase 10 — Checkpoints & tool executions ✅
 
 **Goal.** Semantic snapshots + idempotent tool records for recovery. §38–39, §85–86.
 
@@ -926,15 +926,17 @@ def create_application(config: AppConfig) -> Application:
 
 ---
 
-## Phase 18 — Application service layer ⬜
+## Phase 18 — Application service layer ✅
 
 **Goal.** The stable boundary every gateway talks to. §21–23, §68.
 
 **Deliverables**
 - `app/application.py` — `Application` with:
-  - `send_message(envelope | (user_id, session_id, message)) -> RunHandle`
-  - `cancel_run(run_id, principal_id)`, `get_session(...)`, `subscribe(run_id)`.
-- `IdentityResolver` + `SessionResolver` (gateway identity → principal → session). §11, §103.
+  - `send_message(envelope, *, parent_run_id=None) -> RunHandle`
+  - `cancel_run(run_id)`, `get_session(session_id)`, `subscribe(run_id)`.
+  - `send_input(run_id, message)` is **deferred to P20** (needs the per-run input channel).
+- `IdentityResolver` (`gateway:id`) + `SessionResolver` (one default session per principal;
+  deterministic and restart-safe). §11, §103.
 
 **Acceptance**
 - A fake gateway can drive a full run using only `Application`; it never imports `core`.
@@ -943,12 +945,14 @@ def create_application(config: AppConfig) -> Application:
 
 ---
 
-## Phase 19 — Gateway contract ⬜
+## Phase 19 — Gateway contract ✅
 
 **Goal.** One inbound shape and one outbound protocol. §60–61.
 
 **Deliverables**
-- `gateways/base.py` — `MessageEnvelope`, `Gateway` protocol, rendering hints.
+- `gateways/base.py` — `MessageEnvelope` (principal, session, text, metadata), `Gateway`
+  protocol (`handle_message(application, envelope) -> AsyncIterator[AgentEvent]`).
+  Rendering hints deferred until an event needs one.
 - Gateways convert native protocol → `MessageEnvelope` and consume `AgentEvent`.
 
 **Acceptance**

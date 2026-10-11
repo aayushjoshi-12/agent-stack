@@ -42,7 +42,8 @@ make run        # python -m agent_stack
 - **Write code in ponytail mode** (`.claude/skills/ponytail/SKILL.md`): the smallest change
   that fully solves the task; no speculative abstraction, no dead config, no re-export
   layers nothing imports. Design notes: `docs/design/` (`file-capabilities.md`,
-  `skills-and-instructions.md`, `event-log-and-branching.md`, `conversation-storage.md`).
+  `agent-and-tool-prompts.md`, `skills-and-instructions.md`,
+  `event-log-and-branching.md`, `conversation-storage.md`).
 
 ## Testing
 
