@@ -1,0 +1,22 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Local secrets / environment
+.env
+.env.*
+!.env.example
+
+# Scratch / working docs (plans, tickets, handoffs, smoke tests) — local only
+tmp/
+
+# Agent runtime workspace: session transcripts, artifacts, sqlite index
+.agent/
+workspace/
