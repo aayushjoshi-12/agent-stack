@@ -240,7 +240,7 @@ Milestone B — Durability & state
 
 Milestone C — Real capabilities
  13  Workspace & filesystem tools         ✅
- 14  Terminal tool subsystem              ✅
+ 14  Terminal tool subsystem              🟡
  15  Artifact store                       ✅
  16  Context builder & compaction         ✅
 16b  Skills (SKILL.md)                    ✅
@@ -742,9 +742,14 @@ tests, and keeps large output out of context.
 
 ---
 
-## Phase 14 — Terminal tool subsystem ⬜
+## Phase 14 — Terminal tool subsystem 🟡
 
 **Goal.** Async subprocess execution as a subsystem, not a one-liner. §27, §80–81.
+
+**Done:** `run_command` (`create_subprocess_exec`, process-group + cancel kill, timeout,
+stdout/stderr caps, env allowlist `PATH`/`HOME`/`LANG`, `CommandResult`), `run_command_tool`.
+**Remaining:** the streaming half — `tool.output` events while a command runs, so the
+TUI/Web shells panes (P23/P24) render live output. Needs a tool→bus emission seam.
 
 **Deliverables**
 - `tools/builtins/terminal.py` — `run_command`:
@@ -753,9 +758,9 @@ tests, and keeps large output out of context.
   - timeout enforcement, stdout/stderr caps (e.g. 32 KB),
   - environment allowlist (`PATH`, `HOME`, `LANG`),
   - `CommandResult` with `exit_code`, `stdout`, `stderr`, `duration_ms`, `timed_out`.
-  - Streaming: stdout/stderr chunks emitted as `tool.output` events while the command
-    runs (not only the final `CommandResult`), so the TUI/Web can render live output —
-    opencode-style running-shell panes (P23/P24).
+  - **Remaining:** streaming — stdout/stderr chunks emitted as `tool.output` events while
+    the command runs (not only the final `CommandResult`), so the TUI/Web render live
+    output — opencode-style running-shell panes (P23/P24).
 
 **Acceptance**
 - `test_command_timeout`, `test_command_env_is_filtered`, `test_command_cwd_preserved`.
