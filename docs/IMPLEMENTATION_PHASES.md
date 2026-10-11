@@ -9,7 +9,7 @@
 | **Python** | 3.12+ · `uv` |
 | **Style** | async-first, single process, SQLite first |
 | **Created** | 2026-10-11 |
-| **Companion docs** | [`design/source-design-document.md`](design/source-design-document.md) · [`decisions/`](decisions/) |
+| **Companion docs** | [`design/source-design-document.md`](design/source-design-document.md) · [`design/file-capabilities.md`](design/file-capabilities.md) · [`decisions/`](decisions/) |
 
 ---
 
@@ -232,18 +232,20 @@ Milestone A — The minimal loop
 Milestone B — Durability & state
   7  Sessions & in-memory stores          ✅
   8  Event model & event bus              ✅
+ 8b Audit log on the event bus            ⬜
   9  SQLite index + file transcripts      ✅
  10  Checkpoints & tool executions        ⬜
- 11  RunManager + RunHandle               ⬜
- 12  Cancellation, session lock, version  ⬜
+ 11  RunManager + RunHandle               ✅
+ 12  Cancellation, session lock, version  ✅
 
 Milestone C — Real capabilities
  13  Workspace & filesystem tools         ✅
  14  Terminal tool subsystem              ✅
  15  Artifact store                       ✅
- 16  Context builder & compaction         ⬜
-16b  Skills (SKILL.md)                    ⬜
-16c  Agent instructions (AGENTS.md)       ⬜
+ 16  Context builder & compaction         ✅
+16b  Skills (SKILL.md)                    ✅
+16c  Agent instructions (AGENTS.md)       ✅
+16d  Memory files (MEMORY.md)             ⬜
 
 Milestone D — Composition & application
  17  Composition root (bootstrap.py)      🟡
@@ -272,9 +274,9 @@ Milestone H — Time travel & branching (later)
 
 > **Build order one-liner** (keep visible):
 > model → messages → registry → executor → loop → errors/limits → tests →
-> events → sessions → sqlite **index** + **file transcripts** → checkpoints →
+> events → **audit log** → sessions → sqlite **index** + **file transcripts** → checkpoints →
 > run manager → cancellation → filesystem → terminal → artifacts → context →
-> **skills + AGENTS.md** → bootstrap → application → gateways →
+> **skills + AGENTS.md + memory files (MEMORY.md)** → bootstrap → application → gateways →
 > subagents → memory → planning → approval → observability → hardening →
 > **durable event log → branching (Milestone H)**.
 
@@ -336,7 +338,9 @@ validation.
 
 **Deliverables**
 - `models/factory.py` — `build_model(model: str) -> BaseChatModel`.
-- `models/configuration.py` — `ModelCapabilities` + `validate_capabilities(...)`.
+- Capability validation was **cut as unneeded** (2026-10-11 audit): nothing consumed
+  `ModelCapabilities`; tool-calling capability is exercised by the running loop itself.
+  Re-add only if a real requirement forces it.
 - Move the `init_chat_model(...)` call out of `core/factory.py`.
 
 **Key interfaces**
@@ -492,12 +496,11 @@ class AgentRuntime:
 **Goal.** Classify failures; guarantee the loop terminates. §43, §93.
 
 **Deliverables**
-- `core/errors.py` — hierarchy (`AgentError`, `ModelError`, `ToolError`,
-  `ToolNotFoundError`, `ToolTimeoutError`, `PersistenceError`, `RunCancelled`,
-  `RunLimitExceeded`).
+- `core/errors.py` — hierarchy (`AgentStackError`, `ToolError`, `LimitExceededError`,
+  `StepLimitExceeded`/`ToolCallLimitExceeded`, `PersistenceError`, `RunCancelled`,
+  `WorkspaceEscapeError`, `CommandTimeoutError`, `SessionVersionConflictError`).
 - `core/limits.py` — enforcement of `max_steps`, `max_tool_calls`, `max_runtime_seconds`.
-- Executor: unknown tool → `ToolNotFoundError` → error `ToolMessage`; timeouts →
-  `ToolTimeoutError`.
+- Executor: unknown tool → error `ToolMessage`; timeouts → error messages.
 
 **Acceptance tests**
 - `test_stops_after_max_steps`
@@ -574,7 +577,37 @@ class AgentEvent:
 - No raw `response.model_dump()` ever reaches a gateway (§30).
 
 **Defer:** durable event log/replay (Phase 29 — Milestone H), branching (Phase 30),
-Redis/NATS (§33).
+Redis/NATS (§33). The `EventType` enum grows over time: `subagent.*` (P20) and streaming
+`tool.output` (P14) are added to the same enum — one source of truth for gateways.
+Every published event is also appended to the audit log (P8b): the bus is the one choke
+point, so nothing can emit without leaving a trace.
+
+---
+
+## Phase 8b — Audit log on the event bus ⬜
+
+**Goal.** Every published event leaves a durable, greppable trace so the system is
+debuggable on the fly. The bus is the single choke point — audit it there, not in each
+gateway.
+
+**Deliverables**
+- `observability/audit.py` — `AuditLogger`: one append-only JSONL line per event
+  (`ts`, `run_id`, `session_id`, `sequence`, `type`, capped `data`), written by the bus
+  in the same `publish()` call that dispatches to subscribers — one code path, so no
+  event can be emitted unlogged.
+- Cap/redact `data` (never raw secrets; truncate big payloads such as tool output).
+- Live debugging: `agent-stack audit tail [--run-id …] [--from-sequence …]` (follow the
+  log, filter by run) plus a TUI audit pane (P23). Survives restart — it is the on-disk
+  trace that the durable event log (P29) later builds on.
+- Store at `<workspace>/.agent/logs/audit.jsonl`.
+
+**Acceptance**
+- After a run, every event the bus published has exactly one audit line, in sequence order.
+- The audit file survives a restart and replays that run's events in order.
+- `data` payloads are capped and redacted (no key material).
+
+**Defer:** metrics/tracing/invariants (Phase 27) and full replay by
+`last_event_sequence` (Phase 29).
 
 ---
 
@@ -639,7 +672,7 @@ payloads or artifacts.
 
 ---
 
-## Phase 11 — RunManager + RunHandle ⬜
+## Phase 11 — RunManager + RunHandle ✅
 
 **Goal.** Make run lifecycle first-class, separate from execution. §19, §43, §74–75.
 
@@ -665,7 +698,7 @@ class RunManager:
 
 ---
 
-## Phase 12 — Cancellation, session lock, versioning ⬜
+## Phase 12 — Cancellation, session lock, versioning ✅
 
 **Goal.** Safe interrupts and safe concurrency. §40–42.
 
@@ -720,9 +753,14 @@ tests, and keeps large output out of context.
   - timeout enforcement, stdout/stderr caps (e.g. 32 KB),
   - environment allowlist (`PATH`, `HOME`, `LANG`),
   - `CommandResult` with `exit_code`, `stdout`, `stderr`, `duration_ms`, `timed_out`.
+  - Streaming: stdout/stderr chunks emitted as `tool.output` events while the command
+    runs (not only the final `CommandResult`), so the TUI/Web can render live output —
+    opencode-style running-shell panes (P23/P24).
 
 **Acceptance**
 - `test_command_timeout`, `test_command_env_is_filtered`, `test_command_cwd_preserved`.
+- `test_command_output_streams_as_events` — output chunks arrive as events *before*
+  the command completes.
 - Cancellation kills child processes.
 
 **Defer:** sandboxing/containers, approval (Phase 26).
@@ -746,7 +784,7 @@ tests, and keeps large output out of context.
 
 ---
 
-## Phase 16 — Context builder & compaction ⬜
+## Phase 16 — Context builder & compaction ✅
 
 **Goal.** Bound the model's context; never send unbounded history. §16, §52–54.
 
@@ -763,7 +801,7 @@ tests, and keeps large output out of context.
 
 ---
 
-## Phase 16b — Skills (`SKILL.md`) ⬜
+## Phase 16b — Skills (`SKILL.md`) ✅
 
 **Goal.** Discover and progressively load file-based skills. Full design:
 [`design/skills-and-instructions.md`](design/skills-and-instructions.md).
@@ -791,13 +829,14 @@ confirm the model calls `load_skill` and answers. Full spec: agentskills.io/spec
 
 ---
 
-## Phase 16c — Agent instructions (`AGENTS.md`) ⬜
+## Phase 16c — Agent instructions (`AGENTS.md`/`CLAUDE.md`) ✅
 
 **Goal.** Load project instructions with nearest-file-wins precedence.
 
 **Deliverables**
 - `context/instructions.py` — `InstructionsLoader.load(target_dir, stop)` resolving every
-  `AGENTS.md` (fallback `CLAUDE.md`) from the working dir up to the root, nearest first.
+  `AGENTS.md` (fallback `CLAUDE.md`, plus the personal variants `CLAUDE.local.md` and
+  `.claude/CLAUDE.md`) from the working dir up to the root, nearest first.
 - `ContextBuilder` composes: base prompt → instructions (delimited) → skills metadata →
   memory → recent messages.
 - Size cap (8 KB/file, 32 KB total) + `(path, mtime)` cache.
@@ -810,7 +849,32 @@ confirm the model calls `load_skill` and answers. Full spec: agentskills.io/spec
 **Smoke (real model):** an `AGENTS.md` states a project convention; ask a question whose
 correct answer follows the convention and confirm the model obeys it.
 
-**Defer:** monorepo per-package permissions.
+**Defer:** `@imports` directives and monorepo per-package permissions.
+
+---
+
+## Phase 16d — Memory files (`MEMORY.md`) ⬜
+
+**Goal.** Support the file-based memory convention: a `MEMORY.md` index + topic files,
+with the same three-level progressive disclosure as skills (P16b). Full survey + mapping:
+[`design/file-capabilities.md`](design/file-capabilities.md).
+
+**Deliverables**
+- `memory/files.py` — `MemoryIndex` loader over `<workspace>/.agent/memory/` (a bare
+  `MEMORY.md` at the workspace root is the fallback); index = one short line per topic,
+  capped like the skills metadata.
+- Level 1: the index appended to the system prompt (delimited), same slot as instructions
+  and skills metadata in the `ContextBuilder` composition.
+- Tools: `read_memory_topic(name)` (level 2) and `write_memory_topic(name, content)`
+  (level 3) — path-scoped to the memory root, traversal rejected; writes keep the index
+  in sync and stamp an `updated` timestamp (convention-compatible).
+
+**Acceptance**
+- `test_memory_index_loaded_capped` — index lines, not topic bodies, reach the prompt.
+- `test_read_topic_on_demand_scoped_to_memory_dir` — traversal rejected.
+- `test_write_topic_updates_index_entry`.
+
+**Defer:** automatic memory extraction and the managed store (Phase 21); topic GC/merge.
 
 ---
 
@@ -900,20 +964,43 @@ def create_application(config: AppConfig) -> Application:
 
 ## Phase 20 — Subagents ⬜
 
-**Goal.** Delegation reuses the normal tool path. §46–51.
+**Goal.** Delegation reuses the normal tool path — and a subagent is as visible and
+steerable as the main agent. §46–51.
 
 **Deliverables**
 - `subagents/delegation.py` — a `delegate(agent_name, task)` tool that resolves a child
-  `Agent` via `AgentFactory`, runs a child run under `parent_run_id`, and returns a
-  compact `AgentResult`/summary (not the full transcript).
+  `Agent` via `AgentFactory`, runs a child run under `parent_run_id` (own `run_id`, own
+  `RunHandle`), and returns a compact `AgentResult`/summary (not the full transcript).
+- **Full transparency:** the child run publishes every event to the same bus tagged with
+  `parent_run_id` — the TUI/Web subscribe to the child's `RunHandle` and render its
+  messages, tool calls, and progress exactly like the main agent (Claude Code / opencode
+  subtask views), not just a terminal summary.
+- `RunStore.list_runs(parent_run_id)` lists children; `RunStore.get(run_id)` exposes a
+  child's status + step/tool counts for the parent's tools.
+- **Interception — the parent agent can steer a running child via tools:**
+  - `subagent_status(run_id)` → status, step/tool counts, recent events;
+  - `subagent_interrupt(run_id)` → cancels the child run (P12); the parent receives the
+    matching `subagent.completed` event with the outcome;
+  - `subagent_feed(run_id, message)` → injects a message into the running child.
+- **Injection mechanism:** every run has an input channel (asyncio queue); the runtime
+  loop checks it at the same boundaries as cancellation (P12) — before a model call and
+  between tool batches — and inserts the injected `HumanMessage` into the child's
+  context. `Application.send_input(run_id, message)` is the service-level entry point
+  (P18); the UI cancel/input controls use the same call surface.
 - Enforce `max_subagent_depth`, `max_subagents`.
 
 **Acceptance tests**
 - `test_runs_subagent`
+- `test_subagent_events_stream_to_parent_scope` — every child event carries
+  `parent_run_id`
+- `test_subagent_status_reports_progress`
+- `test_subagent_interrupt_cancels_child`
+- `test_subagent_feed_injects_message_mid_run`
 - `test_enforces_subagent_depth`
 - `test_parallel_subagents_run_concurrently`
 
-**Defer:** specialized researcher/coder definitions until the mechanism works (§115).
+**Defer:** specialized researcher/coder definitions until the mechanism works (§115);
+mid-run *pause-and-resume* beyond cooperative input injection.
 
 ---
 
@@ -957,6 +1044,9 @@ def create_application(config: AppConfig) -> Application:
 **Goal.** Prove the whole stack locally with a real terminal UI. §66, §143.
 **Stack decision:** [`Textual`](https://textual.textualize.io) app with
 [`Rich`](https://rich.readthedocs.io) rendering — no other gateway depends on this choice.
+**Design inspiration (user-specified):** **opencode's TUI** — session/run list, live
+streaming output, command palette, running-shell status, agent/task list — and
+**langchain's coding agent** — chat-shaped message flow with tool-in-progress states.
 
 **Deliverables**
 - `gateways/tui/` — a Textual app:
@@ -964,15 +1054,26 @@ def create_application(config: AppConfig) -> Application:
     run/tool status side panel, command palette.
   - consumes `AgentEvent`s from `RunHandle.events()` (P11) and renders them live;
     **never touches tools/models/stores**.
+  - **subagent pane (full transparency + interception):** active subagents stream their
+    own message/tool activity live — rendered exactly like the main chat — with per-child
+    **cancel** and **send-input** controls in that pane (P20); a subagent picker
+    (`/agent <name>` or @-mention in the input) delegates a task, Claude Code/opencode
+    style.
+  - **running shells pane:** live stdout/stderr from `tool.output` events (P14),
+    per-command exit status, cancel control — opencode-style spawned-task list.
+  - **audit/debug pane:** live event stream + tail of the audit log (P8b) for
+    on-the-fly debugging.
   - `Ctrl+C` → cancel current run (`Application.cancel_run`); another `Ctrl+C` quits.
 - Keep a thin `gateways/cli.py` REPL for scripting/debug (same event consumption).
 
 **Acceptance**
-- Interactive TUI session: messages stream in, tool calls show as status lines.
+- Interactive TUI session: messages stream in, tool calls show as status lines,
+  subagent runs nest under their parent, shell commands stream live output and exit
+  status, and the audit pane tails a run's events without blocking chat.
 - Cancelling a run stops tool/kill chains (P12 cancellation) and returns to the input.
 - Same `session_id` continues a conversation started earlier.
 
-**Defer:** rich execution trees until events are stable (they are — P08 done).
+**Defer:** execution trees beyond subagents + shells until the events prove out.
 
 ---
 
@@ -1009,7 +1110,9 @@ def create_application(config: AppConfig) -> Application:
   `Last-Event-ID`/`last_event_sequence`), `POST /runs/{id}/cancel`.
 - `web/` — Next.js app consuming `POST /sessions/{id}/messages` + the SSE stream;
   design system anchored on the vendored skills; visual regression via
-  playwright-cli skill.
+  playwright-cli skill. Same live affordances as the TUI: a subagent tree (from
+  `subagent.*` events, with delegate-from-the-UI) and streaming shell output (from
+  `tool.output`), all fed by the same SSE stream.
 - Add `fastapi`/`uvicorn` to dependencies only now; Node toolchain is managed via the
   Next.js app's own `package.json`.
 
@@ -1051,6 +1154,8 @@ def create_application(config: AppConfig) -> Application:
 **Goal.** Make the system debuggable and lock in the invariants. §87–89, §92.
 
 **Deliverables**
+- `observability/audit.py` already exists from P8b — the event-derived structured trace;
+  this phase adds the rest.
 - `observability/logging.py` — structured JSON logs keyed by `run_id`/`session_id`.
 - `observability/metrics.py` + `tracing.py` — counters/timings (§88), run trace identity.
 - `tests/invariants/` — encode §92 as tests:
@@ -1234,7 +1339,6 @@ Keep this visible while coding (§171):
 [ ] Generic middleware framework
 [ ] Vector database
 [ ] Automatic memory extraction
-[ ] Skill system
 [ ] Distributed queue
 [ ] Kubernetes
 [ ] Multi-tenant cloud architecture

@@ -39,6 +39,10 @@ make run        # python -m agent_stack
 - Type everything; prefer `dataclass(frozen=True)` for definitions.
 - Keep the model/tool loop explicit and boring; persistence/events/limits surround it.
 - Sessions are **files** (`transcript.jsonl`/`.md` + `artifacts/`); SQLite is only the index.
+- **Write code in ponytail mode** (`.claude/skills/ponytail/SKILL.md`): the smallest change
+  that fully solves the task; no speculative abstraction, no dead config, no re-export
+  layers nothing imports. Design notes: `docs/design/` (`file-capabilities.md`,
+  `skills-and-instructions.md`, `event-log-and-branching.md`, `conversation-storage.md`).
 
 ## Testing
 
@@ -57,8 +61,8 @@ make run        # python -m agent_stack
 
 ```
 src/agent_stack/
-├── core/         # Agent, AgentRuntime, Session, Run, events, state, context
-├── models/       # model factory + capability validation
+├── core/         # Agent, AgentRuntime, Session, Run, events, context, locks
+├── models/       # model factory
 ├── tools/        # registry, executor, builtins
 ├── persistence/  # store protocols + sqlite index + file conversation store
 ├── memory/       # cross-session memory
@@ -70,5 +74,5 @@ src/agent_stack/
 └── app/          # config, application service, bootstrap (composition root)
 ```
 
-Note: `.claude/skills/` holds the vendored design skills (repo-scoped copies used by the
-web phase; never reference the external source repo).
+Note: `.claude/skills/` holds vendored, repo-scoped skills (the design skills for the web
+phase plus the ponytail working-mode skill); never reference the external source repos.
