@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from agent_stack.app.config import AppConfig
 from agent_stack.core.agent import Agent
 from agent_stack.core.factory import AgentFactory
+from agent_stack.core.run import RunManager
 from agent_stack.core.session import SessionStore
 
 
@@ -19,3 +20,4 @@ class Application:
     agent: Agent
     factory: AgentFactory
     session_store: SessionStore
+    run_manager: RunManager

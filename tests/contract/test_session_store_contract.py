@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
+from agent_stack.core.errors import SessionVersionConflictError
 from agent_stack.core.session import InMemorySessionStore, Session
 from agent_stack.persistence.conversation import FileConversationStore
 from agent_stack.persistence.sqlite import SqliteDatabase, SqliteSessionStore
@@ -127,6 +128,36 @@ class TestSessionStoreContract:
 
     async def test_delete_unknown_session_is_a_noop(self, store: Any) -> None:
         await store.delete("nope")  # must not raise
+
+    async def test_optimistic_versioning_detects_lost_update(self, store: Any) -> None:
+        session = _session()
+        await store.save(session)
+
+        # Two writers both read v0; one wins the race.
+        stale = await store.get(session.id)
+        assert stale is not None
+        winner = await store.get(session.id)
+        assert winner is not None
+        winner.version += 1
+        await store.save(winner, expected_version=0)
+
+        # The loser still holds v0 and must be rejected, not silently overwritten.
+        stale.version += 1
+        with pytest.raises(SessionVersionConflictError):
+            await store.save(stale, expected_version=0)
+
+        loaded = await store.get(session.id)
+        assert loaded is not None
+        assert loaded.version == 1
+        assert loaded.title == winner.title
+
+    async def test_save_without_expected_version_writes_unconditionally(
+        self, store: Any
+    ) -> None:
+        session = _session()
+        session.version = 5
+        await store.save(session)
+        assert await store.get(session.id) is not None
 
 
 async def test_file_store_is_also_a_conversation_store(tmp_path: Path) -> None:

@@ -25,6 +25,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from langchain_core.messages import BaseMessage
 
+from agent_stack.core.errors import SessionVersionConflictError
 from agent_stack.core.session import Session
 from agent_stack.persistence.serializers import (
     MessageRecord,
@@ -81,8 +82,10 @@ class FileConversationStore:
     async def get(self, session_id: str) -> Session | None:
         return await asyncio.to_thread(self._get_session_sync, session_id)
 
-    async def save(self, session: Session) -> None:
-        await asyncio.to_thread(self._save_session_sync, session)
+    async def save(
+        self, session: Session, *, expected_version: int | None = None
+    ) -> None:
+        await asyncio.to_thread(self._save_session_sync, session, expected_version)
 
     async def get_messages(self, session_id: str) -> list[BaseMessage]:
         return await self.read_messages(session_id)
@@ -137,10 +140,22 @@ class FileConversationStore:
             metadata=dict(metadata) if isinstance(metadata, dict) else {},
         )
 
-    def _save_session_sync(self, session: Session) -> None:
+    def _save_session_sync(self, session: Session, expected_version: int | None) -> None:
         directory = self.session_dir(session.id)
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "artifacts").mkdir(exist_ok=True)
+        if expected_version is not None:
+            path = directory / "session.json"
+            stored_version = 0
+            if path.exists():
+                raw = path.read_text(encoding="utf-8")
+                stored_payload: Any = json.loads(raw)
+                stored_version = int(stored_payload.get("version", 0))
+            if stored_version != expected_version:
+                raise SessionVersionConflictError(
+                    f"session {session.id} version mismatch: expected {expected_version}, "
+                    f"stored {stored_version}"
+                )
         payload: dict[str, Any] = {
             "id": session.id,
             "owner_id": session.owner_id,

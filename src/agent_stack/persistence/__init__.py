@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from agent_stack.persistence.base import RunStore
 from agent_stack.persistence.conversation import ConversationStore, FileConversationStore
+from agent_stack.persistence.memory import InMemoryRunStore
 from agent_stack.persistence.migrations import SCHEMA_VERSION, create_schema
 from agent_stack.persistence.serializers import (
     MessageKind,
@@ -35,6 +36,7 @@ __all__ = [
     "ConversationBackend",
     "ConversationStore",
     "FileConversationStore",
+    "InMemoryRunStore",
     "MessageIndexEntry",
     "MessageKind",
     "MessageRecord",

@@ -9,6 +9,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from agent_stack.core.agent import Agent
+from agent_stack.core.cancellation import CancellationToken
 from agent_stack.core.errors import (
     AgentStackError,
     StepLimitExceeded,
@@ -16,6 +17,7 @@ from agent_stack.core.errors import (
 )
 from agent_stack.core.event_bus import EventBus
 from agent_stack.core.events import AgentEvent, EventType
+from agent_stack.core.locks import SessionLockManager
 from agent_stack.core.session import Session, SessionStore
 from agent_stack.tools.executor import ToolExecutor
 
@@ -33,6 +35,13 @@ class AgentRuntime:
     :class:`AgentEvent`s (:data:`~EventType.RUN_STARTED`, ``ASSISTANT_MESSAGE``,
     ``TOOL_STARTED``/``TOOL_COMPLETED``, ``RUN_COMPLETED``/``RUN_FAILED``). With no bus,
     the loop behaves exactly as before.
+
+    When a ``session_lock`` is wired, every run body is wrapped in the per-session lock,
+    so concurrent runs against the same session serialize.
+
+    ``run`` accepts an optional ``run_id`` (used for session creation and event emission)
+    and an optional ``cancel`` token that is polled between loop iterations and around
+    tool execution. Omitted, both behave exactly as before.
     """
 
     def __init__(
@@ -43,20 +52,54 @@ class AgentRuntime:
         tool_executor: ToolExecutor,
         session_store: SessionStore,
         event_bus: EventBus | None = None,
+        session_lock: SessionLockManager | None = None,
     ) -> None:
         self._agent = agent
         self._model = model
         self._tool_executor = tool_executor
         self._session_store = session_store
         self._event_bus = event_bus
+        self._session_lock = session_lock
 
-    async def run(self, *, session_id: str, user_id: str, message: str) -> AIMessage:
-        run_id = str(uuid4())
+    async def run(
+        self,
+        *,
+        session_id: str,
+        user_id: str,
+        message: str,
+        run_id: str | None = None,
+        cancel: CancellationToken | None = None,
+    ) -> AIMessage:
+        resolved_run_id = run_id or str(uuid4())
 
+        async def body() -> AIMessage:
+            return await self._run_body(
+                session_id=session_id,
+                user_id=user_id,
+                message=message,
+                run_id=resolved_run_id,
+                cancel=cancel,
+            )
+
+        if self._session_lock is None:
+            return await body()
+        async with self._session_lock.lock(session_id):
+            return await body()
+
+    async def _run_body(
+        self,
+        *,
+        session_id: str,
+        user_id: str,
+        message: str,
+        run_id: str,
+        cancel: CancellationToken | None,
+    ) -> AIMessage:
         session = await self._session_store.get(session_id)
         if session is None:
             session = Session(id=session_id, owner_id=user_id, agent_name=self._agent.name)
             await self._session_store.save(session)
+        stored_version = session.version
 
         history = await self._session_store.get_messages(session_id)
         new_messages: list[BaseMessage] = [HumanMessage(content=message)]
@@ -74,6 +117,7 @@ class AgentRuntime:
 
         try:
             while True:
+                self._check_cancelled(cancel)
                 response = await self._model.ainvoke(
                     [SystemMessage(content=self._agent.system_prompt), *history, *new_messages]
                 )
@@ -116,6 +160,10 @@ class AgentRuntime:
                         data={"tool": tool_call["name"], "tool_call_id": tool_call["id"]},
                     )
 
+                # Check again right before tool execution: a cancellation requested while
+                # the model was thinking still stops the tools from running.
+                self._check_cancelled(cancel)
+
                 tool_messages = await self._tool_executor.execute_many(response.tool_calls)
                 new_messages.extend(tool_messages)
 
@@ -131,7 +179,7 @@ class AgentRuntime:
             # in the store. Re-appending the full list here was the old duplication bug.
             await self._session_store.append_messages(session_id, new_messages)
             session.version += 1
-            await self._session_store.save(session)
+            await self._session_store.save(session, expected_version=stored_version)
 
             await self._emit(
                 EventType.RUN_COMPLETED,
@@ -149,6 +197,10 @@ class AgentRuntime:
             raise
 
         return response
+
+    def _check_cancelled(self, cancel: CancellationToken | None) -> None:
+        if cancel is not None:
+            cancel.raise_if_cancelled()
 
     async def _emit(
         self,

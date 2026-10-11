@@ -6,6 +6,8 @@ from typing import Any, Protocol
 
 from langchain_core.messages import BaseMessage
 
+from agent_stack.core.errors import SessionVersionConflictError
+
 
 @dataclass
 class Session:
@@ -25,11 +27,19 @@ class Session:
 
 
 class SessionStore(Protocol):
-    """Infrastructure boundary for session metadata and conversation messages."""
+    """Infrastructure boundary for session metadata and conversation messages.
+
+    ``save`` supports optimistic concurrency: pass ``expected_version`` (the version a
+    caller read via ``get``) to make the write fail with
+    :class:`SessionVersionConflictError` when a concurrent writer bumped the stored
+    version first. ``expected_version=None`` skips the check and writes unconditionally.
+    """
 
     async def get(self, session_id: str) -> Session | None: ...
 
-    async def save(self, session: Session) -> None: ...
+    async def save(
+        self, session: Session, *, expected_version: int | None = None
+    ) -> None: ...
 
     async def get_messages(self, session_id: str) -> list[BaseMessage]: ...
 
@@ -54,7 +64,18 @@ class InMemorySessionStore:
             return None
         return replace(session, metadata=dict(session.metadata))
 
-    async def save(self, session: Session) -> None:
+    async def save(
+        self, session: Session, *, expected_version: int | None = None
+    ) -> None:
+        stored = self._sessions.get(session.id)
+        if expected_version is not None and (
+            stored is None or stored.version != expected_version
+        ):
+            raise SessionVersionConflictError(
+                f"session {session.id} version mismatch: expected "
+                f"{expected_version}, stored "
+                f"{stored.version if stored is not None else 'absent'}"
+            )
         self._sessions[session.id] = replace(session, metadata=dict(session.metadata))
 
     async def get_messages(self, session_id: str) -> list[BaseMessage]:

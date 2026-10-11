@@ -20,6 +20,7 @@ from typing import Any, Protocol
 
 from langchain_core.messages import BaseMessage
 
+from agent_stack.core.errors import SessionVersionConflictError
 from agent_stack.core.run import Run, RunStatus
 from agent_stack.core.session import Session, SessionStore
 from agent_stack.persistence.conversation import ConversationStore
@@ -76,6 +77,10 @@ class SqliteDatabase:
     async def execute(self, sql: str, params: Sequence[Any] = ()) -> None:
         await asyncio.to_thread(self._execute_sync, sql, params)
 
+    async def execute_rowcount(self, sql: str, params: Sequence[Any] = ()) -> int:
+        """Execute a statement and return its affected-row count (for CAS writes)."""
+        return await asyncio.to_thread(self._execute_rowcount_sync, sql, params)
+
     async def executemany(self, sql: str, seq_of_params: Sequence[Sequence[Any]]) -> None:
         await asyncio.to_thread(self._executemany_sync, sql, seq_of_params)
 
@@ -90,6 +95,12 @@ class SqliteDatabase:
         with self._lock:
             self._conn.execute(sql, params)
             self._conn.commit()
+
+    def _execute_rowcount_sync(self, sql: str, params: Sequence[Any]) -> int:
+        with self._lock:
+            cursor = self._conn.execute(sql, params)
+            self._conn.commit()
+            return cursor.rowcount
 
     def _executemany_sync(self, sql: str, seq_of_params: Sequence[Sequence[Any]]) -> None:
         with self._lock:
@@ -115,6 +126,7 @@ class SqliteRunStore:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 session_id=excluded.session_id,
+                parent_run_id=excluded.parent_run_id,
                 status=excluded.status,
                 step_count=excluded.step_count,
                 tool_call_count=excluded.tool_call_count,
@@ -123,7 +135,7 @@ class SqliteRunStore:
             (
                 run.id,
                 run.session_id,
-                None,
+                run.parent_run_id,
                 run.status.value,
                 run.step_count,
                 run.tool_call_count,
@@ -276,34 +288,95 @@ class SqliteSessionStore:
             metadata=dict(metadata) if isinstance(metadata, dict) else {},
         )
 
-    async def save(self, session: Session) -> None:
+    async def save(
+        self, session: Session, *, expected_version: int | None = None
+    ) -> None:
         now = _now_iso()
-        await self._db.execute(
+        if expected_version is None:
+            # Unconditional upsert (creation path and legacy callers).
+            await self._db.execute(
+                """
+                INSERT INTO sessions
+                    (id, owner_id, agent_name, title, status, version,
+                     created_at, updated_at, metadata_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    owner_id=excluded.owner_id,
+                    agent_name=excluded.agent_name,
+                    title=excluded.title,
+                    status=excluded.status,
+                    version=excluded.version,
+                    updated_at=excluded.updated_at,
+                    metadata_json=excluded.metadata_json
+                """,
+                (
+                    session.id,
+                    session.owner_id,
+                    session.agent_name,
+                    session.title,
+                    session.status,
+                    session.version,
+                    now,
+                    now,
+                    json.dumps(dict(session.metadata), ensure_ascii=False),
+                ),
+            )
+            return
+
+        # Optimistic compare-and-swap: only a writer whose expected version still matches
+        # the stored one may land. rowcount == 0 means a concurrent writer won first.
+        updated = await self._db.execute_rowcount(
             """
-            INSERT INTO sessions
-                (id, owner_id, agent_name, title, status, version,
-                 created_at, updated_at, metadata_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                owner_id=excluded.owner_id,
-                agent_name=excluded.agent_name,
-                title=excluded.title,
-                status=excluded.status,
-                version=excluded.version,
-                updated_at=excluded.updated_at,
-                metadata_json=excluded.metadata_json
+            UPDATE sessions SET
+                owner_id=?, agent_name=?, title=?, status=?, version=?,
+                updated_at=?, metadata_json=?
+            WHERE id = ? AND version = ?
             """,
             (
-                session.id,
                 session.owner_id,
                 session.agent_name,
                 session.title,
                 session.status,
                 session.version,
                 now,
-                now,
                 json.dumps(dict(session.metadata), ensure_ascii=False),
+                session.id,
+                expected_version,
             ),
+        )
+        if updated == 1:
+            return
+
+        # A brand-new session (stored version 0) is insertable only when the expected
+        # version is also 0; any other miss is a genuine lost update.
+        if expected_version == 0:
+            existing = await self._db.query(
+                "SELECT version FROM sessions WHERE id = ?", (session.id,)
+            )
+            if not existing:
+                await self._db.execute(
+                    """
+                    INSERT INTO sessions
+                        (id, owner_id, agent_name, title, status, version,
+                         created_at, updated_at, metadata_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        session.id,
+                        session.owner_id,
+                        session.agent_name,
+                        session.title,
+                        session.status,
+                        session.version,
+                        now,
+                        now,
+                        json.dumps(dict(session.metadata), ensure_ascii=False),
+                    ),
+                )
+                return
+        raise SessionVersionConflictError(
+            f"session {session.id} version mismatch: expected {expected_version} "
+            f"(a concurrent writer changed the session first)"
         )
 
     async def get_messages(self, session_id: str) -> list[BaseMessage]:
@@ -321,6 +394,7 @@ class SqliteSessionStore:
 
 def _row_to_run(row: sqlite3.Row) -> Run:
     error_value = row["error"]
+    parent_run_id_value = row["parent_run_id"]
     return Run(
         id=str(row["id"]),
         session_id=str(row["session_id"]),
@@ -328,4 +402,5 @@ def _row_to_run(row: sqlite3.Row) -> Run:
         step_count=int(row["step_count"]),
         tool_call_count=int(row["tool_call_count"]),
         error=None if error_value is None else str(error_value),
+        parent_run_id=None if parent_run_id_value is None else str(parent_run_id_value),
     )

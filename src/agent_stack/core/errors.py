@@ -73,3 +73,19 @@ class ArtifactError(AgentStackError):
 
 class RunCancelled(AgentStackError):
     """Raised when a run is cancelled cooperatively."""
+
+
+class RunNotFoundError(AgentStackError):
+    """Raised when a run id cannot be resolved."""
+
+
+class SessionVersionConflictError(PersistenceError):
+    """Raised when saving a session whose version no longer matches the stored one."""
+
+
+class SkillsError(AgentStackError):
+    """Raised when a skill cannot be discovered, parsed, or loaded."""
+
+
+class InstructionsError(AgentStackError):
+    """Raised when agent instruction files cannot be loaded."""
