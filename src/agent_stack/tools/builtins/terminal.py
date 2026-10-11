@@ -186,11 +186,16 @@ def run_command_tool(policy: WorkspacePolicy) -> BaseTool:
         shell: bool = False,
         cwd: str = ".",
     ) -> str:
-        """Run a command in the workspace and capture its output.
+        """Run a command in the workspace and capture stdout/stderr.
 
-        ``command`` runs directly, without a shell, unless ``shell=True`` is passed
-        explicitly. ``cwd`` is resolved relative to the workspace root. Output is capped
-        and a non-zero exit code is reported in the result rather than raised.
+        No implicit shell: the command is executed directly unless ``shell=True`` is
+        passed explicitly. Prefer the dedicated tools for filesystem work — ``read_file``
+        (not cat/head/tail), ``edit_file`` (not sed/awk), ``write_file`` (not echo),
+        ``search_files``/``list_directory`` (not find/ls); they are scoped, capped, and
+        easier to review. The working directory resets each call to the workspace root
+        unless ``cwd`` is given. Output is capped and a non-zero exit code is reported in
+        the result, not raised; the whole process group is killed if the command exceeds
+        ``timeout`` (reported as timed out).
         """
         working_dir = policy.resolve(cwd)
         result = await run_command(command, cwd=working_dir, timeout=timeout, shell=shell)

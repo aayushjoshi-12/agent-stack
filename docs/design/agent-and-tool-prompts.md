@@ -60,17 +60,22 @@ Tools:
 - If a skill matches the task, invoke it before generating any other response.
   Never mention a skill without invoking it, and never guess a skill name.
 
+Code style:
+- Follow the repo's AGENTS.md. Don't create planning or analysis documents
+  unless the user asks.
+- Default to no comments in code — one short line max when one is needed.
+```
+
+The following paragraph is **appended when P20 (subagents) lands** — until a
+`delegate` tool exists, instructions about it would be inert, so they are held back:
+
+```text
 Subagents (when available):
 - Delegate broad exploration or heavy research to a subagent to protect your
   context window. Do not duplicate work a subagent is already doing.
 - Write delegation prompts that are self-contained: the goal, what to check,
   and the form and length of the answer (e.g. "Report a punch list, under 200
   words").
-
-Code style:
-- Follow the repo's AGENTS.md. Don't create planning or analysis documents
-  unless the user asks.
-- Default to no comments in code — one short line max when one is needed.
 ```
 
 ## 2. Builtin tool descriptions
@@ -111,8 +116,8 @@ Inside the workspace only.
 Replace the single unique occurrence of `old` with `new` in a file. Exact
 string match, preserving indentation exactly. The edit is rejected if `old`
 appears zero times (re-read and retry) or more than once (widen `old` with
-surrounding context until it is unique). Prefer this over edit_file-less
-rewrites: it sends only the diff. Inside the workspace only.
+surrounding context until it is unique). Prefer this over rewriting a whole
+file: it sends only the diff. Inside the workspace only.
 ```
 
 ### `search_files`

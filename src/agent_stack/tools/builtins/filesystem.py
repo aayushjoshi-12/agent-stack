@@ -127,43 +127,51 @@ def filesystem_tools(policy: WorkspacePolicy) -> tuple[BaseTool, ...]:
 
     @tool
     async def list_directory(path: str = ".") -> str:
-        """List the files and directories at ``path`` inside the workspace.
+        """List the entries of a directory inside the workspace.
 
-        ``path`` is relative to the workspace root (defaults to the root itself).
+        Files show their size, directories a trailing slash. Use this instead of
+        ``ls`` — it is scoped to the workspace and easy to review. ``path`` is
+        relative to the workspace root (defaults to the root itself).
         """
         return _list_directory(policy, path)
 
     @tool
     async def read_file(path: str) -> str:
-        """Read a UTF-8 text file at ``path`` (relative to the workspace root).
+        """Read a UTF-8 text file as a string. Use this instead of ``cat``/``head``/``tail``.
 
-        Fails if the file does not exist or exceeds the read size cap.
+        Fails if the file does not exist or is larger than the read cap (1 MiB) — for big
+        files, search first or read the relevant region. ``path`` is relative to the
+        workspace root.
         """
         return _read_file(policy, path)
 
     @tool
     async def write_file(path: str, content: str) -> str:
-        """Create or overwrite the file at ``path`` with ``content``.
+        """Create or overwrite a file with the given content. Use this instead of ``echo``.
 
-        Missing parent directories are created. ``path`` is relative to the workspace
-        root and must stay inside it.
+        Missing parent directories are created; content is capped at 1 MiB. To change
+        part of an existing file, prefer ``edit_file``. ``path`` is relative to the
+        workspace root and must stay inside it.
         """
         return _write_file(policy, path, content)
 
     @tool
     async def edit_file(path: str, old: str, new: str) -> str:
-        """Replace the single occurrence of ``old`` with ``new`` in the file at ``path``.
+        """Replace the single unique occurrence of ``old`` with ``new`` in a file.
 
-        ``old`` must appear exactly once; otherwise the edit is rejected so you never
-        change the wrong place by accident.
+        Exact string match, preserving indentation. Rejected if ``old`` appears zero
+        times (re-read and retry) or more than once (widen ``old`` with surrounding
+        context until it is unique). Prefer this over rewriting a whole file — it sends
+        only the diff.
         """
         return _edit_file(policy, path, old, new)
 
     @tool
     async def search_files(pattern: str, path: str = ".") -> str:
-        """Find files under ``path`` whose name matches the glob ``pattern``.
+        """Find files by glob name pattern under a directory, e.g. ``pattern="*.py"``.
 
-        For example ``pattern="*.py"``. ``path`` is relative to the workspace root.
+        Returns up to 200 matches, resolved relative to the workspace root. Use this
+        instead of ``find``; it matches file names, not contents.
         """
         return _search_files(policy, pattern, path)
 
