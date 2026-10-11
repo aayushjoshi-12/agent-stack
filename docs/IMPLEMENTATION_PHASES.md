@@ -246,6 +246,7 @@ Milestone C — Real capabilities
 16b  Skills (SKILL.md)                    ✅
 16c  Agent instructions (AGENTS.md)       ✅
 16d  Memory files (MEMORY.md)             ⬜
+16e  Context wiring (make it real)        ⬜
 
 Milestone D — Composition & application
  17  Composition root (bootstrap.py)      🟡
@@ -253,7 +254,7 @@ Milestone D — Composition & application
  19  Gateway contract (base.py)           ✅
 
 Milestone E — Multi-agent & memory
- 20  Subagents (delegation)               ⬜
+ 20  Subagents (delegation)               ✅
  21  Persistent memory                    ⬜
  22  Planning / TODOs                     ⬜
 
@@ -883,6 +884,37 @@ with the same three-level progressive disclosure as skills (P16b). Full survey +
 
 ---
 
+## Phase 16e — Context wiring (make it real) ⬜
+
+**Goal.** The file-capability pieces (P16 builder, P16b skills, P16c instructions, P16d
+memory) are built and unit-tested, but **nothing wires them into a run**: the runtime
+sends only `SystemMessage(agent.system_prompt)` over the *entire* history — no
+instructions, no skills metadata, no memory index, and no recent-window/compaction. This
+phase makes the composition real, so what the model actually sees is
+`base prompt → instructions → skills metadata → memory → recent window`, bounded.
+
+**Deliverables**
+- `context/composer.py` — a `SystemPartsProvider` that produces the ordered resident parts
+  (instructions from `InstructionsLoader`, skills metadata from `SkillRegistry`, memory
+  index from P16d) for a workspace.
+- `AgentRuntime` uses `ContextBuilder` for **both** the system parts and the history:
+  `compact()` the loaded history, then `build(system_parts=parts, history=history+new)` each
+  iteration. With nothing injected it stays behaviour-preserving for short conversations.
+  The provider seam lives in `core` (a `Protocol`) so `core` never imports `context`.
+- `bootstrap.py` wires the loaders/registries + the provider into `AgentFactory` →
+  `AgentRuntime`, and attaches the `load_skill`/`read_skill_resource` (and P16d memory)
+  tools to the default agent. Discovery roots per the P16b/P16c/P16d specs.
+
+**Acceptance**
+- `test_agents_md_reaches_model_prompt` — an `AGENTS.md` convention appears in the model input.
+- `test_skill_metadata_reaches_model_prompt` — skill names/descriptions are resident; bodies are not.
+- `test_history_window_caps_model_input` — a long history is windowed (or compacted), not sent whole.
+- `test_memory_index_reaches_model_prompt` — memory index lines reach the prompt (with P16d).
+
+**Defer:** semantic/vector retrieval; per-session instruction overrides.
+
+---
+
 # Milestone D — Composition & application
 
 **Demo at the end:** one `create_application()` call wires everything and can be driven
@@ -971,7 +1003,7 @@ def create_application(config: AppConfig) -> Application:
 
 ---
 
-## Phase 20 — Subagents ⬜
+## Phase 20 — Subagents ✅
 
 **Goal.** Delegation reuses the normal tool path — and a subagent is as visible and
 steerable as the main agent. §46–51.
