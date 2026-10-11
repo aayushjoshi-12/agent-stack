@@ -42,6 +42,7 @@ from agent_stack.gateways.tui.render import (
     event_block,
     header_status,
     human_block,
+    reasoning_block,
     run_status_block,
     subagent_block,
     tool_completed_block,
@@ -267,6 +268,8 @@ class TuiApp(App[None]):
         etype = event.type
         if etype is EventType.RUN_STARTED:
             self._track_run(event.run_id, "running")
+        elif etype is EventType.MODEL_REASONING:
+            self._chat_write(reasoning_block(event))
         elif etype is EventType.ASSISTANT_MESSAGE:
             self._chat_write(assistant_block(event))
         elif etype is EventType.TOOL_STARTED:

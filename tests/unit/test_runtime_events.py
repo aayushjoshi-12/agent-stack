@@ -125,6 +125,35 @@ async def test_event_payloads_describe_the_run() -> None:
     assert completed.data == {"steps": 2, "tool_calls": 1}
 
 
+async def test_model_reasoning_is_emitted_before_the_answer() -> None:
+    store = InMemorySessionStore()
+    bus = RecordingEventBus()
+    model = FakeChatModel([ai("the answer", reasoning="let me think")])
+    runtime = _build_runtime(model, [], store, bus)
+
+    await runtime.run(session_id="s1", user_id="u1", message="go")
+
+    assert [event.type for event in bus.published] == [
+        EventType.RUN_STARTED,
+        EventType.MODEL_REASONING,
+        EventType.ASSISTANT_MESSAGE,
+        EventType.RUN_COMPLETED,
+    ]
+    reasoning = bus.published[1]
+    assert reasoning.data == {"text": "let me think"}
+
+
+async def test_no_reasoning_event_when_the_model_thinks_nothing() -> None:
+    store = InMemorySessionStore()
+    bus = RecordingEventBus()
+    model = FakeChatModel([ai("the answer")])
+    runtime = _build_runtime(model, [], store, bus)
+
+    await runtime.run(session_id="s1", user_id="u1", message="go")
+
+    assert EventType.MODEL_REASONING not in {event.type for event in bus.published}
+
+
 async def test_run_failed_is_emitted_and_reraised() -> None:
     store = InMemorySessionStore()
     bus = RecordingEventBus()

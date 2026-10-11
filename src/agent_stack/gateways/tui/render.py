@@ -21,6 +21,7 @@ __all__ = [
     "event_block",
     "header_status",
     "human_block",
+    "reasoning_block",
     "run_status_block",
     "subagent_block",
     "tool_completed_block",
@@ -35,6 +36,7 @@ _OK = "green"
 _ERR = "red"
 _DIM = "dim"
 _SUB = "magenta"
+_THINK = "italic grey62"
 
 
 def human_block(text: str) -> Text:
@@ -53,6 +55,14 @@ def assistant_block(event: AgentEvent) -> Text:
     for name in event.data.get("tool_calls") or ():
         line.append("\n  ⚙ ", style=_TOOL)
         line.append(str(name), style=_TOOL)
+    return line
+
+
+def reasoning_block(event: AgentEvent) -> Text:
+    """The model's thinking for a step, rendered dim/italic above its answer."""
+    line = Text()
+    line.append("▸ think ", style=_THINK)
+    line.append(str(event.data.get("text", "")), style=_THINK)
     return line
 
 
@@ -99,6 +109,8 @@ def run_status_block(event: AgentEvent) -> Text:
 
 def event_block(event: AgentEvent) -> Text:
     """Render any child-run event with the same blocks the chat log uses."""
+    if event.type is EventType.MODEL_REASONING:
+        return reasoning_block(event)
     if event.type is EventType.ASSISTANT_MESSAGE:
         return assistant_block(event)
     if event.type is EventType.TOOL_STARTED:

@@ -28,6 +28,30 @@ if TYPE_CHECKING:
     from agent_stack.persistence.base import CheckpointStore
 
 
+def reasoning_text(message: AIMessage) -> str:
+    """The model's thinking/reasoning for a step, or ``""`` when the provider gave none.
+
+    Prefers LangChain's normalised ``reasoning`` content blocks and falls back to the
+    ``reasoning_content`` key that OpenAI-compatible providers (GLM, DeepSeek, …) put in
+    ``additional_kwargs``. Never raises: an unreadable content shape yields no reasoning.
+    """
+    try:
+        blocks: Sequence[Any] = message.content_blocks
+    except Exception:
+        blocks = ()
+    parts = [
+        str(block["reasoning"])
+        for block in blocks
+        if isinstance(block, Mapping)
+        and block.get("type") == "reasoning"
+        and block.get("reasoning")
+    ]
+    if parts:
+        return "\n\n".join(parts)
+    raw = message.additional_kwargs.get("reasoning_content")
+    return raw if isinstance(raw, str) else ""
+
+
 class AgentRuntime:
     """The explicit model/tool loop.
 
@@ -187,6 +211,16 @@ class AgentRuntime:
                     )
                 new_messages.append(response)
                 step_count += 1
+
+                reasoning = reasoning_text(response)
+                if reasoning:
+                    await self._emit(
+                        EventType.MODEL_REASONING,
+                        run_id=run_id,
+                        session_id=session_id,
+                        parent_run_id=parent_run_id,
+                        data={"text": reasoning},
+                    )
 
                 await self._emit(
                     EventType.ASSISTANT_MESSAGE,

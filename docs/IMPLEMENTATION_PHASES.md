@@ -1087,12 +1087,18 @@ mid-run *pause-and-resume* beyond cooperative input injection.
 ## Phase 23 — TUI gateway (Textual + Rich) ✅  ← FIRST gateway to build
 
 **Done:** `gateways/tui/` (`app.py` Textual app, `render.py` pure event→Rich helpers),
-`gateways/cli.py` line REPL, `tui`/`chat` entry points in `observability/cli.py`. Chat log
-streams assistant/tool activity; right tabs = Subagents (per-child interrupt/steer over
-`Application.subscribe(child_run_id)`)/Shells (`tool.output` grouped by `tool_call_id`, kill
-cancels the run)/Audit (byte-offset tail of `.agent/logs/audit.jsonl`). Boundary held
-(imports only `Application`/`gateways.base`/`core.events`, guarded by an AST test). Headless
-Pilot tests + a real-model smoke (`tmp/smoke_tests/P23-tui-smoke.py`).
+`gateways/cli.py` line REPL, `tui`/`chat` entry points in `observability/cli.py` (bare
+`agent-stack` launches the TUI). Chat log streams assistant/**reasoning**/tool activity;
+right tabs = Subagents (per-child interrupt/steer over `Application.subscribe(child_run_id)`)
+/Shells (`tool.output` grouped by `tool_call_id`, kill cancels the run)/Audit (byte-offset
+tail of `.agent/logs/audit.jsonl`). Boundary held (imports only
+`Application`/`gateways.base`/`core.events`, guarded by an AST test). Headless Pilot tests +
+a real-model smoke (`tmp/smoke_tests/P23-tui-smoke.py`).
+
+**Also:** `model.reasoning` events (the runtime lifts the model's thinking out of
+`content_blocks`/`additional_kwargs` and emits it before the answer) render as dim
+`▸ think` blocks in the chat and subagent panes. The workspace now defaults to the current
+directory (ADR 010), so the agent and its subagents read the project you launch it in.
 
 **Goal.** Prove the whole stack locally with a real terminal UI. §66, §143.
 **Stack decision:** [`Textual`](https://textual.textualize.io) app with

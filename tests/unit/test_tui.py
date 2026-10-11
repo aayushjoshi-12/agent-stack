@@ -52,6 +52,26 @@ async def test_tui_renders_assistant_message_and_tool_status() -> None:
     assert application.sent[0][2] is None
 
 
+async def test_tui_renders_reasoning_block() -> None:
+    application = FakeApplication(
+        events=[
+            event(EventType.RUN_STARTED),
+            event(EventType.MODEL_REASONING, text="weighing options"),
+            event(EventType.ASSISTANT_MESSAGE, content="the answer"),
+            event(EventType.RUN_COMPLETED, steps=1, tool_calls=0),
+        ]
+    )
+    app = TuiApp(application, session_id="s1")  # type: ignore[arg-type]
+
+    async with app.run_test() as pilot:
+        await _submit(pilot, "hi")
+        text = _log_text(app.query_one("#chat", RichLog))
+
+    assert "think" in text
+    assert "weighing options" in text
+    assert "the answer" in text
+
+
 async def test_tui_ctrl_c_cancels_run() -> None:
     gate = asyncio.Event()
     application = FakeApplication(events=[event(EventType.RUN_STARTED)], gate=gate)

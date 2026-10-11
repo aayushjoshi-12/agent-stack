@@ -24,6 +24,9 @@ class EventType(StrEnum):
     RUN_COMPLETED = "run.completed"
     RUN_FAILED = "run.failed"
     ASSISTANT_MESSAGE = "assistant.message"
+    # The model's thinking/reasoning for a step, when the provider returns any. Emitted
+    # just before the ASSISTANT_MESSAGE it belongs to; not terminal for any stream.
+    MODEL_REASONING = "model.reasoning"
     TOOL_STARTED = "tool.started"
     # Live tool output (P14). Not terminal for any stream: a command may emit many before
     # its TOOL_COMPLETED.

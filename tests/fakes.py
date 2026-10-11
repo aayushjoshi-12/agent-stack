@@ -21,9 +21,11 @@ def ai(
     *,
     tool_calls: Sequence[dict[str, Any]] = (),
     id: str | None = None,
+    reasoning: str | None = None,
 ) -> AIMessage:
-    """Build an AIMessage that may carry tool calls."""
-    return AIMessage(content=content, tool_calls=list(tool_calls), id=id)
+    """Build an AIMessage that may carry tool calls and/or reasoning."""
+    kwargs = {"reasoning_content": reasoning} if reasoning is not None else {}
+    return AIMessage(content=content, tool_calls=list(tool_calls), id=id, additional_kwargs=kwargs)
 
 
 def call(name: str, args: dict[str, Any] | None = None, *, id: str = "call-1") -> dict[str, Any]:

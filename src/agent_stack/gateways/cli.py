@@ -19,6 +19,7 @@ from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.gateways.base import MessageEnvelope
 from agent_stack.gateways.tui.render import (
     assistant_block,
+    reasoning_block,
     run_status_block,
     subagent_block,
     tool_completed_block,
@@ -35,6 +36,8 @@ def print_event(console: Console, event: AgentEvent) -> None:
     """Render one event to the console (the REPL's whole event vocabulary)."""
     if event.type is EventType.ASSISTANT_MESSAGE:
         console.print(assistant_block(event))
+    elif event.type is EventType.MODEL_REASONING:
+        console.print(reasoning_block(event))
     elif event.type is EventType.TOOL_STARTED:
         console.print(tool_started_block(event))
     elif event.type is EventType.TOOL_OUTPUT:

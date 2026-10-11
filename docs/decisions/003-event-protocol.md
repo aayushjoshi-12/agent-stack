@@ -18,8 +18,13 @@ BaseMessage = model context
 DB row = persistence representation
 ```
 
-The runtime publishes `run.started`, `assistant.message`, `tool.started`,
-`tool.completed`, `run.completed`, `run.failed`, later `approval.required`, etc.
+The runtime publishes `run.started`, `model.reasoning`, `assistant.message`,
+`tool.started`, `tool.output`, `tool.completed`, `subagent.started`,
+`subagent.completed`, `run.completed`, `run.failed`, later `approval.required`, etc.
+
+- `model.reasoning` carries the model's thinking for a step (when the provider returns
+  any), emitted just before the `assistant.message` it belongs to. It is a first-class
+  event, not part of the answer, so a gateway may show or hide it.
 
 ## Consequences
 
