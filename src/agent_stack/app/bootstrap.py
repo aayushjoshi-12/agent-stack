@@ -15,6 +15,7 @@ from agent_stack.core.factory import AgentFactory
 from agent_stack.core.locks import SessionLockManager
 from agent_stack.core.run import RunManager
 from agent_stack.core.workspace import WorkspacePolicy
+from agent_stack.memory import MemoryIndex, memory_tools
 from agent_stack.observability.audit import AuditLogger, audit_log_path
 from agent_stack.persistence.conversation import FileConversationStore
 from agent_stack.persistence.sqlite import (
@@ -98,10 +99,12 @@ def build_application(config: AppConfig | None = None) -> Application:
     policy = WorkspacePolicy(root=workspace)
     fs_tools = filesystem_tools(policy)
 
-    # Context wiring (P16e): instructions + skill metadata become resident system parts,
-    # and a ContextBuilder bounds the message window. Discovery is non-strict so one
-    # non-conforming skill (e.g. a vendored one) cannot break every root; user-global
-    # `~/.claude/skills/` is intentionally omitted until config opts it in.
+    # Context wiring (P16e): instructions + skill metadata + the memory index become
+    # resident system parts, and a ContextBuilder bounds the message window. Discovery is
+    # non-strict so one non-conforming skill (e.g. a vendored one) cannot break every
+    # root; user-global `~/.claude/skills/` is intentionally omitted until config opts it
+    # in. Memory resolves `<workspace>/.agent/memory/`, falling back to a bare
+    # `<workspace>/MEMORY.md`; the root is created only when a topic is written.
     skills = SkillRegistry(
         SkillLoader(
             [
@@ -112,9 +115,11 @@ def build_application(config: AppConfig | None = None) -> Application:
             strict=False,
         )
     )
+    memory = MemoryIndex(workspace)
     composer = SystemPromptComposer(
         instructions=InstructionsLoader(),
         skills=skills,
+        memory=memory,
         workspace_root=workspace,
     )
     context_builder = ContextBuilder()
@@ -133,6 +138,7 @@ def build_application(config: AppConfig | None = None) -> Application:
             run_command_tool(policy),
             *control_tools(),
             *skill_tools(skills),
+            *memory_tools(memory),
         ),
         subagents=(
             SubAgentSpec(

@@ -19,6 +19,7 @@ from agent_stack.core.agent import Agent
 from agent_stack.core.context import ContextBuilder
 from agent_stack.core.runtime import AgentRuntime
 from agent_stack.core.session import InMemorySessionStore
+from agent_stack.memory import MemoryIndex
 from agent_stack.skills import SkillLoader, SkillRegistry
 from agent_stack.tools.executor import ToolExecutor
 from agent_stack.tools.registry import ToolRegistry
@@ -58,6 +59,7 @@ def _composer(workspace: Path) -> SystemPromptComposer:
     return SystemPromptComposer(
         instructions=InstructionsLoader(),
         skills=SkillRegistry(SkillLoader([workspace / ".agent" / "skills"])),
+        memory=MemoryIndex(workspace),
         workspace_root=workspace,
     )
 
