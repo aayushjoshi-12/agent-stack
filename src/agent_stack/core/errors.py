@@ -19,10 +19,6 @@ class ToolError(AgentStackError):
     """Base class for tool-related failures."""
 
 
-class UnknownToolError(ToolError):
-    """Raised when a tool call names a tool the registry does not know."""
-
-
 class LimitExceededError(AgentStackError):
     """Base class for limits that terminate a run."""
 
@@ -33,22 +29,6 @@ class StepLimitExceeded(LimitExceededError):
 
 class ToolCallLimitExceeded(LimitExceededError):
     """Raised when a run exceeds its maximum number of tool calls."""
-
-
-class TimeoutExceeded(LimitExceededError):
-    """Raised when a run exceeds its maximum wall-clock runtime."""
-
-
-class SessionNotFoundError(AgentStackError):
-    """Raised when a session id cannot be resolved."""
-
-
-class ModelError(AgentStackError):
-    """Raised when the model call itself fails (transport, provider error)."""
-
-
-class ToolTimeoutError(ToolError):
-    """Raised when a tool exceeds its individual time budget."""
 
 
 class WorkspaceEscapeError(ToolError):
@@ -63,20 +43,12 @@ class PersistenceError(AgentStackError):
     """Base class for store/persistence failures."""
 
 
-class CheckpointError(PersistenceError):
-    """Raised when a checkpoint cannot be written or read."""
-
-
 class ArtifactError(AgentStackError):
     """Raised when an artifact cannot be stored or retrieved."""
 
 
 class RunCancelled(AgentStackError):
     """Raised when a run is cancelled cooperatively."""
-
-
-class RunNotFoundError(AgentStackError):
-    """Raised when a run id cannot be resolved."""
 
 
 class SessionVersionConflictError(PersistenceError):

@@ -22,14 +22,11 @@ from pathlib import Path
 from agent_stack.core.errors import SkillsError
 from agent_stack.skills.models import Skill, SkillMetadata, SkillResource
 
-__all__ = ["MAX_DESCRIPTION_CHARS", "MAX_NAME_CHARS", "SkillLoader"]
+__all__ = ["MAX_DESCRIPTION_CHARS", "SkillLoader"]
 
 #: Frontmatter keys this parser understands, all single-line scalar values. ``metadata``
 #: (a nested map) is intentionally *not* part of the subset and is rejected as unsupported.
 SUPPORTED_KEYS = frozenset({"name", "description", "license", "compatibility", "allowed-tools"})
-
-#: Upper bound for a skill name per the ``SKILL.md`` spec.
-MAX_NAME_CHARS = 64
 
 #: Upper bound for a skill description per the ``SKILL.md`` spec.
 MAX_DESCRIPTION_CHARS = 1024
@@ -73,8 +70,7 @@ def _parse_skill_file(text: str) -> tuple[dict[str, str], str]:
             raise SkillsError(f"Duplicate frontmatter key {field!r}")
         if value.startswith(("|", ">")):
             raise SkillsError(
-                f"Unsupported multiline value for {field!r}: "
-                "only single-line scalars are supported"
+                f"Unsupported multiline value for {field!r}: only single-line scalars are supported"
             )
         fields[field] = value
 
@@ -92,8 +88,7 @@ def _parse_skill(directory: Path) -> SkillMetadata:
         raise SkillsError(f"{directory}: missing required frontmatter field 'name'")
     if _NAME_RE.fullmatch(name) is None:
         raise SkillsError(
-            f"{directory}: invalid skill name {name!r}; "
-            "must match ^[a-z0-9][a-z0-9-]{0,63}$"
+            f"{directory}: invalid skill name {name!r}; must match ^[a-z0-9][a-z0-9-]{{0,63}}$"
         )
     if name != directory.name:
         raise SkillsError(
@@ -173,7 +168,9 @@ class SkillLoader:
         """
         metadata = self._find(name)
         if Path(rel_path).is_absolute():
-            raise SkillsError(f"Resource path must be relative to the skill directory: {rel_path!r}")
+            raise SkillsError(
+                f"Resource path must be relative to the skill directory: {rel_path!r}"
+            )
         resolved = (metadata.path / rel_path).resolve()
         if not resolved.is_relative_to(metadata.path):
             raise SkillsError(f"Resource {rel_path!r} escapes skill directory {metadata.path}")

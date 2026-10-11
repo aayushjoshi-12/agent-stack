@@ -37,9 +37,7 @@ class SessionStore(Protocol):
 
     async def get(self, session_id: str) -> Session | None: ...
 
-    async def save(
-        self, session: Session, *, expected_version: int | None = None
-    ) -> None: ...
+    async def save(self, session: Session, *, expected_version: int | None = None) -> None: ...
 
     async def get_messages(self, session_id: str) -> list[BaseMessage]: ...
 
@@ -64,13 +62,9 @@ class InMemorySessionStore:
             return None
         return replace(session, metadata=dict(session.metadata))
 
-    async def save(
-        self, session: Session, *, expected_version: int | None = None
-    ) -> None:
+    async def save(self, session: Session, *, expected_version: int | None = None) -> None:
         stored = self._sessions.get(session.id)
-        if expected_version is not None and (
-            stored is None or stored.version != expected_version
-        ):
+        if expected_version is not None and (stored is None or stored.version != expected_version):
             raise SessionVersionConflictError(
                 f"session {session.id} version mismatch: expected "
                 f"{expected_version}, stored "

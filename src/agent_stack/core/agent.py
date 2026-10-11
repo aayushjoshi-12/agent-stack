@@ -1,7 +1,7 @@
 """The agent definition — a frozen description of *what* an agent is.
 
-An :class:`Agent` owns configuration only. It never holds per-run state (`AgentState`
-does that) or infrastructure (`AgentRuntime` does that).
+An :class:`Agent` owns configuration only. It never holds per-run state (the runtime
+tracks per-run counters locally) or infrastructure (:class:`AgentRuntime` does that).
 """
 
 from __future__ import annotations

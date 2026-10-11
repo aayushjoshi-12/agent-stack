@@ -151,9 +151,7 @@ class TestSessionStoreContract:
         assert loaded.version == 1
         assert loaded.title == winner.title
 
-    async def test_save_without_expected_version_writes_unconditionally(
-        self, store: Any
-    ) -> None:
+    async def test_save_without_expected_version_writes_unconditionally(self, store: Any) -> None:
         session = _session()
         session.version = 5
         await store.save(session)

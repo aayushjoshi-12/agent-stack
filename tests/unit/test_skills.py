@@ -95,7 +95,10 @@ def test_read_resource_reads_only_within_skill_dir() -> None:
     assert isinstance(resource, SkillResource)
     assert resource.name == "with-resources"
     assert resource.path.is_relative_to(root("skills-root") / "with-resources")
-    assert resource.path.read_text(encoding="utf-8") == "# Reference\n\nThe resource payload is: resource-content-7.\n"
+    assert (
+        resource.path.read_text(encoding="utf-8")
+        == "# Reference\n\nThe resource payload is: resource-content-7.\n"
+    )
 
     for escaping_path in ("../SKILL.md", "../../etc/passwd", "/etc/passwd"):
         with pytest.raises(SkillsError):

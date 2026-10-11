@@ -12,7 +12,6 @@ from agent_stack.core.run import RunManager
 from agent_stack.persistence.conversation import FileConversationStore
 from agent_stack.persistence.sqlite import (
     SqliteDatabase,
-    SqliteIndex,
     SqliteRunStore,
     SqliteSessionStore,
 )
@@ -44,7 +43,6 @@ def build_application(config: AppConfig | None = None) -> Application:
     conversation = FileConversationStore(sessions_root)
     session_store = SqliteSessionStore(db, conversation)
     run_store = SqliteRunStore(db)
-    _index = SqliteIndex(db)
     event_bus = InMemoryEventBus()
     locks = SessionLockManager()
 

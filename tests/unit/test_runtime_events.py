@@ -128,12 +128,8 @@ async def test_event_payloads_describe_the_run() -> None:
 async def test_run_failed_is_emitted_and_reraised() -> None:
     store = InMemorySessionStore()
     bus = RecordingEventBus()
-    model = FakeChatModel(
-        [ai(tool_calls=[call("echo", {})]), ai(tool_calls=[call("echo", {})])]
-    )
-    runtime = _build_runtime(
-        model, [EchoTool()], store, bus, limits=AgentLimits(max_steps=1)
-    )
+    model = FakeChatModel([ai(tool_calls=[call("echo", {})]), ai(tool_calls=[call("echo", {})])])
+    runtime = _build_runtime(model, [EchoTool()], store, bus, limits=AgentLimits(max_steps=1))
 
     with pytest.raises(StepLimitExceeded):
         await runtime.run(session_id="s1", user_id="u1", message="go")

@@ -288,9 +288,7 @@ class SqliteSessionStore:
             metadata=dict(metadata) if isinstance(metadata, dict) else {},
         )
 
-    async def save(
-        self, session: Session, *, expected_version: int | None = None
-    ) -> None:
+    async def save(self, session: Session, *, expected_version: int | None = None) -> None:
         now = _now_iso()
         if expected_version is None:
             # Unconditional upsert (creation path and legacy callers).

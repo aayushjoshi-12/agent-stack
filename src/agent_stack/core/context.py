@@ -19,7 +19,7 @@ from langchain_core.messages import BaseMessage, SystemMessage
 
 from agent_stack.core.errors import ConfigurationError
 
-TRUNCATED_MARKER = "…[truncated]"
+TRUNCATION_MARKER = "…[truncated]"
 
 
 def truncate_bytes(raw: bytes, limit: int) -> str:
@@ -29,10 +29,10 @@ def truncate_bytes(raw: bytes, limit: int) -> str:
     cut point becomes U+FFFD rather than raising, and the result is trimmed so its
     UTF-8 encoding never exceeds ``limit`` bytes.
     """
-    marker = TRUNCATED_MARKER.encode("utf-8")
+    marker = TRUNCATION_MARKER.encode("utf-8")
     keep = max(0, limit - len(marker))
     text = raw[:keep].decode("utf-8", errors="replace")
-    return _trim_to_bytes(text, keep) + TRUNCATED_MARKER
+    return _trim_to_bytes(text, keep) + TRUNCATION_MARKER
 
 
 def _trim_to_bytes(text: str, limit: int) -> str:
@@ -101,7 +101,7 @@ class ContextBuilder:
         recent = history[-self.recent_window :]
         if self.summarizer is None:
             return recent
-        old = history[:-self.recent_window]
+        old = history[: -self.recent_window]
         summary = await self.summarizer.summarize(old)
         return [SystemMessage(content=summary), *recent]
 

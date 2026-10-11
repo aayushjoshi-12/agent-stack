@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING
@@ -168,6 +168,7 @@ class RunManager:
                 message=request.message,
                 run_id=run.id,
                 cancel=token,
+                counters=self._record_counters(run),
             )
             run.status = RunStatus.COMPLETED
             return result
@@ -269,6 +270,16 @@ class RunManager:
             self._stop_pump(run_id)
             self._end_stream(run_id)
             self._finish(run_id)
+
+    @staticmethod
+    def _record_counters(run: Run) -> Callable[[int, int], None]:
+        """Capture a finished run's step/tool counts onto the ``Run`` record."""
+
+        def record(steps: int, calls: int) -> None:
+            run.step_count = steps
+            run.tool_call_count = calls
+
+        return record
 
     async def recover(self) -> int:
         """Mark every stale PENDING/RUNNING run FAILED; return how many were marked.

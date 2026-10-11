@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import cast
 
 from langchain_core.language_models import BaseChatModel
 
 from agent_stack.core.agent import Agent
+from agent_stack.core.event_bus import EventBus
 from agent_stack.core.locks import SessionLockManager
 from agent_stack.core.runtime import AgentRuntime
 from agent_stack.core.session import SessionStore
@@ -24,13 +25,11 @@ class AgentFactory:
         self,
         *,
         session_store: SessionStore,
-        event_bus: Any = None,
-        checkpoint_store: Any = None,
+        event_bus: EventBus | None = None,
         session_lock: SessionLockManager | None = None,
     ) -> None:
         self._session_store = session_store
         self._event_bus = event_bus
-        self._checkpoint_store = checkpoint_store
         self._session_lock = session_lock
 
     def create(self, agent: Agent) -> AgentRuntime:

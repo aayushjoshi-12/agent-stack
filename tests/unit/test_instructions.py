@@ -9,9 +9,8 @@ from pathlib import Path
 import pytest
 
 from agent_stack.context import InstructionsLoader
+from agent_stack.core.context import TRUNCATION_MARKER
 from agent_stack.core.errors import InstructionsError
-
-TRUNCATED_MARKER = "…[truncated]"
 
 
 def _write(path: Path, content: str) -> None:
@@ -90,7 +89,7 @@ async def test_instruction_size_cap_enforced(tmp_path: Path) -> None:
     truncated = files[1]
     assert truncated.path == (project / "AGENTS.md").resolve()
     assert truncated.size_bytes == 100
-    assert truncated.content == ("x" * 6) + TRUNCATED_MARKER
+    assert truncated.content == ("x" * 6) + TRUNCATION_MARKER
     assert len(truncated.content.encode("utf-8")) == 20
 
     # A tighter total cap drops the furthest file (partial fits allowed).

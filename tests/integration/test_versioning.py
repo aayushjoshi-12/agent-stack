@@ -105,9 +105,7 @@ def _manager(
 
 @pytest.mark.integration
 @pytest.mark.parametrize("factory", STORE_FACTORIES, ids=STORE_IDS)
-async def test_lost_update_detected_by_version_mismatch(
-    factory: Any, tmp_path: Path
-) -> None:
+async def test_lost_update_detected_by_version_mismatch(factory: Any, tmp_path: Path) -> None:
     store = factory(tmp_path)
     await store.save(Session(id="s1", owner_id="u1", agent_name="assistant"))
 
@@ -131,9 +129,7 @@ async def test_lost_update_detected_by_version_mismatch(
 
 @pytest.mark.integration
 @pytest.mark.parametrize("factory", STORE_FACTORIES, ids=STORE_IDS)
-async def test_runtime_run_bumps_session_version_once(
-    factory: Any, tmp_path: Path
-) -> None:
+async def test_runtime_run_bumps_session_version_once(factory: Any, tmp_path: Path) -> None:
     store = factory(tmp_path)
     await store.save(Session(id="s1", owner_id="u1", agent_name="assistant"))
     manager = _manager(store, FakeChatModel([ai("done")]))
@@ -208,12 +204,8 @@ async def test_session_lock_serializes_concurrent_runs(tmp_path: Path) -> None:
         "A",
         "B",
     ]
-    assert [message.content for message in messages if message.content == "from A"] == [
-        "from A"
-    ]
-    assert [message.content for message in messages if message.content == "from B"] == [
-        "from B"
-    ]
+    assert [message.content for message in messages if message.content == "from A"] == ["from A"]
+    assert [message.content for message in messages if message.content == "from B"] == ["from B"]
 
 
 @pytest.mark.integration

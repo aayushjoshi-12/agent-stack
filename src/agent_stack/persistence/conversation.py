@@ -82,9 +82,7 @@ class FileConversationStore:
     async def get(self, session_id: str) -> Session | None:
         return await asyncio.to_thread(self._get_session_sync, session_id)
 
-    async def save(
-        self, session: Session, *, expected_version: int | None = None
-    ) -> None:
+    async def save(self, session: Session, *, expected_version: int | None = None) -> None:
         await asyncio.to_thread(self._save_session_sync, session, expected_version)
 
     async def get_messages(self, session_id: str) -> list[BaseMessage]:

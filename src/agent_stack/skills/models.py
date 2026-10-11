@@ -39,10 +39,6 @@ class Skill:
     metadata: SkillMetadata
     body: str  # markdown body, everything after the frontmatter
 
-    def metadata_for_system_prompt(self) -> str:
-        """The level-1 resident line; the body stays out of the prompt until loaded."""
-        return self.metadata.metadata_for_system_prompt()
-
 
 @dataclass(frozen=True)
 class SkillResource:

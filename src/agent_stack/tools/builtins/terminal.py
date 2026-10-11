@@ -19,6 +19,7 @@ from pathlib import Path
 
 from langchain_core.tools import BaseTool, tool
 
+from agent_stack.core.context import TRUNCATION_MARKER
 from agent_stack.core.errors import CommandTimeoutError
 from agent_stack.core.workspace import WorkspacePolicy
 
@@ -32,9 +33,6 @@ __all__ = [
 
 #: Largest amount of stdout/stderr captured per stream.
 MAX_STREAM_BYTES = 32 * 1024
-
-#: Appended to a stream that was cut off at the cap.
-TRUNCATION_MARKER = "\n…[truncated]"
 
 #: The only environment variables a child process may inherit.
 ENV_ALLOWLIST = ("PATH", "HOME", "LANG")
@@ -87,7 +85,8 @@ def _build_argv(command: str | Sequence[str], shell: bool) -> list[str]:
 def _truncate(data: bytes, limit: int) -> str:
     if len(data) <= limit:
         return data.decode("utf-8", errors="replace")
-    return data[:limit].decode("utf-8", errors="replace") + TRUNCATION_MARKER
+    keep = max(0, limit - 1)  # reserve one byte for the marker's leading newline
+    return data[:keep].decode("utf-8", errors="replace") + "\n" + TRUNCATION_MARKER
 
 
 def _signal_group(pgid: int, sig: signal.Signals) -> None:

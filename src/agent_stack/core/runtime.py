@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 from uuid import uuid4
 
@@ -39,9 +39,10 @@ class AgentRuntime:
     When a ``session_lock`` is wired, every run body is wrapped in the per-session lock,
     so concurrent runs against the same session serialize.
 
-    ``run`` accepts an optional ``run_id`` (used for session creation and event emission)
-    and an optional ``cancel`` token that is polled between loop iterations and around
-    tool execution. Omitted, both behave exactly as before.
+    ``run`` accepts an optional ``run_id`` (used for session creation and event emission),
+    an optional ``cancel`` token that is polled between loop iterations and around
+    tool execution, and an optional ``counters`` callback that receives the run's final
+    ``(step_count, tool_call_count)`` on success. Omitted, all behave exactly as before.
     """
 
     def __init__(
@@ -69,6 +70,7 @@ class AgentRuntime:
         message: str,
         run_id: str | None = None,
         cancel: CancellationToken | None = None,
+        counters: Callable[[int, int], None] | None = None,
     ) -> AIMessage:
         resolved_run_id = run_id or str(uuid4())
 
@@ -79,6 +81,7 @@ class AgentRuntime:
                 message=message,
                 run_id=resolved_run_id,
                 cancel=cancel,
+                counters=counters,
             )
 
         if self._session_lock is None:
@@ -94,6 +97,7 @@ class AgentRuntime:
         message: str,
         run_id: str,
         cancel: CancellationToken | None,
+        counters: Callable[[int, int], None] | None,
     ) -> AIMessage:
         session = await self._session_store.get(session_id)
         if session is None:
@@ -196,6 +200,8 @@ class AgentRuntime:
             )
             raise
 
+        if counters is not None:
+            counters(step_count, tool_call_count)
         return response
 
     def _check_cancelled(self, cancel: CancellationToken | None) -> None:

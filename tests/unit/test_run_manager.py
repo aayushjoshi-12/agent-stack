@@ -115,6 +115,30 @@ async def test_run_lifecycle_transitions() -> None:
     ]
 
 
+async def test_completed_run_records_step_and_tool_counts() -> None:
+    """A completed run's record carries the loop counters, not zeros."""
+    store = InMemorySessionStore()
+    run_store = InMemoryRunStore()
+    runtime = _build_runtime(
+        FakeChatModel([ai(tool_calls=[call("echo", {})]), ai("done")]),
+        [EchoTool()],
+        store,
+        None,
+    )
+    manager = RunManager(runtime=runtime, run_store=run_store)
+
+    handle = await manager.start(_request())
+
+    result = await handle.result()
+    assert result.content == "done"
+
+    run = await run_store.get(handle.run_id)
+    assert run is not None
+    assert run.status == RunStatus.COMPLETED
+    assert run.step_count == 2
+    assert run.tool_call_count == 1
+
+
 async def test_failed_run_recorded() -> None:
     store = InMemorySessionStore()
     run_store = InMemoryRunStore()
