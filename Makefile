@@ -1,4 +1,4 @@
-.PHONY: install lint fmt typecheck test check run clean \
+.PHONY: install install-tool lint fmt typecheck test check run clean \
         plan handoff smoke tree
 
 UV ?= uv
@@ -12,6 +12,10 @@ TITLE ?= scratch
 
 install:
 	$(UV) sync
+
+# Put `agent-stack` on PATH (editable, so source changes are picked up).
+install-tool:
+	$(UV) tool install --editable .
 
 # ── Quality gates ──────────────────────────────────────────────────────────────
 

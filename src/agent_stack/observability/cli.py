@@ -1,8 +1,7 @@
-"""Minimal ``agent-stack audit`` CLI (P8b).
+"""The ``agent-stack`` command line (P8b/P23).
 
-Only the one command gateways need today: ``audit tail`` follows the JSONL trace and
-filters by run. No arguments fall through to the normal app startup, so
-``python -m agent_stack`` still starts.
+With no arguments it launches the TUI (the single-command entry point). Subcommands:
+``tui``, ``chat`` (the line REPL), and ``audit tail``.
 """
 
 from __future__ import annotations
@@ -57,14 +56,29 @@ def tail(path: Path, *, run_id: str | None = None, from_sequence: int = 0) -> No
                 print(line, end="")
 
 
+def _run_tui() -> int:
+    from agent_stack.app.bootstrap import build_application
+    from agent_stack.gateways.tui import run_tui
+
+    run_tui(build_application())
+    return 0
+
+
+def _run_chat() -> int:
+    import asyncio
+
+    from agent_stack.app.bootstrap import build_application
+    from agent_stack.gateways.cli import run_cli
+
+    asyncio.run(run_cli(build_application()))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    """Dispatch the CLI; no arguments start the app (the pre-CLI behaviour)."""
+    """Dispatch the CLI; with no arguments, launch the TUI."""
     args = list(sys.argv[1:] if argv is None else argv)
     if not args:
-        from agent_stack.app.bootstrap import main as ready
-
-        ready()
-        return 0
+        return _run_tui()
 
     parsed = _parser().parse_args(args)
     if parsed.command == "audit" and parsed.audit_command == "tail":
@@ -72,19 +86,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         tail(path, run_id=parsed.run_id, from_sequence=parsed.from_sequence)
         return 0
     if parsed.command == "tui":
-        from agent_stack.app.bootstrap import build_application
-        from agent_stack.gateways.tui import run_tui
-
-        run_tui(build_application())
-        return 0
+        return _run_tui()
     if parsed.command == "chat":
-        import asyncio
-
-        from agent_stack.app.bootstrap import build_application
-        from agent_stack.gateways.cli import run_cli
-
-        asyncio.run(run_cli(build_application()))
-        return 0
+        return _run_chat()
 
     _parser().print_help()
     return 1

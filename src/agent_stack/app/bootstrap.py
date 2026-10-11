@@ -87,7 +87,7 @@ def build_application(config: AppConfig | None = None) -> Application:
     sessions_root = workspace / ".agent" / "sessions"
     sessions_root.mkdir(parents=True, exist_ok=True)
 
-    db = SqliteDatabase(resolved.db_path)
+    db = SqliteDatabase(resolved.database)
     conversation = FileConversationStore(sessions_root)
     session_store = SqliteSessionStore(db, conversation)
     run_store = SqliteRunStore(db)
@@ -173,12 +173,3 @@ def build_application(config: AppConfig | None = None) -> Application:
         run_manager=run_manager,
         event_bus=event_bus,
     )
-
-
-def main() -> None:
-    """Build the application and print a readiness line.
-
-    No model call and no network access happen here.
-    """
-    application = build_application()
-    print(f"agent-stack ready (agent={application.agent.name}, model={application.config.model})")

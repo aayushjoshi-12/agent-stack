@@ -32,6 +32,26 @@ make check     # lint + typecheck + tests
 make fmt       # format
 ```
 
+## Run
+
+```bash
+make install-tool   # one-time: put `agent-stack` on PATH (editable)
+agent-stack         # launch the TUI (single command)
+```
+
+`agent-stack` opens the **current directory as its workspace** — the agent's file,
+shell, memory and session tools are scoped to where you run it. Subcommands:
+
+```bash
+agent-stack tui              # the Textual TUI (same as no args)
+agent-stack chat             # line REPL (scriptable; reads stdin)
+agent-stack audit tail       # follow the JSONL audit log
+```
+
+Without installing, use `uv run agent-stack` (or `uv run python -m agent_stack`).
+Point it elsewhere with `AGENT_STACK_WORKSPACE=/path` (`AGENT_STACK_DB` overrides the
+SQLite index path; `AGENT_STACK_MODEL` the model).
+
 ## Layout
 
 ```text

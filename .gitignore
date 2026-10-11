@@ -20,3 +20,4 @@ tmp/
 # Agent runtime workspace: session transcripts, artifacts, sqlite index
 .agent/
 workspace/
+agent.db*

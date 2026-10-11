@@ -8,17 +8,28 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
 @dataclass(frozen=True)
 class AppConfig:
-    """Immutable application configuration."""
+    """Immutable application configuration.
+
+    `workspace` defaults to the **current directory**, so running `agent-stack` inside a
+    project opens that project. The SQLite index lives at `<workspace>/agent.db` unless
+    `AGENT_STACK_DB` (``db_path``) overrides it.
+    """
 
     model: str = "openrouter:z-ai/glm-5.3"
-    workspace: Path = Path("./workspace")
-    db_path: Path = Path("./workspace/agent.db")
+    workspace: Path = field(default_factory=Path.cwd)
+    #: Explicit index path; ``None`` means ``<workspace>/agent.db`` (see :attr:`database`).
+    db_path: Path | None = None
+
+    @property
+    def database(self) -> Path:
+        """Where the SQLite index lives: the override, else ``<workspace>/agent.db``."""
+        return self.db_path if self.db_path is not None else self.workspace / "agent.db"
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> AppConfig:
@@ -35,7 +46,7 @@ class AppConfig:
         )
 
         db_raw = source.get("AGENT_STACK_DB")
-        db_path = defaults.db_path if db_raw is None else Path(db_raw).expanduser()
+        db_path = None if db_raw is None else Path(db_raw).expanduser()
 
         return cls(
             model=source.get("AGENT_STACK_MODEL", defaults.model),

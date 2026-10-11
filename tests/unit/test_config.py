@@ -11,6 +11,20 @@ def test_from_env_empty_matches_defaults() -> None:
     assert AppConfig.from_env({}) == AppConfig()
 
 
+def test_workspace_defaults_to_current_directory() -> None:
+    assert AppConfig().workspace == Path.cwd()
+
+
+def test_database_defaults_into_the_workspace() -> None:
+    assert AppConfig().database == Path.cwd() / "agent.db"
+    assert AppConfig(workspace=Path("/tmp/ws")).database == Path("/tmp/ws/agent.db")
+
+
+def test_database_respects_an_explicit_override() -> None:
+    cfg = AppConfig(workspace=Path("/tmp/ws"), db_path=Path("/tmp/ws/index.db"))
+    assert cfg.database == Path("/tmp/ws/index.db")
+
+
 def test_from_env_overrides_model() -> None:
     cfg = AppConfig.from_env({"AGENT_STACK_MODEL": "openai:gpt-4o"})
     assert cfg.model == "openai:gpt-4o"
