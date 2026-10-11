@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -248,7 +248,15 @@ class AgentRuntime:
                 # the model was thinking still stops the tools from running.
                 self._check_cancelled(cancel)
 
-                tool_results = await self._tool_executor.execute_many(pending)
+                tool_results = await self._tool_executor.execute_many(
+                    pending,
+                    on_output=self._tool_output_emitter(
+                        run_id=run_id,
+                        session_id=session_id,
+                        parent_run_id=parent_run_id,
+                        tool_calls=pending,
+                    ),
+                )
 
                 if checkpoint_store is not None and tool_results:
                     # The whole batch lands in one transaction, atomically visible to recovery.
@@ -355,6 +363,40 @@ class AgentRuntime:
     def _check_cancelled(self, cancel: CancellationToken | None) -> None:
         if cancel is not None:
             cancel.raise_if_cancelled()
+
+    def _tool_output_emitter(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        parent_run_id: str | None,
+        tool_calls: Sequence[Mapping[str, Any]],
+    ) -> Callable[[str, str, str], Awaitable[None]] | None:
+        """Build the batch's live-output hook, or ``None`` when no bus is wired.
+
+        With no bus there is no sink, so streaming tools fall back to their unchanged
+        (no live output) behaviour.
+        """
+        if self._event_bus is None:
+            return None
+
+        names = {str(tool_call["id"]): str(tool_call["name"]) for tool_call in tool_calls}
+
+        async def emit(tool_call_id: str, stream: str, chunk: str) -> None:
+            await self._emit(
+                EventType.TOOL_OUTPUT,
+                run_id=run_id,
+                session_id=session_id,
+                parent_run_id=parent_run_id,
+                data={
+                    "tool": names.get(tool_call_id),
+                    "tool_call_id": tool_call_id,
+                    "stream": stream,
+                    "chunk": chunk,
+                },
+            )
+
+        return emit
 
     async def _emit(
         self,

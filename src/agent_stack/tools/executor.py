@@ -16,15 +16,19 @@ projection the runtime feeds back into the conversation.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.messages import ToolMessage
 
+from agent_stack.core.tool_stream import tool_output_sink
 from agent_stack.tools.registry import ToolRegistry
 
-__all__ = ["ToolExecutionResult", "ToolExecutor"]
+#: Per-call live-output hook: ``(tool_call_id, stream, chunk)``.
+ToolOutputHandler = Callable[[str, str, str], Awaitable[None]]
+
+__all__ = ["ToolExecutionResult", "ToolExecutor", "ToolOutputHandler"]
 
 
 @dataclass(frozen=True)
@@ -49,15 +53,28 @@ class ToolExecutor:
     def __init__(self, registry: ToolRegistry) -> None:
         self.registry = registry
 
-    async def execute_one(self, tool_call: Mapping[str, Any]) -> ToolExecutionResult:
-        """Execute a single tool call, returning a result either way."""
+    async def execute_one(
+        self,
+        tool_call: Mapping[str, Any],
+        *,
+        on_output: ToolOutputHandler | None = None,
+    ) -> ToolExecutionResult:
+        """Execute a single tool call, returning a result either way.
+
+        ``on_output`` is an optional ``(tool_call_id, stream, chunk)`` hook. When given,
+        the tool runs with a per-call sink installed, so a streaming tool can emit live
+        output through :func:`current_tool_output_sink`. Omitted, behaviour is unchanged.
+        """
         tool_call_id: str = tool_call["id"]
         tool_name = str(tool_call["name"])
 
         try:
             tool = self.registry.get(tool_name)
             # Invoke with the *arguments*, never the whole tool_call dict.
-            result = await tool.ainvoke(tool_call["args"])
+            if on_output is None:
+                result = await tool.ainvoke(tool_call["args"])
+            else:
+                result = await self._invoke_with_output(tool, tool_call, on_output)
         except Exception as exc:
             return ToolExecutionResult(
                 tool_call_id=tool_call_id,
@@ -78,12 +95,35 @@ class ToolExecutor:
             success=True,
         )
 
+    @staticmethod
+    async def _invoke_with_output(
+        tool: Any,
+        tool_call: Mapping[str, Any],
+        on_output: ToolOutputHandler,
+    ) -> Any:
+        tool_call_id: str = tool_call["id"]
+
+        async def sink(stream: str, chunk: str) -> None:
+            await on_output(tool_call_id, stream, chunk)
+
+        with tool_output_sink(sink):
+            return await tool.ainvoke(tool_call["args"])
+
     async def execute_many(
-        self, tool_calls: Sequence[Mapping[str, Any]]
+        self,
+        tool_calls: Sequence[Mapping[str, Any]],
+        *,
+        on_output: ToolOutputHandler | None = None,
     ) -> list[ToolExecutionResult]:
-        """Execute every call concurrently, preserving the input order."""
+        """Execute every call concurrently, preserving the input order.
+
+        ``on_output`` is forwarded to each call; ``asyncio.gather`` runs each in its own
+        task, so the per-call sink stays isolated.
+        """
         if not tool_calls:
             return []
 
-        results = await asyncio.gather(*(self.execute_one(tool_call) for tool_call in tool_calls))
+        results = await asyncio.gather(
+            *(self.execute_one(tool_call, on_output=on_output) for tool_call in tool_calls)
+        )
         return list(results)

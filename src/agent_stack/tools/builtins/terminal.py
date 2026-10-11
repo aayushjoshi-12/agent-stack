@@ -9,6 +9,7 @@ passes a filtered environment, and caps stdout/stderr. The result is structured 
 from __future__ import annotations
 
 import asyncio
+import codecs
 import contextlib
 import os
 import signal
@@ -21,6 +22,7 @@ from langchain_core.tools import BaseTool, tool
 
 from agent_stack.core.context import TRUNCATION_MARKER
 from agent_stack.core.errors import CommandTimeoutError
+from agent_stack.core.tool_stream import ToolOutputSink, current_tool_output_sink
 from agent_stack.core.workspace import WorkspacePolicy
 
 __all__ = [
@@ -41,6 +43,9 @@ DEFAULT_TIMEOUT_SECONDS = 30.0
 
 #: How long a process group gets to exit on ``SIGTERM`` before ``SIGKILL``.
 _KILL_GRACE_SECONDS = 1.0
+
+#: Bytes read from a pipe per iteration while streaming.
+_READ_CHUNK_BYTES = 4096
 
 _SHELL = "/bin/sh"
 
@@ -113,6 +118,38 @@ async def _kill_process_group(process: asyncio.subprocess.Process) -> None:
         await process.wait()
 
 
+async def _pump(
+    reader: asyncio.StreamReader,
+    stream: str,
+    max_bytes: int,
+    on_output: ToolOutputSink | None,
+) -> bytes:
+    """Read one pipe to EOF, returning every byte read.
+
+    Every chunk is also handed to ``on_output`` as decoded text — but only until
+    ``max_bytes`` have been emitted, so live events stay bounded. A single incremental
+    UTF-8 decoder spans the reads so a character split across chunks is not corrupted.
+    """
+    collected = bytearray()
+    emitted = 0
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    while True:
+        chunk = await reader.read(_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        collected.extend(chunk)
+        if on_output is not None and emitted < max_bytes:
+            emitted += len(chunk)
+            text = decoder.decode(chunk)
+            if text:
+                await on_output(stream, text)
+    if on_output is not None and emitted < max_bytes:
+        tail = decoder.decode(b"", final=True)
+        if tail:
+            await on_output(stream, tail)
+    return bytes(collected)
+
+
 async def run_command(
     command: str | Sequence[str],
     *,
@@ -122,6 +159,7 @@ async def run_command(
     max_stdout_bytes: int = MAX_STREAM_BYTES,
     max_stderr_bytes: int = MAX_STREAM_BYTES,
     raise_on_timeout: bool = False,
+    on_output: ToolOutputSink | None = None,
 ) -> CommandResult:
     """Run ``command`` in ``cwd`` and return a structured :class:`CommandResult`.
 
@@ -129,6 +167,10 @@ async def run_command(
     vector is executed directly. On timeout the whole process group is killed and
     ``timed_out=True`` is reported — unless ``raise_on_timeout`` is set, in which case a
     :class:`~agent_stack.core.errors.CommandTimeoutError` is raised after cleanup.
+
+    When ``on_output`` is given, each stream is read in chunks and every chunk is passed to
+    it as ``(stream, text)`` while the command runs (bounded per stream by the byte caps),
+    so callers can render live output.
     """
     argv = _build_argv(command, shell)
     if not argv:
@@ -145,21 +187,31 @@ async def run_command(
         start_new_session=True,
     )
 
+    async def read_streams() -> tuple[bytes, bytes]:
+        # Both pipes are set to PIPE above, so the readers exist.
+        stdout = process.stdout
+        stderr = process.stderr
+        assert stdout is not None and stderr is not None
+        return await asyncio.gather(
+            _pump(stdout, "stdout", max_stdout_bytes, on_output),
+            _pump(stderr, "stderr", max_stderr_bytes, on_output),
+        )
+
     timed_out = False
-    communicate: asyncio.Task[tuple[bytes, bytes]] = asyncio.ensure_future(process.communicate())
+    read_task: asyncio.Task[tuple[bytes, bytes]] = asyncio.ensure_future(read_streams())
     try:
-        done, _ = await asyncio.wait({communicate}, timeout=timeout)
+        done, _ = await asyncio.wait({read_task}, timeout=timeout)
     except asyncio.CancelledError:
         await _kill_process_group(process)
-        await asyncio.gather(communicate, return_exceptions=True)
+        await asyncio.gather(read_task, return_exceptions=True)
         raise
 
-    if communicate in done:
-        stdout_bytes, stderr_bytes = communicate.result()
+    if read_task in done:
+        stdout_bytes, stderr_bytes = read_task.result()
     else:
         timed_out = True
         await _kill_process_group(process)
-        stdout_bytes, stderr_bytes = await communicate
+        stdout_bytes, stderr_bytes = await read_task
 
     duration_ms = (time.perf_counter() - start) * 1000.0
     result = CommandResult(
@@ -198,7 +250,13 @@ def run_command_tool(policy: WorkspacePolicy) -> BaseTool:
         ``timeout`` (reported as timed out).
         """
         working_dir = policy.resolve(cwd)
-        result = await run_command(command, cwd=working_dir, timeout=timeout, shell=shell)
+        result = await run_command(
+            command,
+            cwd=working_dir,
+            timeout=timeout,
+            shell=shell,
+            on_output=current_tool_output_sink(),
+        )
         return result.render()
 
     return _run_command_tool

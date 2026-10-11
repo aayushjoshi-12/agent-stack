@@ -25,6 +25,9 @@ class EventType(StrEnum):
     RUN_FAILED = "run.failed"
     ASSISTANT_MESSAGE = "assistant.message"
     TOOL_STARTED = "tool.started"
+    # Live tool output (P14). Not terminal for any stream: a command may emit many before
+    # its TOOL_COMPLETED.
+    TOOL_OUTPUT = "tool.output"
     TOOL_COMPLETED = "tool.completed"
     # Subagent lifecycle, published on the *parent's* run scope (Phase 20). Neither is
     # terminal for any stream — a child finishing must never end its parent's stream.
