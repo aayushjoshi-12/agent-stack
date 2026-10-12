@@ -1,16 +1,26 @@
 """The Textual TUI gateway.
 
 A single-screen Textual app that drives the :class:`Application`: the conversation
-streams messages, thinking and tool calls, the side panes show runs, subagents and
-running shells, and the keyboard mirrors the opencode-style bindings. It touches
+streams messages, thinking, tool calls and terminal-transcript panels, a context
+sidebar shows the session title and an estimated context usage, and the keyboard
+mirrors the opencode-style bindings (Ctrl+P palette, Ctrl+C cancel/quit). It touches
 only ``Application``, ``gateways.base`` and ``core.events`` — every run goes through
 ``Application.send_message`` and every cancel through ``Application.cancel_run``.
+
+Layout follows the reference coding-agent UI: a wide conversation column on the left
+(≈2fr) and a narrow context sidebar on the right (≈1fr). Sections are separated by
+*panel colours* — the sidebar, the input composer and message panels are all a shade
+darker than the conversation background — never by box-drawing rules (ADR 011).
+Assistant messages render as Markdown, so fenced code blocks get the terminal-native
+syntax highlighting Textual applies to code fences (``MarkdownFence``), and streamed
+``run_command`` output is diff-coloured when it looks like unified-diff text.
 """
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, ClassVar, cast
 
 from rich.text import Text
@@ -19,90 +29,43 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.command import Hit, Hits, Provider
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.timer import Timer
-from textual.widgets import (
-    Button,
-    Collapsible,
-    Footer,
-    Input,
-    RichLog,
-    Static,
-    TabbedContent,
-    TabPane,
-    Tree,
-)
+from textual.widgets import Button, Collapsible, Input, Markdown, Static
 
 from agent_stack.app.application import Application, IdentityResolver, SessionResolver
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.gateways.base import MessageEnvelope
 from agent_stack.gateways.tui.render import (
-    assistant_block,
-    event_block,
     failure_block,
     human_block,
+    output_line_text,
     reasoning_block,
     subagent_block,
     tool_output_text,
     tool_started_block,
-    welcome_block,
 )
 
 __all__ = ["TuiApp", "TuiCommands"]
 
-_SPINNER = "⠋⠹⠸⠼⠴⠦⠧⠇⠏"
-#: The pane widgets Tab / Shift+Tab cycle between, in order.
-_PANE_IDS = ("prompt", "subagents", "shells")
+#: Sensors that mark an output stream as unified-diff text (matches any prefix).
+_DIFF_SENSORS = ("diff --git", "Index: ", "@@ ", "+++ ", "--- ")
+#: Widgets Tab / Shift+Tab cycle between, in order.
+_FOCUS_IDS = ("prompt", "chat")
 _QUIT_WORDS = frozenset({"exit", "quit"})
 
 
 @dataclass
 class ShellState:
-    """A running/settled shell command shown in the Shells pane."""
+    """A running/settled shell command rendered as an inline transcript panel."""
 
     tool: str
     run_id: str
+    block: Vertical | None = None
     output: str = ""
     status: str = "running"
-    #: How much of ``output`` has already been written to the shell log (always ends
-    #: on a line boundary, so a partial final line is not emitted twice).
+    diff: bool = False
+    #: How much of ``output`` has already been written to the panel (always ends on a
+    #: line boundary, so a partial final line is not emitted twice).
     emitted: int = 0
-
-
-class Divider(Static):
-    """A draggable one-cell rule; drag it to resize the pane beside it.
-
-    ``sign`` is +1 when dragging right widens ``target`` (the left sidebar) and -1
-    when it narrows it (the right-hand panes).
-    """
-
-    MIN_WIDTH = 14
-    MAX_WIDTH = 80
-    ALLOW_SELECT = False
-
-    def __init__(self, target: str, *, sign: int, id: str) -> None:
-        super().__init__(id=id)
-        self.target = target
-        self.sign = sign
-        self._start_x: int | None = None
-        self._start_width = 0
-
-    def on_mouse_down(self, event: events.MouseDown) -> None:
-        event.stop()
-        self.capture_mouse()
-        self._start_x = event.screen_x
-        self._start_width = self.app.query_one(f"#{self.target}").outer_size.width
-
-    def on_mouse_move(self, event: events.MouseMove) -> None:
-        if self._start_x is None:
-            return
-        width = self._start_width + self.sign * (event.screen_x - self._start_x)
-        self.app.query_one(f"#{self.target}").styles.width = max(
-            self.MIN_WIDTH, min(self.MAX_WIDTH, width)
-        )
-
-    def on_mouse_up(self, event: events.MouseUp) -> None:
-        self._start_x = None
-        self.release_mouse()
 
 
 class TuiCommands(Provider):
@@ -113,8 +76,9 @@ class TuiCommands(Provider):
         app = cast("TuiApp", self.app)
         commands: list[tuple[str, Any]] = [
             ("Cancel current run", app.action_cancel_or_quit),
+            ("New conversation", app.action_clear_chat),
+            ("Interrupt last subagent", app.action_interrupt_subagent),
             ("Focus prompt", lambda: app.query_one("#prompt", Input).focus()),
-            ("Clear chat", app.action_clear_chat),
             ("Quit agent-stack", app.exit),
         ]
         for name, callback in commands:
@@ -131,16 +95,19 @@ class TuiApp(App[None]):
     # ── design system ─────────────────────────────────────────────────────────
     # Colours come from the *active theme*, never from literals here, so the app
     # inherits the terminal's own palette (light or dark). The ANSI accents
-    # (``$accent``, ``$secondary``, ``ansi_bright_black``) all resolve to the
+    # (``$accent``, ``ansi_magenta``, ``ansi_bright_black``…) resolve to the
     # terminal's palette; there is no hex/RGB anywhere. Secondary text uses
     # ``text-style: dim`` because ``$text-muted`` flattens under ANSI themes.
-    # Spacing uses a fixed scale (0 · 1 · 2 cells) and regions are separated by
-    # whitespace and a single draggable rule, never boxes. See ADR 011.
+    # Regions are separated by *darker panels* (the ``.panel`` class), never by
+    # box-drawing rules: sidebar, composer, user messages, command transcripts and
+    # code blocks all sit on a slightly darker background than the conversation.
+    # ``:dark``/``:light`` flip the panel shade so light terminals stay readable.
+    # See ADR 011.
     CSS = """
     Screen { background: $background; color: $text; }
 
-    /* scrollbars: one cell thick, transparent track, muted thumb */
-    #chat, #runs, #subagents, #shells, #subagent-log, #shell-log {
+    /* the one scrollbar: one cell thick, transparent track, muted thumb */
+    #chat {
         scrollbar-size-vertical: 1;
         scrollbar-background: transparent;
         scrollbar-color: ansi_bright_black;
@@ -149,20 +116,100 @@ class TuiApp(App[None]):
     }
 
     /* widget defaults: terminal-default colour, no boxes */
-    Input { border: none; background: transparent; }
-    RichLog { background: transparent; }
-    Tree { background: transparent; }
+    Input { border: none; background: transparent; color: ansi_default; }
     VerticalScroll { background: transparent; }
 
-    /* Footer: keys are bold terminal-default text, descriptions recede with dim. */
-    FooterKey .footer-key--key { color: ansi_default; text-style: bold; }
-    FooterKey .footer-key--description { color: ansi_default; text-style: dim; }
+    /* darker panels replace divider lines (flip to light grey on light themes) */
+    .panel { background: ansi_black; }
+    .panel:light { background: ansi_bright_black; }
 
-    /* tabs: single row, no underline bar, the active tab is an accent */
-    Tabs { height: 1; background: transparent; }
-    Tab { padding: 0 2; color: ansi_default; text-style: dim; }
-    Tab.-active { color: $accent; text-style: bold; }
-    Underline { display: none; }
+    #frame { height: 1fr; }
+
+    /* conversation title row: bold task title + a small new-conversation control */
+    #conv-title { height: 1; padding: 0 2; }
+    #title-text { width: auto; color: ansi_default; text-style: bold; }
+    #new-session { margin-left: 1; }
+
+    #main { height: 1fr; }
+
+    /* conversation column: chat, composer, status — the sidebar sits beside it */
+    #conversation { width: 2fr; height: 1fr; }
+    #chat { height: 1fr; padding: 0 2; }
+
+    /* conversation rows, separated by whitespace (panels, not rules) */
+    .row { width: 100%; margin-bottom: 1; }
+    .msg-user { padding: 0 1; color: ansi_default; }
+    .msg-agent { margin: 1 0; }
+    .msg-error { color: ansi_default; }
+    .tool-line, .subagent-line { color: ansi_default; }
+
+    /* thinking: a collapsible ``Thought`` row, yellow label, dim-italic body.
+       The Collapsible's own ``hkey`` border-top is a divider rule, so it is
+       removed — the row separates by whitespace like every other section. */
+    .msg-think { margin: 0 0 1 0; }
+    Collapsible { border-top: none; background: transparent; }
+    Collapsible:ansi { border-top: none; background: $panel; }
+    CollapsibleTitle {
+        width: auto; padding: 0; background: transparent;
+        color: ansi_yellow; text-style: bold;
+    }
+    CollapsibleTitle:hover { background: transparent; color: $accent; }
+    CollapsibleTitle:focus { background: transparent; color: $accent; }
+    .think-body { color: ansi_default; text-style: dim italic; }
+
+    /* terminal transcripts: an inline darker panel for bash commands */
+    .cmd-block { padding: 0 1; }
+    .cmd-block Static { width: 100%; }
+
+    /* Markdown: assistant messages render natively, so headings are the accent
+       and code fences get Textual's ANSI-aware syntax highlighting. */
+    Markdown { height: auto; margin: 0; padding: 0; background: transparent; }
+    MarkdownHeading,
+    MarkdownH1, MarkdownH2, MarkdownH3, MarkdownH4, MarkdownH5, MarkdownH6 {
+        background: transparent;
+        color: ansi_magenta;
+        text-style: bold;
+        margin: 1 0 0 0;
+    }
+    MarkdownParagraph { margin: 0; }
+    MarkdownBlock > .code_inline {
+        background: ansi_black !important;
+        color: ansi_default !important;
+    }
+    MarkdownBlock:light > .code_inline {
+        background: ansi_bright_black !important;
+        color: ansi_default !important;
+    }
+    MarkdownFence {
+        background: ansi_black !important;
+        color: ansi_default;
+        margin: 1 0;
+        padding: 0 1;
+    }
+    MarkdownFence:light { background: ansi_bright_black !important; }
+
+    /* composer: a darker panel with the thin input accent on its left edge */
+    #composer { height: 3; }
+    #accent { width: 1; background: ansi_magenta; }
+    #accent:light { background: ansi_magenta; }
+    #composer-input { width: 1fr; padding: 0 2; }
+    #prompt { height: 1; padding: 0; }
+    #model-line { height: 1; color: ansi_bright_black; text-style: dim; }
+
+    /* status bar: muted items, context in the accent */
+    #status { height: 1; padding: 0 2; }
+    #status-path, #status-file, #status-keys { color: ansi_bright_black; }
+    #status-path, #status-file, #status-ctx { width: auto; margin-right: 2; }
+    #status-ctx { color: $accent; }
+    #status-keys { width: 1fr; text-align: right; }
+
+    /* context sidebar: a darker panel, title + context usage, spacer, status */
+    #sidebar { width: 1fr; height: 1fr; padding: 1 2; }
+    #side-title { color: ansi_bright_white; text-style: bold; margin-bottom: 1; }
+    #side-title:light { color: ansi_black; }
+    #side-context { text-style: bold; margin: 2 0 0 0; }
+    #side-tokens, #side-used, #side-status { color: ansi_bright_black; }
+    #side-spacer { height: 1fr; }
 
     /* flat text controls (Textual's ANSI buttons default to a tall box) */
     Button:ansi.-style-flat, Button:ansi.-style-default {
@@ -176,63 +223,18 @@ class TuiApp(App[None]):
         &:hover { border: none; background: ansi_default; text-style: bold; }
         &.-active { border: none; background: ansi_default; }
     }
+    #new-session { color: $accent; text-style: bold; }
 
-    /* header: identity left, secondary runtime metadata right */
-    #header { height: 1; padding: 0 2; }
-    #header-title { width: auto; color: $accent; text-style: bold; }
-    #header-meta { width: 1fr; text-align: right; text-style: dim; }
-
-    #body { height: 1fr; }
-
-    /* three regions, separated by whitespace and a single draggable rule */
-    #left { width: 26; padding: 1 2; }
-    #center { width: 1fr; padding: 1 3; }
-    #panes { width: 46; padding: 1 2; }
-
-    Divider { width: 1; height: 1fr; background: ansi_bright_black; }
-    Divider:hover { background: $accent; }
-
-    .pane-title { height: 1; text-style: dim; margin-bottom: 1; }
-
-    #runs, #chat, #subagents, #subagent-log, #shell-log { height: 1fr; }
-    #shells { height: auto; max-height: 8; margin-bottom: 1; }
-    #subagent-controls { height: 3; }
-    #subagent-input { width: 1fr; }
-
-    /* conversation: a stack of message widgets with breathing room */
-    .welcome { width: 100%; margin: 1 0 2 0; }
-    .msg { width: 100%; margin-top: 1; }
-    .msg-user { background: ansi_bright_black; color: ansi_default; padding: 0 1; }
-    .msg-think { border: none; padding: 0; background: transparent; }
-    CollapsibleTitle {
-        width: auto; padding: 0; background: transparent;
-        color: ansi_default; text-style: dim;
-    }
-    CollapsibleTitle:hover { background: transparent; color: $accent; }
-    CollapsibleTitle:focus { background: transparent; color: $accent; text-style: bold; }
-    .think-body { color: ansi_default; text-style: dim italic; }
-    .tool-line { width: 100%; margin-top: 1; }
-    .subagent-line { width: 100%; }
-
-    /* input: a rule separates it from history; no box, terminal-default colour */
-    #prompt {
-        height: 3;
-        border: none;
-        border-top: solid ansi_bright_black;
-        padding: 1 3 0 3;
-    }
-
-    /* narrow terminals: drop the side panes, then the sidebar */
-    Screen.narrow #panes, Screen.narrow #divider-panes { display: none; }
-    Screen.tiny #left, Screen.tiny #divider-left { display: none; }
+    /* narrow terminals: drop the context sidebar, keeping the conversation */
+    Screen.narrow #sidebar { display: none; }
     """
 
     BINDINGS: ClassVar[list[Any]] = [
         Binding("ctrl+c", "cancel_or_quit", "cancel/quit", priority=True),
         Binding("ctrl+q", "quit", "quit"),
-        Binding("tab", "cycle_panes(1)", "next pane", priority=True),
-        Binding("shift+tab", "cycle_panes(-1)", "prev pane", priority=True),
-        Binding("ctrl+b", "toggle_panes", "panes", priority=True),
+        Binding("tab", "cycle_focus(1)", "next", priority=True),
+        Binding("shift+tab", "cycle_focus(-1)", "prev", priority=True),
+        Binding("ctrl+b", "toggle_sidebar", "sidebar", priority=True),
     ]
     COMMANDS: ClassVar[set[Any]] = {*App.COMMANDS, TuiCommands}
     COMMAND_PALETTE_BINDING = "ctrl+p"
@@ -256,97 +258,95 @@ class TuiApp(App[None]):
         self._active_run_id: str | None = None
         self._run_active = False
         self._cancel_sent = False
-        self._frame = 0
-        self._welcome: Static | None = None
+        self._task_title: str | None = None
+        self._tokens = 0
+        self._branch = ""
+        self._force_sidebar = False
+        self._last_child_id: str | None = None
 
-        self._run_rows: dict[str, Any] = {}
-        self._shell_nodes: dict[str, Any] = {}
-        self._selected_shell: str | None = None
         self.shells: dict[str, ShellState] = {}
-
-        self._child_nodes: dict[str, Any] = {}
-        self.child_events: dict[str, list[AgentEvent]] = {}
-        self._selected_child: str | None = None
-
         self._tasks: set[asyncio.Task[None]] = set()
-        self._spinner_timer: Timer | None = None
-        self._force_panes = False
 
     # ── layout ────────────────────────────────────────────────────────────────
     def compose(self) -> ComposeResult:
-        with Horizontal(id="header"):
-            yield Static("agent-stack", id="header-title")
-            yield Static("", id="header-meta")
-        with Horizontal(id="body"):
-            with Vertical(id="left"):
-                yield Static("runs", classes="pane-title")
-                yield Tree("runs", id="runs")
-            yield Divider("left", sign=1, id="divider-left")
-            with Vertical(id="center"):
-                yield Static("conversation", classes="pane-title")
-                yield VerticalScroll(id="chat")
-            yield Divider("panes", sign=-1, id="divider-panes")
-            with TabbedContent(id="panes"):
-                with TabPane("subagents", id="tab-subagents"):
-                    yield Tree("subagents", id="subagents")
-                    yield RichLog(id="subagent-log", markup=False, wrap=True, highlight=False, min_width=0)
-                    with Horizontal(id="subagent-controls"):
-                        yield Button("interrupt", id="subagent-interrupt")
-                        yield Input(placeholder="steer child…", id="subagent-input")
-                with TabPane("shells", id="tab-shells"):
-                    yield Tree("shells", id="shells")
-                    yield RichLog(id="shell-log", markup=False, wrap=True, highlight=False, min_width=0)
-                    yield Button("kill run", id="shell-kill")
-        yield Input(
-            placeholder="message   (ctrl+p palette · /agent <name> <task>)",
-            id="prompt",
-        )
-        yield Footer()
+        with Vertical(id="frame"):
+            with Horizontal(id="conv-title"):
+                yield Static("agent-stack", id="title-text")
+                yield Button("+", id="new-session")
+            with Horizontal(id="main"):
+                with Vertical(id="conversation"):
+                    yield VerticalScroll(id="chat")
+                    with Horizontal(id="composer"):
+                        yield Static("", id="accent")
+                        with Vertical(id="composer-input"):
+                            yield Input(
+                                placeholder="message   (ctrl+p commands)",
+                                id="prompt",
+                            )
+                            yield Static("", id="model-line")
+                    with Horizontal(id="status"):
+                        yield Static("", id="status-path")
+                        yield Static("", id="status-file")
+                        yield Static("", id="status-ctx")
+                        yield Static("ctrl+p commands", id="status-keys")
+                with Vertical(id="sidebar"):
+                    yield Static("agent-stack", id="side-title")
+                    yield Static("Context", id="side-context")
+                    yield Static("", id="side-tokens")
+                    yield Static("", id="side-used")
+                    yield Static("", id="side-spacer")
+                    yield Static("", id="side-status")
 
     async def on_mount(self) -> None:
-        for tree in ("#runs", "#subagents", "#shells"):
-            widget = self.query_one(tree, Tree)
-            # Flat, unguided lists: the root is redundant and Textual's guide
-            # glyphs (├── ▼) read as noise, so show leaves at column zero.
-            widget.show_root = False
-            widget.show_guides = False
-            widget.guide_depth = 2
-
         if self._session_id is None:
             resolver = SessionResolver(self.application.session_store, self.application.agent.name)
             self._session_id = await resolver.resolve(self._principal)
 
-        self._welcome = Static(welcome_block(), classes="welcome")
-        self.query_one("#chat", VerticalScroll).mount(self._welcome)
-
+        self.query_one("#model-line", Static).update(
+            f"Build · {self.application.config.model}"
+        )
         self._apply_responsive()
         self.query_one("#prompt", Input).focus()
-        self._update_header()
-        self._spinner_timer = self.set_interval(1 / 10, self._tick_spinner)
+        self._update_title()
+        self._update_status()
+        self._spawn(self._load_branch())
 
     def on_resize(self, event: events.Resize) -> None:
         self._apply_responsive(event.size.width)
 
     def _apply_responsive(self, width: int | None = None) -> None:
-        """Collapse secondary panes as the terminal narrows (no media queries in CSS).
+        """Collapse the context sidebar as the terminal narrows (no media queries).
 
-        At narrow widths the right-hand panes are hidden and at tiny widths the session
-        sidebar follows — but ``ctrl+b`` forces the panes back on, hiding the sidebar
-        instead so the panes keep the room they need. Panes are therefore never
-        permanently unreachable.
+        ``ctrl+b`` forces the sidebar back on, overriding the width heuristic.
         """
-        # Timers/resize can fire after the screen is torn down but before on_unmount;
-        # guard on the screen stack so teardown does not raise.
+        # Resize can fire after the screen is torn down; guard so teardown cannot raise.
         if not self.screen_stack:
             return
         if width is None:
             width = self.size.width
-        self.screen.set_class(width < 100 and not self._force_panes, "narrow")
-        self.screen.set_class(width < 68 or self._force_panes, "tiny")
+        self.screen.set_class(width < 100 and not self._force_sidebar, "narrow")
+
+    async def _load_branch(self) -> None:
+        """Best-effort ``git branch --show-current`` for the status bar path."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git",
+                "-C",
+                str(self.application.config.workspace),
+                "branch",
+                "--show-current",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=2)
+            branch = out.decode().strip()
+        except Exception:
+            branch = ""
+        if branch and len(self.query("#status-path")):
+            self._branch = branch
+            self._update_status()
 
     def on_unmount(self) -> None:
-        if self._spinner_timer is not None:
-            self._spinner_timer.stop()
         for task in list(self._tasks):
             task.cancel()
 
@@ -354,10 +354,6 @@ class TuiApp(App[None]):
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
         event.input.value = ""
-        if event.input.id == "subagent-input":
-            if text and self._selected_child is not None:
-                await self.application.send_input(self._selected_child, text)
-            return
         if not text:
             return
         if text in _QUIT_WORDS:
@@ -366,10 +362,11 @@ class TuiApp(App[None]):
         await self._submit_prompt(text)
 
     async def _submit_prompt(self, text: str) -> None:
-        if self._welcome is not None:
-            self._welcome.remove()
-            self._welcome = None
-        self._write_message(human_block(text), "msg-user")
+        if self._task_title is None:
+            self._task_title = text
+            self._update_title()
+        self._bump_tokens(text)
+        self._write_line(human_block(text), "msg-user panel row")
         delegated = _parse_delegation(text)
         if delegated is not None:
             # Honest delegation: the app can only start a run on the wired agent, so the
@@ -386,8 +383,7 @@ class TuiApp(App[None]):
         self._active_run_id = handle.run_id
         self._run_active = True
         self._cancel_sent = False
-        self._track_run(handle.run_id, "running")
-        self._update_header()
+        self._update_status()
         self._spawn(self._consume(handle))
 
     async def _consume(self, handle: Any) -> None:
@@ -406,7 +402,7 @@ class TuiApp(App[None]):
 
     # ── event routing ─────────────────────────────────────────────────────────
     def handle_event(self, event: AgentEvent) -> None:
-        """Route one runtime event to the right pane/status line."""
+        """Route one runtime event to the conversation/status line."""
         if len(self.query("#chat")) == 0:
             # The screen has been torn down (quit or test teardown) while a stream
             # was still live; drop the event rather than touching dead widgets.
@@ -416,152 +412,115 @@ class TuiApp(App[None]):
         elif event.type is EventType.SUBAGENT_COMPLETED:
             self._on_subagent_completed(event)
         elif event.parent_run_id is not None and event.run_id != self._active_run_id:
-            self._on_child_event(event)
+            pass  # child-run detail stays out of the parent conversation
         else:
             self._on_main_event(event)
 
     def _on_main_event(self, event: AgentEvent) -> None:
         etype = event.type
         if etype is EventType.RUN_STARTED:
-            self._track_run(event.run_id, "running")
+            self._active_run_id = event.run_id
+            self._update_status()
         elif etype is EventType.MODEL_REASONING:
             self._write_reasoning(event)
         elif etype is EventType.ASSISTANT_MESSAGE:
-            self._write_message(assistant_block(event), "msg-agent")
+            self._write_assistant(event)
         elif etype is EventType.TOOL_STARTED:
-            self._write_message(tool_started_block(event), "tool-line")
-            if str(event.data.get("tool")) == "run_command":
-                self._ensure_shell(str(event.data.get("tool_call_id")), "run_command", event.run_id)
+            self._on_tool_started(event)
         elif etype is EventType.TOOL_OUTPUT:
-            tool_call_id = str(event.data.get("tool_call_id"))
-            self._ensure_shell(tool_call_id, str(event.data.get("tool", "command")), event.run_id)
-            self._append_shell(tool_call_id, tool_output_text(event))
+            self._on_tool_output(event)
         elif etype is EventType.TOOL_COMPLETED:
-            self._finish_shell(str(event.data.get("tool_call_id")))
+            state = self.shells.get(str(event.data.get("tool_call_id")))
+            if state is not None:
+                state.status = "done"
+                self._flush_block(state, final=True)
         elif etype is EventType.RUN_FAILED:
-            self._write_message(failure_block(event), "msg-error")
+            self._write_line(failure_block(event), "msg-error row")
         elif etype is EventType.RUN_COMPLETED:
             pass  # a successful run is silent: no "run completed" line
         if etype in (EventType.RUN_COMPLETED, EventType.RUN_FAILED):
             self._run_active = False
             self._cancel_sent = False
-            accepted = etype is EventType.RUN_COMPLETED
-            self._track_run(event.run_id, "done" if accepted else "failed")
-            self._update_header()
-
-    def _on_child_event(self, event: AgentEvent) -> None:
-        child = event.run_id
-        self.child_events.setdefault(child, []).append(event)
-        if child not in self._child_nodes:
-            self._add_child_node(child, str(event.data.get("agent", "subagent")))
-        if child == self._selected_child:
-            self._subagent_log().write(event_block(event))
+            self._update_status()
 
     def _on_subagent_started(self, event: AgentEvent) -> None:
         child = str(event.data.get("child_run_id", ""))
-        if not child:
-            return
-        self._add_child_node(child, str(event.data.get("agent_name", child)))
-        self._write_message(subagent_block(event, done=False), "subagent-line")
-        self._spawn(self._consume_child(child))
+        if child:
+            self._last_child_id = child
+        self._write_line(subagent_block(event, done=False), "subagent-line row")
 
     def _on_subagent_completed(self, event: AgentEvent) -> None:
-        child = str(event.data.get("child_run_id", ""))
-        node = self._child_nodes.get(child)
-        if node is not None:
-            name = str(event.data.get("agent_name", child))
-            node.label = f"{name}  done"
-        self._write_message(subagent_block(event, done=True), "subagent-line")
-
-    async def _consume_child(self, child_id: str) -> None:
-        try:
-            async for event in self.application.subscribe(child_id):
-                self.handle_event(event)
-        except asyncio.CancelledError:
-            raise
-        except Exception:  # the child stream is best-effort; the tree still shows it
-            pass
-
-    def _add_child_node(self, child_id: str, name: str) -> None:
-        if child_id in self._child_nodes:
-            return
-        tree = self.query_one("#subagents", Tree)
-        self._child_nodes[child_id] = tree.root.add_leaf(name, data=child_id)
-
-    def _select_child(self, child_id: str) -> None:
-        self._selected_child = child_id
-        log = self._subagent_log()
-        log.clear()
-        for event in self.child_events.get(child_id, []):
-            log.write(event_block(event))
+        self._write_line(subagent_block(event, done=True), "subagent-line row")
 
     # ── conversation ──────────────────────────────────────────────────────────
     def _chat(self) -> VerticalScroll:
         return self.query_one("#chat", VerticalScroll)
 
-    def _write_message(self, text: Text, css_class: str) -> None:
+    def _write_line(self, text: Text, css_class: str) -> None:
         """Append a message row to the conversation, then keep it in view."""
         if not text.plain.strip():
             return
-        self._chat().mount(Static(text, classes=f"msg {css_class}"))
+        self._chat().mount(Static(text, classes=css_class))
+        self.call_after_refresh(self._scroll_chat_end)
+
+    def _write_assistant(self, event: AgentEvent) -> None:
+        content = str(event.data.get("content", ""))
+        if not content.strip():
+            return
+        self._bump_tokens(content)
+        self._chat().mount(Markdown(content, classes="msg-agent row"))
         self.call_after_refresh(self._scroll_chat_end)
 
     def _write_reasoning(self, event: AgentEvent) -> None:
         body = reasoning_block(event)
         if not body.plain.strip():
             return
+        self._bump_tokens(body.plain)
         self._chat().mount(
             Collapsible(
                 Static(body, classes="think-body"),
-                title="thinking",
+                title="Thinking",
                 collapsed=True,
                 collapsed_symbol="[+]",
                 expanded_symbol="[-]",
-                classes="msg msg-think",
+                classes="msg-think",
             )
         )
         self.call_after_refresh(self._scroll_chat_end)
 
-    def _scroll_chat_end(self) -> None:
-        # Runs after the next layout; the chat may already be gone during teardown.
-        chats = self.query("#chat")
-        if len(chats):
-            chats.first(VerticalScroll).scroll_end(animate=False)
+    def _on_tool_started(self, event: AgentEvent) -> None:
+        tool = str(event.data.get("tool", "tool"))
+        tool_call_id = str(event.data.get("tool_call_id", ""))
+        if tool == "run_command" and tool_call_id:
+            block = Vertical(classes="cmd-block panel row")
+            self._chat().mount(block)
+            # Mount the header row only once the block is attached, so it stays
+            # the first child ahead of the streaming output rows (Textual defers
+            # ``__init__`` children until the widget mounts, which would invert it).
+            block.mount(Static(tool_started_block(event)))
+            self.shells[tool_call_id] = ShellState(
+                tool=tool, run_id=event.run_id, block=block
+            )
+        else:
+            self._write_line(tool_started_block(event), "tool-line row")
+        self.call_after_refresh(self._scroll_chat_end)
 
-    def action_clear_chat(self) -> None:
-        self._chat().remove_children()
-        self._welcome = None
-
-    def _subagent_log(self) -> RichLog:
-        return self.query_one("#subagent-log", RichLog)
-
-    def _shell_log(self) -> RichLog:
-        return self.query_one("#shell-log", RichLog)
-
-    def _ensure_shell(self, tool_call_id: str, tool: str, run_id: str) -> None:
-        if tool_call_id in self.shells:
-            return
-        self.shells[tool_call_id] = ShellState(tool=tool, run_id=run_id)
-        tree = self.query_one("#shells", Tree)
-        node = tree.root.add_leaf(f"{_short(tool, 18)}  running", data=tool_call_id)
-        self._shell_nodes[tool_call_id] = node
-        if self._selected_shell is None:
-            self._select_shell(tool_call_id)
-
-    def _append_shell(self, tool_call_id: str, chunk: str) -> None:
-        state = self.shells.get(tool_call_id)
+    def _on_tool_output(self, event: AgentEvent) -> None:
+        state = self.shells.get(str(event.data.get("tool_call_id")))
         if state is None:
             return
-        state.output += chunk
-        if tool_call_id == self._selected_shell:
-            self._flush_shell(state, final=False)
+        state.output += tool_output_text(event)
+        self._flush_block(state)
 
-    def _flush_shell(self, state: ShellState, *, final: bool) -> None:
-        """Write new complete lines of ``state.output`` to the selected shell's log.
+    def _flush_block(self, state: ShellState, *, final: bool = False) -> None:
+        """Write new complete lines of ``state.output`` into the transcript panel.
 
         Stream chunks are raw reads, not line-aligned, so a trailing partial line is
-        held back until it is completed (or the shell finishes).
+        held back until it is completed (or the tool finishes). Once the stream shows
+        unified-diff markers the lines are diff-coloured (see ``output_line_text``).
         """
+        if state.block is None:
+            return
         fresh = state.output[state.emitted :]
         if not fresh:
             return
@@ -574,41 +533,59 @@ class TuiApp(App[None]):
                 return
             text = fresh[:cut]
             consumed = cut + 1
+        if not state.diff:
+            states = [st for st in text.split("\n") if st.startswith(_DIFF_SENSORS)]
+            state.diff = bool(states)
         for line in text.split("\n"):
-            self._shell_log().write(Text(line, style="dim"))
+            state.block.mount(Static(output_line_text(line, diff=state.diff)))
         state.emitted += consumed
+        self.call_after_refresh(self._scroll_chat_end)
 
-    def _select_shell(self, tool_call_id: str) -> None:
-        self._selected_shell = tool_call_id
-        self._shell_log().clear()
-        state = self.shells.get(tool_call_id)
-        if state is None:
+    def _scroll_chat_end(self) -> None:
+        # Runs after the next layout; the chat may already be gone during teardown.
+        chats = self.query("#chat")
+        if len(chats):
+            chats.first(VerticalScroll).scroll_end(animate=False)
+
+    def _bump_tokens(self, text: str) -> None:
+        """Approximate context usage: ~4 chars per token, capped by the window."""
+        self._tokens += max(1, len(text) // 4)
+        self._update_status()
+
+    def _ctx_percent(self) -> int:
+        return min(100, round(self._tokens / 200_000 * 100))
+
+    # ── title / status / sidebar ─────────────────────────────────────────────
+    def _update_title(self) -> None:
+        if len(self.query("#title-text")) == 0:
             return
-        state.emitted = 0
-        self._flush_shell(state, final=state.status != "running")
+        title = self._task_title or "agent-stack"
+        self.query_one("#title-text", Static).update(_short(title, 36))
+        self.query_one("#side-title", Static).update(_short(title, 60))
 
-    def _finish_shell(self, tool_call_id: str) -> None:
-        state = self.shells.get(tool_call_id)
-        if state is None:
+    def _update_status(self) -> None:
+        if len(self.query("#status-ctx")) == 0:
+            # Fires in the gap between screen teardown and app unmount.
             return
-        state.status = "done"
-        node = self._shell_nodes.get(tool_call_id)
-        if node is not None:
-            node.label = f"{_short(state.tool, 18)}  done"
-        if tool_call_id == self._selected_shell:
-            self._flush_shell(state, final=True)
-        self._update_header()
+        path = _short_path(self.application.config.workspace, 26)
+        self.query_one("#status-path", Static).update(
+            f"{path}:{self._branch}" if self._branch else path
+        )
+        self.query_one("#side-status", Static).update(
+            _short_path(self.application.config.workspace, 24)
+        )
+        if self._run_active and self._active_run_id is not None:
+            run = f"run #{_short(self._active_run_id, 8)}"
+        else:
+            run = _short(f"session {self._session_id or ''}", 22)
+        self.query_one("#status-file", Static).update(run)
+        self.query_one("#status-ctx", Static).update(
+            f"{self._tokens / 1000:.1f}K ({self._ctx_percent()}%)"
+        )
+        self.query_one("#side-tokens", Static).update(f"{self._tokens:,} tokens")
+        self.query_one("#side-used", Static).update(f"{self._ctx_percent()}% used")
 
-    def _track_run(self, run_id: str, status: str) -> None:
-        tree = self.query_one("#runs", Tree)
-        label = f"#{_short(run_id, 8)}  {status}"
-        node = self._run_rows.get(run_id)
-        if node is not None:
-            node.label = label
-            return
-        self._run_rows[run_id] = tree.root.add_leaf(label, data=run_id)
-
-    # ── actions / status ──────────────────────────────────────────────────────
+    # ── actions ──────────────────────────────────────────────────────────────
     async def action_cancel_or_quit(self) -> None:
         if self._active_run_id is not None and self._run_active and not self._cancel_sent:
             self._cancel_sent = True
@@ -616,61 +593,51 @@ class TuiApp(App[None]):
         else:
             self.exit()
 
-    def action_cycle_panes(self, delta: int) -> None:
-        widgets = [self.query_one(f"#{pane_id}") for pane_id in _PANE_IDS]
+    def action_clear_chat(self) -> None:
+        """New conversation: drop history, reset the task title and context count."""
+        self._chat().remove_children()
+        self.shells.clear()
+        self._task_title = None
+        self._tokens = 0
+        self._update_title()
+        self._update_status()
+
+    def action_cycle_focus(self, delta: int) -> None:
+        widgets = [self.query_one(f"#{pane_id}") for pane_id in _FOCUS_IDS]
         focused = self.focused
-        if focused is not None and focused.id in _PANE_IDS:
-            index = (_PANE_IDS.index(focused.id) + delta) % len(_PANE_IDS)
+        if focused is not None and focused.id in _FOCUS_IDS:
+            index = (_FOCUS_IDS.index(focused.id) + delta) % len(_FOCUS_IDS)
         else:
             index = 0
         widgets[index].focus()
 
-    def action_toggle_panes(self) -> None:
-        """Force the side panes on (or back to the width-driven default)."""
-        self._force_panes = not self._force_panes
+    def action_toggle_sidebar(self) -> None:
+        """Force the context sidebar on (or back to the width-driven default)."""
+        self._force_sidebar = not self._force_sidebar
         self._apply_responsive()
 
-    def _tick_spinner(self) -> None:
-        if not self._run_active:
-            return
-        self._frame = (self._frame + 1) % len(_SPINNER)
-        self._update_header()
-
-    def _update_header(self) -> None:
-        metas = self.query("#header-meta")
-        if len(metas) == 0:
-            # Fires in the gap between screen teardown and app unmount.
-            return
-        state = f"{_SPINNER[self._frame]} running" if self._run_active else "idle"
-        session = _short(self._session_id or "…", 24)
-        metas.first(Static).update(
-            f"{session}  ·  {self.application.config.model}  ·  {state}"
-        )
+    async def action_interrupt_subagent(self) -> None:
+        if self._last_child_id is not None:
+            await self.application.cancel_run(self._last_child_id)
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "subagent-interrupt":
-            if self._selected_child is not None:
-                await self.application.cancel_run(self._selected_child)
-        elif event.button.id == "shell-kill":
-            state = self.shells.get(self._selected_shell or "")
-            if state is not None:
-                await self.application.cancel_run(state.run_id)
-            elif self._active_run_id is not None:
-                await self.application.cancel_run(self._active_run_id)
-
-    def on_tree_node_selected(self, event: Tree.NodeSelected[Any]) -> None:
-        data = event.node.data
-        if not isinstance(data, str):
-            return
-        if event.control.id == "subagents":
-            self._select_child(data)
-        elif event.control.id == "shells":
-            self._select_shell(data)
+        if event.button.id == "new-session":
+            self.action_clear_chat()
 
 
 def _short(text: str, width: int) -> str:
     """Truncate `text` to `width` columns with a trailing ellipsis."""
     return text if len(text) <= width else text[: width - 1] + "…"
+
+
+def _short_path(path: Path, width: int) -> str:
+    """Render a workspace path with a ``~/`` prefix when it sits under home."""
+    try:
+        rel = path.expanduser().resolve().relative_to(Path.home())
+        text = "~/" + str(rel)
+    except ValueError:
+        text = str(path)
+    return _short(text, width)
 
 
 def _parse_delegation(text: str) -> tuple[str, str] | None:

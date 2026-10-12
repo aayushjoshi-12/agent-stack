@@ -24,27 +24,37 @@ repeated headings, and colour as the only status signal.
   `$text-muted` flattens to plain default under ANSI themes, so it cannot express
   hierarchy.
 - **Colour is used sparingly, for meaning or accent.** Content is terminal-default; a
-  failed run is `bold red`, and the terminal's own ANSI accents colour the few things that
-  deserve emphasis (header identity, active tab, tool names, banner). Status always carries
-  a word, never colour alone.
-- **Regions are separated by whitespace and a single draggable rule**, not a box per pane:
-  one-cell `Divider` widgets between columns (drag to resize) and one rule above the input.
-  Spacing uses a fixed scale (0 · 1 · 2 cells).
-- **The app carries no box-drawing noise**: no tree expanders/guides (`show_root=False`,
-  `show_guides=False`), no `✓`/`✗`/`·` marks; the only glyphs are the plain `[+]`/`[-]`
-  collapsible toggles. Thinking is a collapsed `Collapsible`; user messages sit on a
-  `ansi_bright_black` panel so they read as the user's; the audit tail was a debugging view
-  and was removed.
+  failed run is `bold red`, diff additions/removals/hunks are green/red/cyan, headings and
+  the thinking label are bold `ansi_magenta`/yellow, and tool names are green. Status
+  always carries a word, never colour alone.
+- **Regions are separated by darker panels, not rules or boxes.** The layout is a wide
+  conversation column (2fr) and a narrow context sidebar (1fr); the sidebar, the input
+  composer, user messages, terminal transcripts and fenced code blocks all sit on the
+  `.panel` surface — `ansi_black` on dark terminals, flipping to `ansi_bright_black` under
+  `:light` so light themes stay readable. There are no divider lines: whitespace does the
+  rest of the separation.
+- **Assistant messages render as Markdown** (the Textual `Markdown` widget): headings are
+  bold `ansi_magenta`, bold is bold, inline code sits on a darker tint, and fenced code
+  blocks get Textual's **ANSI-aware syntax highlighting** — only for generated blocks with
+  a language tag. Two `:ansi` defaults are overridden to keep the darker panels
+  (`MarkdownFence` and `.code_inline` become transparent under ANSI themes).
+- **`run_command` output is a live terminal transcript** inline in the chat. Once the
+  stream shows unified-diff markers (`diff --git`, `@@`, file headers), its lines are
+  diff-coloured by role; otherwise output stays dim.
+- **The app carries no box-drawing noise**: no tree expanders/guides, no `✓`/`✗`/`·`
+  marks, no divider lines; the only glyphs are the plain `[+]`/`[-]` collapsible toggles
+  and the `→` tool rows. The `Collapsible`'s `hkey` border is removed — it is a divider
+  line. Thinking is a collapsed `Collapsible`; user messages sit on a darker panel; the
+  audit tail was a debugging view and was removed. The empty conversation is blank — the
+  ASCII-art banner is gone.
 - **Scrollbars are unobtrusive**: one cell thick, transparent track, muted grey thumb.
-- **Responsive collapse.** Textual CSS has no media queries, so the app toggles `narrow`
-  and `tiny` classes on the screen from `on_resize` (using `event.size`, since `App.size`
-  is still stale inside the handler): `< 100` columns hides the right-hand panes, `< 68`
-  hides the session sidebar. `ctrl+b` forces the panes back on (hiding the sidebar
-  instead) so they are never permanently unreachable.
+- **Responsive collapse.** Textual CSS has no media queries, so the app toggles a `narrow`
+  class on the screen from `on_resize` (using `event.size`, since `App.size` is still
+  stale inside the handler): `< 100` columns hides the context sidebar. `ctrl+b` forces
+  the sidebar back on so it is never permanently unreachable.
 - A few Textual ANSI defaults are overridden because they add noise or fail on one
-  polarity: the tabs' full-width underline is hidden (the active tab is accent/bold), the
-  ANSI buttons' tall boxes, the tree guides/expanders, the bright-magenta scrollbar thumb,
-  and the footer keys (magenta → bold default).
+  polarity: the `Collapsible` keyline, the transparent `Markdown` code surfaces, the ANSI
+  buttons' tall boxes, and the bright-magenta scrollbar thumb.
 
 ## Consequences
 
@@ -53,5 +63,7 @@ repeated headings, and colour as the only status signal.
   polarity (a deliberate limit — no probe).
 - Some emphasis that colour would have provided is now carried by weight (`bold`) and
   attributes (`dim`), which is less expressive but never fights the terminal theme.
+- Syntax highlighting and diff colours are ANSI-standard hues (the terminal's own green,
+  red and cyan), so they inherit whatever the user's palette maps them to.
 - Widget-specific ANSI defaults (unused widgets, hover states of Textual internals) may
   still show Textual's own ANSI choices; overrides are added only where they were visible.

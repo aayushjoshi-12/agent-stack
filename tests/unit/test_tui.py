@@ -1,7 +1,11 @@
 """Headless TUI tests: drive the Textual app with a fake Application.
 
 No real model, store, or event bus: ``FakeApplication`` returns canned ``AgentEvent``
-streams and records calls, so the whole event→pane routing is exercised in milliseconds.
+streams and records calls, so the whole event→conversation routing is exercised in
+milliseconds. The design contract under test: one wide conversation column with a
+context sidebar, sections separated by darker panels (never divider rules), Markdown
+assistant messages, collapsible thinking, and inline command transcripts whose output
+is diff-coloured when it looks like unified-diff text.
 """
 
 from __future__ import annotations
@@ -10,31 +14,36 @@ import asyncio
 from typing import Any
 
 from textual.containers import VerticalScroll
-from textual.widgets import Input, RichLog, Static, Tree
+from textual.widgets import Input, Static
 
 from agent_stack.core.events import EventType
-from agent_stack.gateways.tui.app import Divider, TuiApp
+from agent_stack.gateways.tui.app import TuiApp
+from agent_stack.gateways.tui.render import output_line_text
 from tests.unit.gateway_fakes import FakeApplication, event
 
 
-def _log_text(widget: RichLog) -> str:
-    return "\n".join(str(strip.text) for strip in widget.lines)
-
-
 def _chat_text(app: TuiApp) -> str:
-    """Every static row in the conversation, in order (collapsibles included)."""
+    """Every leaf renderable in the conversation, in order.
+
+    Walks the widget tree under ``#chat`` and collects the plain text of widgets that
+    render as text themselves (Statics, Markdown blocks, labels); containers like the
+    Markdown root, collapsibles and command panels are descended into, not printed.
+    Must run while the app is mounted (inside ``run_test``).
+    """
     chat = app.query_one("#chat", VerticalScroll)
-    return "\n".join(str(widget.render()) for widget in chat.query("*") if isinstance(widget, Static))
+    parts: list[str] = []
 
+    def _walk(widget: Any) -> None:
+        rendered = widget.render()
+        plain = getattr(rendered, "plain", None)
+        if isinstance(plain, str) and plain.strip() and not widget.children:
+            parts.append(plain)
+        for child in widget.children:
+            _walk(child)
 
-class _FakeMouse:
-    """The slice of MouseEvent the Divider drag handlers read."""
-
-    def __init__(self, x: int) -> None:
-        self.screen_x = x
-
-    def stop(self) -> None:
-        return None
+    for child in chat.children:
+        _walk(child)
+    return "\n".join(parts)
 
 
 async def _submit(pilot: Any, text: str) -> None:
@@ -45,7 +54,7 @@ async def _submit(pilot: Any, text: str) -> None:
         await pilot.pause()
 
 
-async def test_tui_renders_assistant_message_and_tool_status() -> None:
+async def test_tui_renders_messages_and_tool_history() -> None:
     application = FakeApplication(
         events=[
             event(EventType.RUN_STARTED),
@@ -62,7 +71,7 @@ async def test_tui_renders_assistant_message_and_tool_status() -> None:
     )
     app = TuiApp(application, session_id="s1")  # type: ignore[arg-type]
 
-    async with app.run_test() as pilot:
+    async with app.run_test(size=(140, 40)) as pilot:
         await _submit(pilot, "hi")
         text = _chat_text(app)
 
@@ -71,11 +80,35 @@ async def test_tui_renders_assistant_message_and_tool_status() -> None:
     assert "run_command" in text
     assert "ls -la" in text  # the bash command itself is shown
     assert "run completed" not in text  # successful runs stay silent
-    # The run row was tracked and settled.
     assert application.sent[0][2] is None
 
 
-async def test_tui_renders_reasoning_block() -> None:
+async def test_tui_renders_assistant_markdown_with_headings_and_code() -> None:
+    content = (
+        "# Summary\n\nSome **bold** text and `inline code`.\n\n"
+        "```python\nx = 1\nprint(x)\n```"
+    )
+    application = FakeApplication(
+        events=[
+            event(EventType.RUN_STARTED),
+            event(EventType.ASSISTANT_MESSAGE, content=content),
+            event(EventType.RUN_COMPLETED, steps=1, tool_calls=0),
+        ]
+    )
+    app = TuiApp(application, session_id="s1")  # type: ignore[arg-type]
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await _submit(pilot, "hi")
+        text = _chat_text(app)
+        markdown_count = len(app.query("#chat Markdown"))
+
+    assert "Summary" in text  # the Markdown heading
+    assert "bold" in text
+    assert "x = 1" in text  # the fenced code block (syntax-highlighted content)
+    assert markdown_count == 1  # the message rendered as one Markdown widget
+
+
+async def test_tui_renders_collapsible_thinking_row() -> None:
     application = FakeApplication(
         events=[
             event(EventType.RUN_STARTED),
@@ -86,13 +119,61 @@ async def test_tui_renders_reasoning_block() -> None:
     )
     app = TuiApp(application, session_id="s1")  # type: ignore[arg-type]
 
-    async with app.run_test() as pilot:
+    async with app.run_test(size=(140, 40)) as pilot:
         await _submit(pilot, "hi")
         text = _chat_text(app)
 
-    assert "thinking" in text  # the collapsible's title
+    assert "Thinking" in text  # the collapsible's title
     assert "weighing options" in text
     assert "the answer" in text
+
+
+async def test_tui_command_block_streams_and_diff_colors_output() -> None:
+    application = FakeApplication()
+    app = TuiApp(application, session_id="s1")  # type: ignore[arg-type]
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.handle_event(
+            event(
+                EventType.TOOL_STARTED,
+                tool="run_command",
+                tool_call_id="c9",
+                args={"command": "git diff"},
+            )
+        )
+        app.handle_event(
+            event(
+                EventType.TOOL_OUTPUT,
+                tool="run_command",
+                tool_call_id="c9",
+                chunk="diff --git a/x.py b/x.py\n",
+            )
+        )
+        app.handle_event(
+            event(
+                EventType.TOOL_OUTPUT,
+                tool="run_command",
+                tool_call_id="c9",
+                chunk="@@ -1 +1 @@\n+new line\n-old line\n",
+            )
+        )
+        app.handle_event(event(EventType.TOOL_COMPLETED, tool="run_command", tool_call_id="c9"))
+        for _ in range(3):
+            await pilot.pause()
+
+        state = app.shells["c9"]
+        assert state.status == "done"
+        assert state.diff is True  # the stream looked like unified-diff output
+        text = _chat_text(app)
+        assert "git diff" in text  # the command line heads the transcript panel
+        assert "new line" in text
+        assert "old line" in text
+        # Diff lines are coloured per role, not left dim like plain output.
+        assert str(output_line_text("+new line", diff=True).style) == "green"
+        assert str(output_line_text("-old line", diff=True).style) == "red"
+        assert str(output_line_text("@@ -1 +1 @@", diff=True).style) == "cyan"
+        assert str(output_line_text("diff --git a/x b/x", diff=True).style) == "bold dim"
+        assert str(output_line_text("plain output", diff=False).style) == "dim"
 
 
 async def test_tui_ctrl_c_cancels_run() -> None:
@@ -100,7 +181,7 @@ async def test_tui_ctrl_c_cancels_run() -> None:
     application = FakeApplication(events=[event(EventType.RUN_STARTED)], gate=gate)
     app = TuiApp(application, session_id="s1")  # type: ignore[arg-type]
 
-    async with app.run_test() as pilot:
+    async with app.run_test(size=(140, 40)) as pilot:
         await _submit(pilot, "long task")
         run_id = application.sent[0][1]
         assert app._active_run_id == run_id
@@ -113,164 +194,110 @@ async def test_tui_ctrl_c_cancels_run() -> None:
         await pilot.pause()
 
 
-async def test_tui_subagent_events_nest_under_parent() -> None:
-    child_id = "child-abc"
+async def test_tui_renders_run_failure() -> None:
     application = FakeApplication(
-        child_events={
-            child_id: [
-                event(EventType.RUN_STARTED, run_id=child_id, parent_run_id="run-1"),
-                event(
-                    EventType.ASSISTANT_MESSAGE,
-                    run_id=child_id,
-                    parent_run_id="run-1",
-                    content="exploring the repo",
-                ),
-            ]
-        }
+        events=[
+            event(EventType.RUN_STARTED),
+            event(EventType.RUN_FAILED, error="boom"),
+        ]
     )
     app = TuiApp(application, session_id="s1")  # type: ignore[arg-type]
 
     async with app.run_test(size=(140, 40)) as pilot:
+        await _submit(pilot, "hi")
+        text = _chat_text(app)
+
+    assert "error: boom" in text
+
+
+async def test_tui_shows_subagent_lifecycle_rows() -> None:
+    application = FakeApplication()
+    app = TuiApp(application, session_id="s1")  # type: ignore[arg-type]
+
+    async with app.run_test(size=(140, 40)) as pilot:
         app.handle_event(
-            event(EventType.SUBAGENT_STARTED, child_run_id=child_id, agent_name="explorer")
+            event(EventType.SUBAGENT_STARTED, child_run_id="child-abc", agent_name="explorer")
         )
-        for _ in range(4):
+        for _ in range(3):
             await pilot.pause()
-
-        tree = app.query_one("#subagents", Tree)
-        assert len(tree.root.children) == 1
-        assert "explorer" in str(tree.root.children[0].label)
-
-        app._select_child(child_id)
-        await pilot.pause()
-        assert "exploring the repo" in _log_text(app.query_one("#subagent-log", RichLog))
+        assert app._last_child_id == "child-abc"
 
         app.handle_event(
             event(
                 EventType.SUBAGENT_COMPLETED,
-                child_run_id=child_id,
+                child_run_id="child-abc",
                 agent_name="explorer",
                 status="completed",
             )
         )
-        assert "done" in str(tree.root.children[0].label)
-
-
-async def test_tui_shell_pane_streams_tool_output() -> None:
-    application = FakeApplication()
-    app = TuiApp(application, session_id="s1")  # type: ignore[arg-type]
-
-    async with app.run_test(size=(140, 40)) as pilot:
-        app.query_one("#panes").active = "tab-shells"
-        app.handle_event(event(EventType.TOOL_STARTED, tool="run_command", tool_call_id="c9"))
-        app.handle_event(
-            event(
-                EventType.TOOL_OUTPUT,
-                tool="run_command",
-                tool_call_id="c9",
-                stream="stdout",
-                chunk="first chunk\n",
-            )
-        )
-        app.handle_event(
-            event(
-                EventType.TOOL_OUTPUT,
-                tool="run_command",
-                tool_call_id="c9",
-                stream="stdout",
-                chunk="second chunk",
-            )
-        )
-        app.handle_event(event(EventType.TOOL_COMPLETED, tool="run_command", tool_call_id="c9"))
         for _ in range(3):
             await pilot.pause()
+        text = _chat_text(app)
 
-        # The whole (untruncated) output is retained and streamed to the shell log.
-        assert app.shells["c9"].output == "first chunk\nsecond chunk"
-        assert app.shells["c9"].status == "done"
-        log = _log_text(app.query_one("#shell-log", RichLog))
-        assert "first chunk" in log
-        assert "second chunk" in log
-        node = app.query_one("#shells", Tree).root.children[0]
-        assert "run_command" in str(node.label)
-        assert "done" in str(node.label)
+    assert "explorer" in text
+    assert "started" in text
+    assert "done" in text
 
 
-async def test_tui_tree_selection_dispatches_by_pane() -> None:
-    """Selecting a node in either pane tree switches that pane (not the other)."""
-    application = FakeApplication()
-    app = TuiApp(application, session_id="s1")  # type: ignore[arg-type]
-
-    async with app.run_test(size=(140, 40)) as pilot:
-        app.query_one("#panes").active = "tab-shells"
-        app.handle_event(event(EventType.TOOL_STARTED, tool="run_command", tool_call_id="c1"))
-        app.handle_event(
-            event(EventType.TOOL_OUTPUT, tool="run_command", tool_call_id="c1", chunk="alpha\n")
-        )
-        app.handle_event(event(EventType.TOOL_STARTED, tool="run_command2", tool_call_id="c2"))
-        app.handle_event(
-            event(EventType.TOOL_OUTPUT, tool="run_command2", tool_call_id="c2", chunk="beta\n")
-        )
-        for _ in range(2):
-            await pilot.pause()
-
-        # c1 is selected first; re-selecting c2 must swap the shell log over to it.
-        shells = app.query_one("#shells", Tree)
-        assert "alpha" in _log_text(app.query_one("#shell-log", RichLog))
-        shells.post_message(Tree.NodeSelected(app._shell_nodes["c2"]))
-        await pilot.pause()
-        log = _log_text(app.query_one("#shell-log", RichLog))
-        assert "beta" in log
-        assert "alpha" not in log
-
-        # The subagents tree routes to the subagent log instead.
-        app.query_one("#panes").active = "tab-subagents"
-        await pilot.pause()
-        child_id = "child-1"
-        app.handle_event(
-            event(EventType.SUBAGENT_STARTED, child_run_id=child_id, agent_name="explorer")
-        )
-        app.handle_event(
-            event(
-                EventType.ASSISTANT_MESSAGE,
-                run_id=child_id,
-                parent_run_id="run-1",
-                content="exploring the repo",
-            )
-        )
-        subagents = app.query_one("#subagents", Tree)
-        subagents.post_message(Tree.NodeSelected(app._child_nodes[child_id]))
-        await pilot.pause()
-        assert "exploring the repo" in _log_text(app.query_one("#subagent-log", RichLog))
-
-
-async def test_tui_divider_drag_resizes_pane() -> None:
-    application = FakeApplication()
-    app = TuiApp(application, session_id="s1")  # type: ignore[arg-type]
-
-    async with app.run_test(size=(140, 40)) as pilot:
-        await pilot.pause()
-        divider = app.query_one("#divider-left", Divider)
-        left = app.query_one("#left")
-        before = left.outer_size.width
-
-        divider.on_mouse_down(_FakeMouse(10))  # type: ignore[arg-type]
-        divider.on_mouse_move(_FakeMouse(22))  # type: ignore[arg-type]
-        await pilot.pause()
-        assert left.outer_size.width == before + 12
-
-        divider.on_mouse_up(_FakeMouse(22))  # type: ignore[arg-type]
-        await pilot.pause()
-
-
-async def test_tui_removes_the_welcome_banner_on_first_message() -> None:
+async def test_tui_sets_task_title_and_context_usage() -> None:
     application = FakeApplication(events=[event(EventType.RUN_STARTED)])
     app = TuiApp(application, session_id="s1")  # type: ignore[arg-type]
 
-    async with app.run_test() as pilot:
-        assert len(app.query(".welcome")) == 1
+    async with app.run_test(size=(140, 40)) as pilot:
+        await _submit(pilot, "make the panels slightly darker")
+
+        # The first user message becomes the task title, in both title rows.
+        assert "panels slightly darker" in str(app.query_one("#side-title", Static).render())
+        assert "agent-stack" not in str(app.query_one("#side-title", Static).render())
+        assert "panels slightly darker" in str(app.query_one("#title-text", Static).render())
+
+        # Context usage is estimated from the conversation's text.
+        tokens = str(app.query_one("#side-tokens", Static).render())
+        used = str(app.query_one("#side-used", Static).render())
+        status = str(app.query_one("#status-ctx", Static).render())
+    assert "tokens" in tokens
+    assert "% used" in used
+    assert "K (" in status
+
+
+async def test_tui_status_bar_shows_path_and_run() -> None:
+    application = FakeApplication(events=[event(EventType.RUN_STARTED)])
+    app = TuiApp(application, session_id="s1")  # type: ignore[arg-type]
+
+    async with app.run_test(size=(140, 40)) as pilot:
         await _submit(pilot, "hi")
+        path = str(app.query_one("#status-path", Static).render())
+        run = str(app.query_one("#status-file", Static).render())
+
+    assert path  # the workspace path, possibly with a branch suffix
+    assert run.startswith("run #")  # the active run id while the run is live
+
+
+async def test_tui_clear_chat_starts_fresh_conversation() -> None:
+    application = FakeApplication(events=[event(EventType.RUN_STARTED)])
+    app = TuiApp(application, session_id="s1")  # type: ignore[arg-type]
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await _submit(pilot, "first task")
+        chat = app.query_one("#chat", VerticalScroll)
+        assert len(chat.children) > 0
+
+        app.action_clear_chat()
+        await pilot.pause()
+
+        assert len(chat.children) == 0
+        assert str(app.query_one("#title-text", Static).render()) == "agent-stack"
+        assert app._tokens == 0
+
+
+async def test_tui_has_no_welcome_banner() -> None:
+    """The empty conversation starts blank: no ASCII art, no banner."""
+    app = TuiApp(FakeApplication(), session_id="s1")  # type: ignore[arg-type]
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
         assert len(app.query(".welcome")) == 0
+        assert len(app.query_one("#chat", VerticalScroll).children) == 0
 
 
 async def test_tui_uses_configured_theme() -> None:
@@ -286,47 +313,39 @@ async def test_tui_uses_configured_theme() -> None:
         assert app.current_theme.background == "ansi_default"
 
 
-async def test_tui_collapses_panes_as_the_terminal_narrows() -> None:
+async def test_tui_hides_sidebar_on_narrow_terminals() -> None:
     application = FakeApplication()
     app = TuiApp(application, session_id="s1")  # type: ignore[arg-type]
 
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause()
-        panes = app.query_one("#panes")
-        left = app.query_one("#left")
-        assert panes.styles.display == "block"
-        assert left.styles.display == "block"
+        sidebar = app.query_one("#sidebar")
+        assert sidebar.styles.display != "none"
 
         await pilot.resize_terminal(88, 24)
         await pilot.pause()
-        # Right panes collapse first, keeping the conversation readable.
-        assert panes.styles.display == "none"
-        assert left.styles.display == "block"
-
-        await pilot.resize_terminal(60, 20)
-        await pilot.pause()
-        # Then the session sidebar, leaving just the conversation and input.
-        assert left.styles.display == "none"
+        # Narrow terminals drop the context sidebar, keeping the conversation readable.
+        assert sidebar.styles.display == "none"
 
         await pilot.resize_terminal(140, 40)
         await pilot.pause()
-        assert panes.styles.display == "block"
+        assert sidebar.styles.display != "none"
 
 
-async def test_tui_toggle_panes_reveals_collapsed_panes() -> None:
+async def test_tui_toggle_sidebar_forces_it_back() -> None:
     application = FakeApplication()
     app = TuiApp(application, session_id="s1")  # type: ignore[arg-type]
 
     async with app.run_test(size=(88, 24)) as pilot:
         await pilot.pause()
-        panes = app.query_one("#panes")
-        assert panes.styles.display == "none"  # collapsed by default at this width
+        sidebar = app.query_one("#sidebar")
+        assert sidebar.styles.display == "none"  # collapsed by default at this width
 
         await pilot.press("ctrl+b")
         await pilot.pause()
-        # The explicit toggle wins over the width heuristic, so the panes stay reachable.
-        assert panes.styles.display == "block"
+        # The explicit toggle wins over the width heuristic, so the sidebar stays usable.
+        assert sidebar.styles.display != "none"
 
         await pilot.press("ctrl+b")
         await pilot.pause()
-        assert panes.styles.display == "none"
+        assert sidebar.styles.display == "none"

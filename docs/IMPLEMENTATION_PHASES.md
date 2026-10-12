@@ -1101,14 +1101,17 @@ a real-model smoke (`tmp/smoke_tests/P23-tui-smoke.py`).
 directory (ADR 010), so the agent and its subagents read the project you launch it in.
 
 **Design pass:** the TUI is terminal-native — it inherits the terminal's colours instead of
-imposing a palette (ADR 011). Everything is semantic (dim secondary text, ANSI accents for
-identity/tools, one alarming tone for failures), regions are separated by whitespace and a
-single **draggable** rule rather than boxes, the side panes collapse as the terminal narrows
-(`ctrl+b` forces them back), and the subagent and shell panes are flat lists with
-untruncated detail logs. The conversation stacks message widgets: the user's messages sit on
-a darker panel, thinking is a collapsed `Collapsible`, tool calls (with their bash command)
-are announced, and successful runs stay silent. There is no audit pane and no box-drawing
-glyphs. Conventions: `docs/design/tui.md`; theming decision:
+imposing a palette (ADR 011). The layout follows a reference coding-agent UI: a wide
+conversation column (2fr) with a bold task title, chat, composer and status bar, plus a
+narrow context sidebar (1fr, task title + `Context` token usage) that collapses as the
+terminal narrows (`ctrl+b` forces it back). Every region that needs separation sits on a
+**slightly darker panel** (sidebar, composer, user messages, terminal transcripts, code
+fences) — there are no divider lines or boxes. Assistant messages render as Markdown
+(headings bold `ansi_magenta`, fenced code gets Textual's ANSI-aware syntax highlighting),
+thinking is a collapsed `Collapsible`, `run_command` calls are inline terminal transcripts
+whose output is diff-coloured when it looks like unified-diff text, tool/subagent activity
+reads as `→ ` rows, and successful runs stay silent. The empty conversation is blank — no
+ASCII-art banner. Conventions: `docs/design/tui.md`; theming decision:
 `docs/decisions/011-terminal-native-theme.md`.
 
 **Goal.** Prove the whole stack locally with a real terminal UI. §66, §143.
