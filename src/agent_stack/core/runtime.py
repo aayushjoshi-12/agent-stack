@@ -275,7 +275,11 @@ class AgentRuntime:
                         run_id=run_id,
                         session_id=session_id,
                         parent_run_id=parent_run_id,
-                        data={"tool": tool_call["name"], "tool_call_id": tool_call["id"]},
+                        data={
+                            "tool": tool_call["name"],
+                            "tool_call_id": tool_call["id"],
+                            "args": dict(tool_call["args"]),
+                        },
                     )
 
                 # Check again right before tool execution: a cancellation requested while

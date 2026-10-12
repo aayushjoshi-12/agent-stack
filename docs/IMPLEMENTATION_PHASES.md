@@ -1100,6 +1100,17 @@ a real-model smoke (`tmp/smoke_tests/P23-tui-smoke.py`).
 `▸ think` blocks in the chat and subagent panes. The workspace now defaults to the current
 directory (ADR 010), so the agent and its subagents read the project you launch it in.
 
+**Design pass:** the TUI is terminal-native — it inherits the terminal's colours instead of
+imposing a palette (ADR 011). Everything is semantic (dim secondary text, ANSI accents for
+identity/tools, one alarming tone for failures), regions are separated by whitespace and a
+single **draggable** rule rather than boxes, the side panes collapse as the terminal narrows
+(`ctrl+b` forces them back), and the subagent and shell panes are flat lists with
+untruncated detail logs. The conversation stacks message widgets: the user's messages sit on
+a darker panel, thinking is a collapsed `Collapsible`, tool calls (with their bash command)
+are announced, and successful runs stay silent. There is no audit pane and no box-drawing
+glyphs. Conventions: `docs/design/tui.md`; theming decision:
+`docs/decisions/011-terminal-native-theme.md`.
+
 **Goal.** Prove the whole stack locally with a real terminal UI. §66, §143.
 **Stack decision:** [`Textual`](https://textual.textualize.io) app with
 [`Rich`](https://rich.readthedocs.io) rendering — no other gateway depends on this choice.

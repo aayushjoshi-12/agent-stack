@@ -19,10 +19,9 @@ from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.gateways.base import MessageEnvelope
 from agent_stack.gateways.tui.render import (
     assistant_block,
+    failure_block,
     reasoning_block,
-    run_status_block,
     subagent_block,
-    tool_completed_block,
     tool_output_text,
     tool_started_block,
 )
@@ -42,10 +41,8 @@ def print_event(console: Console, event: AgentEvent) -> None:
         console.print(tool_started_block(event))
     elif event.type is EventType.TOOL_OUTPUT:
         console.print(tool_output_text(event), end="")
-    elif event.type is EventType.TOOL_COMPLETED:
-        console.print(tool_completed_block(event))
     elif event.type is EventType.RUN_FAILED:
-        console.print(run_status_block(event))
+        console.print(failure_block(event))
     elif event.type is EventType.SUBAGENT_STARTED:
         console.print(subagent_block(event, done=False))
     elif event.type is EventType.SUBAGENT_COMPLETED:
@@ -92,7 +89,7 @@ async def run_cli(
         f"agent-stack chat (agent={application.agent.name}) — type 'exit' or Ctrl-D to leave."
     )
     while True:
-        console.print("[bold cyan]>[/bold cyan] ", end="")
+        console.print("[bold]>[/bold] ", end="")
         try:
             line = stream.readline()
         except KeyboardInterrupt:

@@ -52,6 +52,10 @@ Without installing, use `uv run agent-stack` (or `uv run python -m agent_stack`)
 Point it elsewhere with `AGENT_STACK_WORKSPACE=/path` (`AGENT_STACK_DB` overrides the
 SQLite index path; `AGENT_STACK_MODEL` the model).
 
+The TUI inherits your terminal's colours (no palette of its own). It assumes a dark
+terminal; on a light terminal set `AGENT_STACK_THEME=ansi-light` (see
+[ADR 011](docs/decisions/011-terminal-native-theme.md)).
+
 ## Layout
 
 ```text

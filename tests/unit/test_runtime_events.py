@@ -119,7 +119,7 @@ async def test_event_payloads_describe_the_run() -> None:
     assert assistant.data == {"content": "", "tool_calls": ["echo"]}
 
     tool_started = next(event for event in bus.published if event.type is EventType.TOOL_STARTED)
-    assert tool_started.data == {"tool": "echo", "tool_call_id": "call-1"}
+    assert tool_started.data == {"tool": "echo", "tool_call_id": "call-1", "args": {"x": 1}}
 
     completed = bus.published[-1]
     assert completed.data == {"steps": 2, "tool_calls": 1}

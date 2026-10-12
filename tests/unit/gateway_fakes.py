@@ -45,6 +45,7 @@ def event(
 class FakeConfig:
     workspace: Path = Path(".")
     model: str = "test:model"
+    theme: str = "ansi-dark"
 
 
 class FakeAgent:
