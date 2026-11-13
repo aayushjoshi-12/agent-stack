@@ -4,6 +4,7 @@ from typing import cast
 
 from langchain_core.language_models import BaseChatModel
 
+from agent_stack.artifacts.base import ArtifactStore
 from agent_stack.core.agent import Agent
 from agent_stack.core.approval import ApprovalBroker
 from agent_stack.core.context import ContextBuilder, SystemPartsProvider
@@ -34,6 +35,7 @@ class AgentFactory:
         context_builder: ContextBuilder | None = None,
         system_parts: SystemPartsProvider | None = None,
         approvals: ApprovalBroker | None = None,
+        artifacts: ArtifactStore | None = None,
     ) -> None:
         self._session_store = session_store
         self._event_bus = event_bus
@@ -41,12 +43,17 @@ class AgentFactory:
         self._context_builder = context_builder
         self._system_parts = system_parts
         self._approvals = approvals
+        self._artifacts = artifacts
 
     def create(self, agent: Agent) -> AgentRuntime:
         model = build_model(agent.model)
         model_with_tools = cast(BaseChatModel, model.bind_tools(list(agent.tools)))
         registry = ToolRegistry(agent.tools)
-        executor = ToolExecutor(registry, timeout_seconds=agent.limits.tool_timeout_seconds)
+        executor = ToolExecutor(
+            registry,
+            timeout_seconds=agent.limits.tool_timeout_seconds,
+            artifacts=self._artifacts,
+        )
         return AgentRuntime(
             agent=agent,
             model=model_with_tools,

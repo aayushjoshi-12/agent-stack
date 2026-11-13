@@ -296,7 +296,7 @@ loop.
 
 ---
 
-## Phase 0 — Foundation & tooling 🟡
+## Phase 0 — Foundation & tooling ✅
 
 **Goal.** A clean, importable package with a fast check loop.
 
@@ -306,6 +306,10 @@ loop.
 - `.env.example` (never commit real keys; the current `.env` has one — add it to
   `.gitignore` if not already).
 - Confirm `make check` (lint + typecheck + test) runs green/empty.
+
+> **Status note:** done. The environment is read in `app/config.py`, the composition root and
+> entry point, the terminal tool's subprocess allow-list, and secret detection; invariant 9
+> (`tests/invariants`) keeps it to exactly those files.
 
 **Key interfaces**
 ```python
@@ -330,7 +334,7 @@ class AppConfig:
 
 ---
 
-## Phase 1 — Model layer 🟡
+## Phase 1 — Model layer ✅
 
 **Goal.** One place that turns a model string into a `BaseChatModel`, with capability
 validation.
@@ -381,7 +385,7 @@ class ModelCapabilities:
 
 ---
 
-## Phase 3 — Tool executor 🟡
+## Phase 3 — Tool executor ✅
 
 **Goal.** Turn model tool calls into `ToolMessage`s, concurrently, safely. §20–24.
 
@@ -415,7 +419,7 @@ class ToolExecutor:
 
 ---
 
-## Phase 4 — Agent definition 🟡
+## Phase 4 — Agent definition ✅
 
 **Goal.** A frozen configuration object describing an agent. §7, §100.
 
@@ -459,7 +463,7 @@ class Agent:
 
 ---
 
-## Phase 5 — AgentRuntime loop + AgentState 🟡
+## Phase 5 — AgentRuntime loop + AgentState ✅
 
 **Goal.** The explicit, boring model/tool loop with a real state object. §13–14.
 
@@ -529,7 +533,7 @@ session; crash mid-run and resume without duplicating a completed tool.
 
 ---
 
-## Phase 7 — Sessions & in-memory stores 🟡
+## Phase 7 — Sessions & in-memory stores ✅
 
 **Goal.** A `Session` domain object and store protocols; in-memory implementations first. §10, §16, §95.
 
@@ -620,7 +624,7 @@ gateway.
 
 ---
 
-## Phase 9 — SQLite index + file-based conversation store ⬜
+## Phase 9 — SQLite index + file-based conversation store ✅
 
 **Goal.** Durable sessions/runs **and** human-reviewable conversation transcripts, without
 parking whole chats in SQLite. §35–37, §128–130, plus
@@ -733,7 +737,7 @@ tests, and keeps large output out of context.
 
 ---
 
-## Phase 13 — Workspace & filesystem tools ⬜
+## Phase 13 — Workspace & filesystem tools ✅
 
 **Goal.** Safe, testable file operations inside a defined workspace. §28–29.
 
@@ -783,7 +787,7 @@ emission). The TUI/Web shells panes (P23/P24) render this.
 
 ---
 
-## Phase 15 — Artifact store ⬜
+## Phase 15 — Artifact store ✅
 
 **Goal.** Large outputs live outside model context; the model sees a reference. §25–26, §112.
 
@@ -795,6 +799,16 @@ emission). The TUI/Web shells panes (P23/P24) render this.
 
 **Acceptance test**
 - `test_large_output_becomes_artifact_and_short_message`
+
+**Done:** `LocalArtifactStore` is wired in `bootstrap` (`<workspace>/.agent/artifacts/`). A tool
+result over 20 KB is stored whole, as the already-redacted text, and the model gets a 4 KB
+preview plus `artifact://<id>`; the new `read_artifact` tool pages through it (ids are
+validated, and a single read is clamped). Without a store, or if storing fails, the result is
+truncated at 100 KB as before. Tests: `tests/unit/test_large_output_artifacts.py`.
+
+**Known limit:** artifacts are workspace-scoped, not per-session (the local store has no
+session layout), so deleting a conversation leaves its large-output artifacts behind until the
+garbage collection this phase defers.
 
 **Defer:** S3 backend, artifact garbage collection (§148–149).
 
@@ -934,7 +948,7 @@ by a trivial CLI/in-process client.
 
 ---
 
-## Phase 17 — Composition root 🟡
+## Phase 17 — Composition root ✅
 
 **Goal.** `app/bootstrap.py` is the single wiring diagram in code. §24–26, §98.
 
@@ -1335,7 +1349,8 @@ large conversation     gateway reconnect       approval race
   (`redact(..., pairs=False)`: the generic `name = value` rule stays off so source code the agent
   must read is not mangled) and capped at `MAX_OUTPUT_BYTES` (100 KB); error text gets the same.
 - Session deletion removes the row, runs, message and artifact indexes, checkpoints, tool
-  executions, todos and the transcript directory (tested for orphans); persistent memory
+  executions, todos and the transcript directory (tested for orphans; the large-output files
+  from P15 are workspace-scoped and outlive the session, see P15); persistent memory
   facts are the *user's*, so they deliberately outlive the conversation.
 - Matrix rows covered by tests: provider timeout, provider 429, tool timeout, tool exception,
   concurrent session access, cancellation, approval race (decide twice or against another

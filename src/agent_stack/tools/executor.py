@@ -16,14 +16,17 @@ projection the runtime feeds back into the conversation.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.messages import ToolMessage
 
+from agent_stack.artifacts.base import ArtifactStore
 from agent_stack.core.context import truncate_bytes
 from agent_stack.core.errors import ToolTimeoutError
+from agent_stack.core.run_context import current_run_context
 from agent_stack.core.tool_stream import tool_output_sink
 from agent_stack.observability.redact import env_secrets, redact
 from agent_stack.tools.registry import ToolRegistry
@@ -33,8 +36,17 @@ ToolOutputHandler = Callable[[str, str, str], Awaitable[None]]
 
 #: Cap on one tool result handed to the model; the rest would only flood its context.
 MAX_OUTPUT_BYTES = 100_000
+#: With an artifact store, results over this size are stored whole and replaced by a preview.
+ARTIFACT_THRESHOLD = 20_000
+PREVIEW_BYTES = 4_000
 
-__all__ = ["MAX_OUTPUT_BYTES", "ToolExecutionResult", "ToolExecutor", "ToolOutputHandler"]
+__all__ = [
+    "ARTIFACT_THRESHOLD",
+    "MAX_OUTPUT_BYTES",
+    "ToolExecutionResult",
+    "ToolExecutor",
+    "ToolOutputHandler",
+]
 
 
 @dataclass(frozen=True)
@@ -62,22 +74,43 @@ class ToolExecutor:
         *,
         timeout_seconds: float | None = None,
         max_output_bytes: int = MAX_OUTPUT_BYTES,
+        artifacts: ArtifactStore | None = None,
+        artifact_threshold: int = ARTIFACT_THRESHOLD,
     ) -> None:
         self.registry = registry
         #: Per-call timeout; ``None`` means a call may run as long as it likes.
         self.timeout_seconds = timeout_seconds
         self.max_output_bytes = max_output_bytes
+        self._artifacts = artifacts
+        self.artifact_threshold = artifact_threshold
         self._secrets = env_secrets()
 
-    def _for_model(self, text: str) -> str:
-        """What the model may see of a tool's result: no known secrets, bounded in size."""
+    async def _for_model(self, text: str, tool_name: str) -> str:
+        """What the model may see of a tool's result: no known secrets, and short.
+
+        With an artifact store, a result over ``artifact_threshold`` is stored in full (the
+        already-redacted text) and the model gets a preview plus ``artifact://<id>``; without
+        one, or if storing fails, it is truncated at ``max_output_bytes``.
+        """
         text = redact(text, self._secrets, pairs=False)
         raw = text.encode("utf-8")
-        return (
-            text
-            if len(raw) <= self.max_output_bytes
-            else truncate_bytes(raw, self.max_output_bytes)
-        )
+        if self._artifacts is not None and len(raw) > self.artifact_threshold:
+            context = current_run_context()
+            with contextlib.suppress(Exception):  # fall back to plain truncation below
+                ref = await self._artifacts.put(
+                    data=raw,
+                    name=f"{tool_name}-output.txt",
+                    mime_type="text/plain",
+                    session_id=context.session_id if context else None,
+                )
+                return (
+                    f"{truncate_bytes(raw, PREVIEW_BYTES)}\n"
+                    f"[output was {len(raw)} bytes; full output stored as {ref.uri}; "
+                    "read it in pieces with read_artifact]"
+                )
+        if len(raw) <= self.max_output_bytes:
+            return text
+        return truncate_bytes(raw, self.max_output_bytes)
 
     async def execute_one(
         self,
@@ -112,7 +145,7 @@ class ToolExecutor:
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
                 message=ToolMessage(
-                    content=self._for_model(f"Error: {exc}"),
+                    content=await self._for_model(f"Error: {exc}", tool_name),
                     tool_call_id=tool_call_id,
                     status="error",
                 ),
@@ -123,7 +156,9 @@ class ToolExecutor:
         return ToolExecutionResult(
             tool_call_id=tool_call_id,
             tool_name=tool_name,
-            message=ToolMessage(content=self._for_model(str(result)), tool_call_id=tool_call_id),
+            message=ToolMessage(
+                content=await self._for_model(str(result), tool_name), tool_call_id=tool_call_id
+            ),
             success=True,
         )
 

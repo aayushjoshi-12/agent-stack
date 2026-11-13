@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 
 from agent_stack.app.application import Application
 from agent_stack.app.config import AppConfig
+from agent_stack.artifacts.local import LocalArtifactStore
 from agent_stack.context.composer import SystemPromptComposer
 from agent_stack.context.instructions import InstructionsLoader
 from agent_stack.core.agent import Agent, SubAgentSpec
@@ -32,6 +33,7 @@ from agent_stack.persistence.sqlite import (
 from agent_stack.persistence.todos import SqliteTodoStore
 from agent_stack.skills import SkillLoader, SkillRegistry, skill_tools
 from agent_stack.subagents.delegation import control_tools
+from agent_stack.tools.builtins.artifacts import artifact_tools
 from agent_stack.tools.builtins.filesystem import filesystem_tools
 from agent_stack.tools.builtins.memory import persistent_memory_tools
 from agent_stack.tools.builtins.terminal import run_command_tool
@@ -107,6 +109,7 @@ def build_application(config: AppConfig | None = None) -> Application:
     locks = SessionLockManager()
 
     policy = WorkspacePolicy(root=workspace)
+    artifacts = LocalArtifactStore(workspace / ".agent" / "artifacts")
     fs_tools = filesystem_tools(policy)
 
     # Context wiring (P16e): instructions + skill metadata + the memory index become
@@ -151,6 +154,7 @@ def build_application(config: AppConfig | None = None) -> Application:
             *memory_tools(memory),
             *persistent_memory_tools(SqliteMemoryStore(db)),
             *todo_tools(SqliteTodoStore(db)),
+            *artifact_tools(artifacts),
         ),
         subagents=(
             SubAgentSpec(
@@ -170,6 +174,7 @@ def build_application(config: AppConfig | None = None) -> Application:
         context_builder=context_builder,
         system_parts=composer,
         approvals=approvals,
+        artifacts=artifacts,
     )
     runtime = factory.create(agent)
     run_manager = RunManager(

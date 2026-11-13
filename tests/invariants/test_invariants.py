@@ -352,3 +352,35 @@ def test_inv8_core_does_not_import_the_application_or_gateway_layers() -> None:
         if bad:
             offenders.append(f"{path.name}: {sorted(bad)}")
     assert offenders == []
+
+
+# 9 ── the environment is read in a few deliberate places only ─────────────────
+#: Where reading the process environment is part of the job: configuration, the composition
+#: root and entry point, the subprocess allow-list, and secret detection. A new read elsewhere
+#: should be a decision, not an accident.
+_ENV_READERS = {
+    "app/config.py",
+    "app/bootstrap.py",
+    "observability/cli.py",
+    "observability/redact.py",
+    "tools/builtins/terminal.py",
+}
+
+
+def test_inv9_the_environment_is_read_only_where_it_is_meant_to_be() -> None:
+    offenders = []
+    for path in SRC.rglob("*.py"):
+        relative = path.relative_to(SRC).as_posix()
+        if relative in _ENV_READERS:
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            reads_environ = isinstance(node, ast.Attribute) and (
+                isinstance(node.value, ast.Name)
+                and node.value.id == "os"
+                and node.attr in {"environ", "getenv"}
+            )
+            loads_dotenv = isinstance(node, ast.Name) and node.id == "load_dotenv"
+            if reads_environ or loads_dotenv:
+                offenders.append(relative)
+                break
+    assert offenders == []
