@@ -1,0 +1,77 @@
+# Status snapshot (paused 2026-11-13)
+
+Where the project stands and what to do next. Written so a fresh session can pick it up
+cold. Everything below was true at commit `2be1c43`; `git log` has the later truth.
+
+## State
+
+- 429 tests, `make check` (ruff + strict mypy + pytest) green. Private repo, `master`, in sync.
+- Run it: `agent-stack` (TUI), `agent-stack chat` (line REPL), `agent-stack telegram`
+  (bot), `agent-stack audit tail`. Default model `openrouter:deepseek/deepseek-v4-pro`
+  (`AGENT_STACK_MODEL`); see `.env.example` for every variable.
+
+| Area | Phases | Notes |
+|---|---|---|
+| Runtime core | 0-20 | loop, limits, deadline, tool timeout, sessions, events, checkpoints, run manager, subagents, skills, instructions, memory files |
+| Memory and tasks | 21, 22 | `remember`/`recall`/`forget` (SQLite, per user); `todo_*` tools (per session) |
+| Gateways | 23, 25 | TUI (themes, cards, conversations picker, approvals), Telegram (allow-listed) |
+| Trust | 26, 27, 28 | approval flow; redaction, JSON logs, metrics, eight invariants; hardening matrix |
+| Large output | 15 | results over 20 KB become artifacts; `read_artifact` pages through them |
+
+## Not done
+
+- **P24 Web gateway.** Blocked on the owner's design inspiration for the Next.js UI (the plan
+  says so) and on adding FastAPI/uvicorn. Do not start the UI without that input.
+- **P29 durable event log and replay, P30 conversation branching.** Documented "later" phases.
+- **Public release** (the repo is private on purpose): README with an architecture diagram and
+  a demo recording, LICENSE, an ADR "why not just LangGraph", and a fresh scan of the whole
+  history for employer or customer names before the visibility changes.
+
+## Never verified (do these first)
+
+- **A real-model run.** Every test uses a fake model. Nobody has run the app against
+  OpenRouter/DeepSeek since the TUI, approval, memory and artifact work landed. Smoke it:
+  launch `agent-stack`, ask it to read a file, run a command (expect the approval dialog), then
+  cancel a run and reopen the conversation with `ctrl+o`.
+- **Telegram against the real Bot API.** Tests use a scripted fake. Needs a bot token and the
+  owner's numeric user id (`AGENT_STACK_TELEGRAM_USERS`).
+- **The approval dialog in a real terminal.** It is tested headlessly and in the screenshot
+  harness only.
+
+## Known limits (written down, not hidden)
+
+- Artifacts are workspace-scoped: deleting a conversation leaves its large-output files until
+  the garbage collection the plan defers.
+- If recording a tool batch fails *after* the tools ran, a retry with the same run id could run a
+  mutating tool again. History stays valid because the failed run saves no tool results.
+- A subagent does not inherit its parent's tool policy. Fine while `explorer` is read-only; a
+  write-capable subagent would bypass approval.
+- The approval broker never prunes finished requests (memory only; fine for one owner).
+- Tool output shown to the model is scrubbed with `redact(pairs=False)`: known env secrets and
+  common key shapes only, so a secret in an unusual shape passes.
+
+## Decisions already made (do not relitigate)
+
+- The two commits titled "P27" stay as they are (the owner chose not to squash).
+- Telegram requires an explicit user allow-list and refuses to start without one.
+- Default tools that need approval: `run_command`, `write_file`, `edit_file`
+  (`AGENT_STACK_APPROVAL_TOOLS`; empty runs everything unattended).
+- A launch opens a fresh draft conversation; old ones come from `ctrl+o`.
+- Items from the ponytail audit deliberately skipped: file/in-memory `list_for_owner` (kept for
+  the store contract), the `AGENT_STACK_CONTEXT_WINDOW` knob, `memory/store.py` typing nits,
+  the early raise in `_within`.
+
+## Working notes that cost time once
+
+- `make check | tail ... && git commit` hides a failing step (the pipe reports `tail`). Check
+  the real exit status: `make check >/tmp/g.txt 2>&1; echo $?`.
+- A new test that passes first try proves nothing: revert the fix and watch it fail. Several
+  fixes here were verified that way. When mutating code, make sure the edit actually applied
+  (the formatter reshapes code and silently defeats string replaces).
+- A fake whose `await` never yields starves the event loop and hangs the suite; `await
+  asyncio.sleep(0)` in poll-style fakes.
+- A crash is a `BaseException` in tests; an ordinary exception is a *failed run*, which keeps
+  its history.
+- macOS `sed -i` needs `-i ''`. `gh` must be logged in as the personal account for this repo.
+- `tmp/` is gitignored scratch (plans, tickets, handoffs, the screenshot harness
+  `tmp/tui_shots.py`, the pty review `tmp/tui_pty_review.py`).
