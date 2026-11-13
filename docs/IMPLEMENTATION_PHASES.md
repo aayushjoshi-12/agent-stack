@@ -1220,7 +1220,7 @@ new session and `ctrl+o` opens a conversation picker that replays stored history
 
 ---
 
-## Phase 26 — Approval flow ⬜
+## Phase 26 — Approval flow ✅
 
 **Goal.** Human-in-the-loop for dangerous tools, gateway-agnostic. §78–79, §124–125.
 
@@ -1235,6 +1235,19 @@ new session and `ctrl+o` opens a conversation picker that replays stored history
 - `test_approval_resumes_and_executes`
 - `test_rejected_approval_returns_error_tool_message`
 - `test_approval_cannot_be_replayed_against_another_run`
+
+**Done:** `core/approval.py` (`ApprovalBroker`, `ApprovalRequest`, `ApprovalStatus`, `ToolPolicy`);
+`Agent.tool_policy`; the runtime asks before each gated call (one at a time), emits
+`approval.required` / `approval.resolved`, and turns a rejection into an error `ToolMessage`
+without running the tool; the run manager mirrors the pause as `RunStatus.WAITING_APPROVAL`.
+`Application.decide_approval` checks that the decision's run, session and principal match the
+request and that it is still pending, so it cannot be replayed. Time spent waiting is added back
+to the run deadline. A cancelled run marks its request `CANCELLED`. Config: `approval_tools`
+(`AGENT_STACK_APPROVAL_TOOLS`, default `run_command, write_file, edit_file`; empty runs
+unattended). Gateways: the TUI shows an approval dialog (`y` approves; `n`/`esc` reject; no Enter
+shortcut) and the line REPL asks on the console and rejects by default when it has no approver.
+Also fixed: a hard cancel emits no terminal event, which left the TUI stuck on "cancelling…".
+Tests: `tests/unit/test_approval.py` (+ TUI and CLI tests).
 
 **Defer:** command classification beyond a simple flag.
 

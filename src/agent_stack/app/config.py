@@ -24,6 +24,9 @@ class AppConfig:
     model: str = "openrouter:deepseek/deepseek-v4-pro"
     #: Context window (tokens) of ``model``; only used for the TUI's usage meter.
     context_window: int = 1_000_000
+    #: Tools that pause for a human's approval before they run. Comma-separated in
+    #: ``AGENT_STACK_APPROVAL_TOOLS``; set it empty to run everything unattended.
+    approval_tools: tuple[str, ...] = ("run_command", "write_file", "edit_file")
     workspace: Path = field(default_factory=Path.cwd)
     #: Explicit index path; ``None`` means ``<workspace>/agent.db`` (see :attr:`database`).
     db_path: Path | None = None
@@ -54,8 +57,16 @@ class AppConfig:
         db_raw = source.get("AGENT_STACK_DB")
         db_path = None if db_raw is None else Path(db_raw).expanduser()
 
+        approval_raw = source.get("AGENT_STACK_APPROVAL_TOOLS")
+        approval_tools = (
+            defaults.approval_tools
+            if approval_raw is None
+            else tuple(name.strip() for name in approval_raw.split(",") if name.strip())
+        )
+
         return cls(
             model=source.get("AGENT_STACK_MODEL", defaults.model),
+            approval_tools=approval_tools,
             context_window=int(source.get("AGENT_STACK_CONTEXT_WINDOW", defaults.context_window)),
             workspace=workspace,
             db_path=db_path,

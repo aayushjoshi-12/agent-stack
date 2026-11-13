@@ -5,6 +5,7 @@ from typing import cast
 from langchain_core.language_models import BaseChatModel
 
 from agent_stack.core.agent import Agent
+from agent_stack.core.approval import ApprovalBroker
 from agent_stack.core.context import ContextBuilder, SystemPartsProvider
 from agent_stack.core.event_bus import EventBus
 from agent_stack.core.locks import SessionLockManager
@@ -32,12 +33,14 @@ class AgentFactory:
         session_lock: SessionLockManager | None = None,
         context_builder: ContextBuilder | None = None,
         system_parts: SystemPartsProvider | None = None,
+        approvals: ApprovalBroker | None = None,
     ) -> None:
         self._session_store = session_store
         self._event_bus = event_bus
         self._session_lock = session_lock
         self._context_builder = context_builder
         self._system_parts = system_parts
+        self._approvals = approvals
 
     def create(self, agent: Agent) -> AgentRuntime:
         model = build_model(agent.model)
@@ -53,4 +56,5 @@ class AgentFactory:
             session_lock=self._session_lock,
             context_builder=self._context_builder,
             system_parts=self._system_parts,
+            approvals=self._approvals,
         )

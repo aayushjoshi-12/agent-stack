@@ -20,6 +20,7 @@ from agent_stack.gateways.tui.app import TuiApp
 from agent_stack.gateways.tui.render import diff_kind, output_line_text
 from agent_stack.gateways.tui.widgets import (
     AgentMessage,
+    ApprovalScreen,
     Disclosure,
     HeaderBar,
     HelpScreen,
@@ -827,3 +828,109 @@ async def test_deleting_the_open_conversation_returns_to_a_fresh_draft() -> None
         await _settle(pilot, 4)
         assert len(app.query(UserMessage)) == 0
         assert len(app.query(Welcome)) == 1
+
+
+# ── approvals ────────────────────────────────────────────────────────────────
+def _approval_stream(gate: asyncio.Event) -> FakeApplication:
+    return FakeApplication(
+        events=[
+            event(EventType.RUN_STARTED),
+            event(
+                EventType.TOOL_STARTED,
+                tool="run_command",
+                tool_call_id="c1",
+                args={"command": "rm -rf build"},
+            ),
+            event(
+                EventType.APPROVAL_REQUIRED,
+                approval_id="a1",
+                tool="run_command",
+                tool_call_id="c1",
+                args={"command": "rm -rf build"},
+            ),
+        ],
+        gate=gate,
+    )
+
+
+async def test_an_approval_request_opens_a_dialog_and_y_approves() -> None:
+    gate = asyncio.Event()
+    application = _approval_stream(gate)
+    app = _app(application)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await _submit(pilot, "clean up")
+        await _settle(pilot, 8)
+
+        assert isinstance(app.screen, ApprovalScreen)
+        assert "rm -rf build" in str(app.screen.query_one("#approval-detail").render())
+        assert app.cards["c1"].status == "waiting"
+        assert "approval" in str(app.query_one("#run-state").render())
+
+        await pilot.press("y")
+        await _settle(pilot, 4)
+
+        ((approval_id, run_id, session_id, principal, approved),) = application.decisions
+        assert (approval_id, approved) == ("a1", True)
+        assert run_id == application.sent[0][1]
+        assert session_id == "s1" and principal == app._principal
+        assert not isinstance(app.screen, ApprovalScreen)
+        gate.set()
+        await _settle(pilot)
+
+
+async def test_n_and_escape_reject_but_enter_does_not_approve() -> None:
+    gate = asyncio.Event()
+    application = _approval_stream(gate)
+    app = _app(application)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await _submit(pilot, "clean up")
+        await _settle(pilot, 8)
+
+        await pilot.press("enter")  # a stray Enter must not approve a command
+        await _settle(pilot, 3)
+        assert application.decisions == []
+        assert isinstance(app.screen, ApprovalScreen)
+
+        await pilot.press("escape")
+        await _settle(pilot, 4)
+        assert [d[-1] for d in application.decisions] == [False]
+        gate.set()
+        await _settle(pilot)
+
+
+async def test_approval_resolved_resumes_or_leaves_the_card_to_fail() -> None:
+    app = _app()
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.handle_event(
+            event(
+                EventType.TOOL_STARTED, tool="run_command", tool_call_id="c", args={"command": "x"}
+            )
+        )
+        card = app.cards["c"]
+        card.await_approval()
+        app._awaiting = 1
+        app.handle_event(
+            event(EventType.APPROVAL_RESOLVED, approval_id="a", tool_call_id="c", status="approved")
+        )
+        await _settle(pilot, 3)
+        assert card.status == "running"
+        assert app._awaiting == 0
+
+
+async def test_a_stream_that_ends_without_a_terminal_event_returns_the_ui_to_idle() -> None:
+    """A hard cancel publishes no run.failed; the UI must not stay on 'cancelling'."""
+    application = FakeApplication(events=[event(EventType.RUN_STARTED)])  # stream just ends
+    app = _app(application)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await _submit(pilot, "go")
+        await _settle(pilot, 6)
+
+        assert not app._run_active
+        assert app._last_outcome == "failed"
+        assert "failed" in str(app.query_one("#run-state").render())
+        await _submit(pilot, "second")  # and the next message is accepted
+        assert len(application.sent) == 2

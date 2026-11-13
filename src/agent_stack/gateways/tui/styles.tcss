@@ -133,6 +133,18 @@ HelpScreen { align: center middle; background: $background 70%; }
     background: $surface;
     border-left: thick $primary;
 }
+ApprovalScreen { align: center middle; background: $background 70%; }
+#approval-card {
+    width: 80;
+    max-width: 96%;
+    height: auto;
+    max-height: 85%;
+    padding: 1 2;
+    background: $surface;
+    border-left: thick $warning;
+}
+#approval-what { margin-top: 1; }
+#approval-detail { margin: 1 0; padding: 0 1; background: $panel; }
 SessionPicker { align: center middle; background: $background 70%; }
 #picker-card {
     width: 72;

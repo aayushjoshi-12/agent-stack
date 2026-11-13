@@ -39,6 +39,10 @@ class ToolTimeoutError(ToolError):
     """A tool call exceeded ``AgentLimits.tool_timeout_seconds``."""
 
 
+class ApprovalError(AgentStackError):
+    """An approval decision was refused: unknown id, wrong binding, or already decided."""
+
+
 class WorkspaceEscapeError(ToolError):
     """Raised when a path resolves outside the configured workspace."""
 

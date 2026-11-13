@@ -12,13 +12,14 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 from agent_stack.app.config import AppConfig
 from agent_stack.core.agent import Agent
+from agent_stack.core.approval import ApprovalBroker
 from agent_stack.core.errors import SessionVersionConflictError
 from agent_stack.core.event_bus import EventBus
 from agent_stack.core.events import AgentEvent
@@ -41,6 +42,7 @@ class Application:
     session_store: SessionStore
     run_manager: RunManager
     event_bus: EventBus
+    approvals: ApprovalBroker = field(default_factory=ApprovalBroker)
 
     async def send_message(
         self,
@@ -80,6 +82,28 @@ class Application:
     async def get_session(self, session_id: str) -> Session | None:
         """Return a session's metadata, or ``None`` when it does not exist."""
         return await self.session_store.get(session_id)
+
+    def decide_approval(
+        self,
+        approval_id: str,
+        *,
+        run_id: str,
+        session_id: str,
+        principal: str,
+        approve: bool,
+    ) -> None:
+        """Answer a pending ``approval.required`` request.
+
+        Raises :class:`~agent_stack.core.errors.ApprovalError` if the id is unknown, was
+        issued for a different run, session or principal, or was already decided.
+        """
+        self.approvals.decide(
+            approval_id,
+            run_id=run_id,
+            session_id=session_id,
+            principal=principal,
+            approve=approve,
+        )
 
     async def new_session(self, principal: str) -> str:
         """Create an empty session for ``principal`` and return its id."""

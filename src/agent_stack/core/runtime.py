@@ -12,6 +12,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
 from agent_stack.core.agent import Agent
+from agent_stack.core.approval import ApprovalBroker, ApprovalStatus
 from agent_stack.core.cancellation import CancellationToken
 from agent_stack.core.context import ContextBuilder, SystemPartsProvider
 from agent_stack.core.errors import (
@@ -25,7 +26,7 @@ from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.locks import SessionLockManager
 from agent_stack.core.session import Session, SessionStore
 from agent_stack.core.state import Checkpoint, CheckpointStatus
-from agent_stack.tools.executor import ToolExecutor
+from agent_stack.tools.executor import ToolExecutionResult, ToolExecutor
 
 if TYPE_CHECKING:
     from agent_stack.persistence.base import CheckpointStore
@@ -104,6 +105,7 @@ class AgentRuntime:
         session_lock: SessionLockManager | None = None,
         context_builder: ContextBuilder | None = None,
         system_parts: SystemPartsProvider | None = None,
+        approvals: ApprovalBroker | None = None,
     ) -> None:
         self._agent = agent
         self._model = model
@@ -113,6 +115,7 @@ class AgentRuntime:
         self._session_lock = session_lock
         self._context_builder = context_builder
         self._system_parts = system_parts
+        self._approvals = approvals
 
     @property
     def agent(self) -> Agent:
@@ -298,7 +301,29 @@ class AgentRuntime:
                 # the model was thinking still stops the tools from running.
                 self._check_cancelled(cancel)
 
-                def run_tools(batch: list[Any] = pending) -> Awaitable[list[Any]]:
+                # Human-in-the-loop (P26): gated calls wait for a decision, one at a time.
+                # Rejected calls never execute; they become error ToolMessages. The time a
+                # human takes is not the run's time, so it is added back to the deadline.
+                rejected: dict[str, ToolExecutionResult] = {}
+                if self._approvals is not None:
+                    asked = time.monotonic()
+                    for gated in pending:
+                        if not self._agent.tool_policy.needs_approval(str(gated["name"])):
+                            continue
+                        status = await self._await_approval(
+                            gated,
+                            run_id=run_id,
+                            session_id=session_id,
+                            user_id=user_id,
+                            parent_run_id=parent_run_id,
+                        )
+                        if status is not ApprovalStatus.APPROVED:
+                            rejected[str(gated["id"])] = _rejected_result(gated)
+                    deadline += time.monotonic() - asked
+                    self._check_cancelled(cancel)
+                runnable = [c for c in pending if str(c["id"]) not in rejected]
+
+                def run_tools(batch: list[Any] = runnable) -> Awaitable[list[Any]]:
                     return self._tool_executor.execute_many(
                         batch,
                         on_output=self._tool_output_emitter(
@@ -309,7 +334,9 @@ class AgentRuntime:
                         ),
                     )
 
-                tool_results = await self._within(deadline, run_tools)
+                executed = await self._within(deadline, run_tools)
+                by_id = {r.tool_call_id: r for r in [*executed, *rejected.values()]}
+                tool_results = [by_id[str(c["id"])] for c in pending]
 
                 if checkpoint_store is not None and tool_results:
                     # The whole batch lands in one transaction, atomically visible to recovery.
@@ -414,6 +441,51 @@ class AgentRuntime:
             return [SystemMessage(content=self._agent.system_prompt), *history, *new_messages]
         ctx = self._context_builder.build(system_parts=resident, history=[*history, *new_messages])
         return [SystemMessage(content="\n\n".join(ctx.system)), *ctx.messages]
+
+    async def _await_approval(
+        self,
+        tool_call: Mapping[str, Any],
+        *,
+        run_id: str,
+        session_id: str,
+        user_id: str,
+        parent_run_id: str | None,
+    ) -> ApprovalStatus:
+        """Announce a gated call, wait for its decision, and announce the outcome."""
+        assert self._approvals is not None
+        request = self._approvals.create(
+            run_id=run_id,
+            session_id=session_id,
+            principal=user_id,
+            tool=str(tool_call["name"]),
+            tool_call_id=str(tool_call["id"]),
+            args=dict(tool_call["args"]),
+        )
+        await self._emit(
+            EventType.APPROVAL_REQUIRED,
+            run_id=run_id,
+            session_id=session_id,
+            parent_run_id=parent_run_id,
+            data={
+                "approval_id": request.id,
+                "tool": request.tool,
+                "tool_call_id": request.tool_call_id,
+                "args": dict(request.args),
+            },
+        )
+        status = await self._approvals.wait(request.id)
+        await self._emit(
+            EventType.APPROVAL_RESOLVED,
+            run_id=run_id,
+            session_id=session_id,
+            parent_run_id=parent_run_id,
+            data={
+                "approval_id": request.id,
+                "tool_call_id": request.tool_call_id,
+                "status": status.value,
+            },
+        )
+        return status
 
     async def _within(self, deadline: float, factory: Callable[[], Awaitable[_T]]) -> _T:
         """Await ``factory()`` but never past the run's wall-clock ``deadline``.
@@ -524,3 +596,16 @@ class AgentRuntime:
                 created_at=datetime.now(UTC).isoformat(),
             )
         )
+
+
+def _rejected_result(tool_call: Mapping[str, Any]) -> ToolExecutionResult:
+    """The outcome of a call a human declined: an error the model can read and adapt to."""
+    call_id = str(tool_call["id"])
+    reason = "the user rejected this tool call"
+    return ToolExecutionResult(
+        tool_call_id=call_id,
+        tool_name=str(tool_call["name"]),
+        message=ToolMessage(content=f"Error: {reason}", tool_call_id=call_id, status="error"),
+        success=False,
+        error=reason,
+    )

@@ -40,6 +40,7 @@ class RunStatus(StrEnum):
 
     PENDING = "pending"
     RUNNING = "running"
+    WAITING_APPROVAL = "waiting_approval"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -294,6 +295,7 @@ class RunManager:
                 elif event.type is EventType.TOOL_COMPLETED:
                     progress.tools += 1
                 progress.last_event = event.type.value
+                await self._reflect_approval(event)
                 queue.put_nowait(event)
                 if event.type in _TERMINAL_EVENTS:
                     break
@@ -307,6 +309,19 @@ class RunManager:
             if close is not None:
                 await close()
             queue.put_nowait(None)
+
+    async def _reflect_approval(self, event: AgentEvent) -> None:
+        """Mirror a pause for approval in the stored run status (and back to running)."""
+        if event.type is EventType.APPROVAL_REQUIRED:
+            status = RunStatus.WAITING_APPROVAL
+        elif event.type is EventType.APPROVAL_RESOLVED:
+            status = RunStatus.RUNNING
+        else:
+            return
+        stored = await self._run_store.get(event.run_id)
+        if stored is not None and stored.status not in _TERMINAL_RUN_STATUSES:
+            stored.status = status
+            await self._run_store.save(stored)
 
     async def _drain(self, queue: asyncio.Queue[AgentEvent | None]) -> AsyncIterator[AgentEvent]:
         """Yield a run's buffered events until the end-of-stream sentinel."""

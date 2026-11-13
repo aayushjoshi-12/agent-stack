@@ -32,6 +32,10 @@ class EventType(StrEnum):
     # its TOOL_COMPLETED.
     TOOL_OUTPUT = "tool.output"
     TOOL_COMPLETED = "tool.completed"
+    # Human-in-the-loop (P26): a gated tool call is waiting for a decision / it was decided.
+    # Neither is terminal; the run continues (or rejects the call) once resolved.
+    APPROVAL_REQUIRED = "approval.required"
+    APPROVAL_RESOLVED = "approval.resolved"
     # Subagent lifecycle, published on the *parent's* run scope (Phase 20). Neither is
     # terminal for any stream — a child finishing must never end its parent's stream.
     SUBAGENT_STARTED = "subagent.started"

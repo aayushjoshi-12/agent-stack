@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 from langchain_core.tools import BaseTool
 
+from agent_stack.core.approval import ToolPolicy
 from agent_stack.core.limits import AgentLimits
 
 
@@ -35,3 +36,4 @@ class Agent:
     subagents: tuple[SubAgentSpec, ...] = ()
     system_prompt: str = ""
     limits: AgentLimits = field(default_factory=AgentLimits)
+    tool_policy: ToolPolicy = field(default_factory=ToolPolicy)

@@ -83,6 +83,15 @@ Switching and new/delete are refused while a run is active. Reasoning and tool o
 stored, so a replayed conversation shows neither. Data crosses the boundary as gateway-neutral
 `SessionSummary` and `HistoryItem` (in `gateways/base.py`); the TUI never touches the store.
 
+## Approvals
+
+When a gated tool call needs a decision (`approval.required`, from the parent run or a child), the
+card shows `? awaiting approval`, the header says `? needs your approval`, and `ApprovalScreen`
+opens with the tool and its command or arguments. `y` approves; `n` or `esc` rejects; Enter does
+nothing, so a stray key cannot approve a command. The answer goes through
+`Application.decide_approval`. If the run ends while a dialog is open, the dialog closes. The set
+of gated tools is `AGENT_STACK_APPROVAL_TOOLS`.
+
 ## Header and sidebar
 
 The header shows the run state (`● idle`, `⠋ working 12s`, `◌ cancelling…`, `✓ done 12s`,

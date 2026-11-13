@@ -115,6 +115,7 @@ class FakeApplication:
         self.sessions: list[SessionSummary] = []
         self.titles: dict[str, str] = {}
         self.deleted: list[str] = []
+        self.decisions: list[tuple[str, str, str, str, bool]] = []
         self.histories: dict[str, list[HistoryItem]] = {}
 
     async def send_message(self, envelope: Any, *, parent_run_id: str | None = None) -> FakeHandle:
@@ -122,6 +123,11 @@ class FakeApplication:
         run_id = f"run-{self._run_counter}"
         self.sent.append((envelope, run_id, parent_run_id))
         return FakeHandle(run_id, self._events, self._gate)
+
+    def decide_approval(
+        self, approval_id: str, *, run_id: str, session_id: str, principal: str, approve: bool
+    ) -> None:
+        self.decisions.append((approval_id, run_id, session_id, principal, approve))
 
     async def cancel_run(self, run_id: str) -> None:
         self.cancelled.append(run_id)

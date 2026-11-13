@@ -8,8 +8,9 @@ and leave on ``Ctrl+C``, ``exit``/``quit``, or EOF. It touches only ``Applicatio
 
 from __future__ import annotations
 
+import asyncio
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TextIO
 
 from rich.console import Console
@@ -22,6 +23,8 @@ from agent_stack.gateways.tui.render import (
     failure_block,
     reasoning_block,
     subagent_block,
+    tool_args_lines,
+    tool_detail,
     tool_output_text,
     tool_started_block,
 )
@@ -43,17 +46,31 @@ def print_event(console: Console, event: AgentEvent) -> None:
         console.print(tool_output_text(event), end="")
     elif event.type is EventType.RUN_FAILED:
         console.print(failure_block(event))
+    elif event.type is EventType.APPROVAL_REQUIRED:
+        tool = str(event.data.get("tool", "tool"))
+        args = event.data.get("args")
+        detail = tool_detail(args) if tool == "run_command" else tool_args_lines(args)
+        console.print(f"[bold yellow]approval needed:[/] {tool} {detail}")
     elif event.type is EventType.SUBAGENT_STARTED:
         console.print(subagent_block(event, done=False))
     elif event.type is EventType.SUBAGENT_COMPLETED:
         console.print(subagent_block(event, done=True))
 
 
-class LineGateway:
-    """The REPL gateway: drive one message and stream its events to the console."""
+#: Answers an ``approval.required`` event: ``True`` approves, ``False`` rejects.
+Approver = Callable[[AgentEvent], Awaitable[bool]]
 
-    def __init__(self, out: Console | None = None) -> None:
+
+class LineGateway:
+    """The REPL gateway: drive one message and stream its events to the console.
+
+    ``approver`` decides gated tool calls. Without one every request is **rejected**, so an
+    unattended run can neither hang on a prompt nobody sees nor approve itself.
+    """
+
+    def __init__(self, out: Console | None = None, approver: Approver | None = None) -> None:
         self._out = out if out is not None else Console()
+        self._approver = approver
 
     async def handle_message(
         self,
@@ -64,6 +81,15 @@ class LineGateway:
         handle = await application.send_message(envelope)
         async for event in handle.events():
             print_event(self._out, event)
+            if event.type is EventType.APPROVAL_REQUIRED:
+                approved = await self._approver(event) if self._approver is not None else False
+                application.decide_approval(
+                    str(event.data["approval_id"]),
+                    run_id=event.run_id,
+                    session_id=event.session_id,
+                    principal=envelope.principal,
+                    approve=approved,
+                )
             yield event
 
 
@@ -77,7 +103,14 @@ async def run_cli(
     """Read lines from ``instream`` and run each through the application until EOF."""
     stream = instream if instream is not None else sys.stdin
     console = out if out is not None else Console()
-    gateway = LineGateway(out=console)
+
+    async def ask(event: AgentEvent) -> bool:
+        """Prompt on the console; only an explicit ``y`` approves."""
+        console.print("[bold]approve? [y/N][/bold] ", end="")
+        answer = await asyncio.to_thread(stream.readline)
+        return answer.strip().lower() in {"y", "yes"}
+
+    gateway = LineGateway(out=console, approver=ask)
 
     identity = IdentityResolver()
     principal_id = identity.resolve("cli", principal)

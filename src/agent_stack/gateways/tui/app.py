@@ -37,6 +37,7 @@ from agent_stack.gateways.tui.render import (
 from agent_stack.gateways.tui.theme import DARK, DEFAULT_THEME, LIGHT, THEMES
 from agent_stack.gateways.tui.widgets import (
     AgentMessage,
+    ApprovalScreen,
     Disclosure,
     HeaderBar,
     HelpScreen,
@@ -143,6 +144,7 @@ class TuiApp(App[None]):
         self._subagent_state: dict[str, tuple[str, str]] = {}
         self._tools_run = 0
         self._titles: dict[str, str] = {}
+        self._awaiting = 0  # approval requests currently open
         self._tasks: set[asyncio.Task[None]] = set()
 
     # ── layout ────────────────────────────────────────────────────────────────
@@ -242,6 +244,9 @@ class TuiApp(App[None]):
         try:
             async for event in handle.events():
                 self.handle_event(event)
+            if self._run_active and self._active_run_id == handle.run_id:
+                # The stream ended with no terminal event: a hard cancel publishes none.
+                self._finish_run("failed")
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # a broken run must not tear down the UI
@@ -260,7 +265,11 @@ class TuiApp(App[None]):
             # The screen has been torn down (quit or test teardown) while a stream
             # was still live; drop the event rather than touching dead widgets.
             return
-        if event.type is EventType.SUBAGENT_STARTED:
+        if event.type is EventType.APPROVAL_REQUIRED:
+            self._on_approval_required(event)  # from any run: a child can be blocked too
+        elif event.type is EventType.APPROVAL_RESOLVED:
+            self._on_approval_resolved(event)
+        elif event.type is EventType.SUBAGENT_STARTED:
             self._on_subagent_started(event)
         elif event.type is EventType.SUBAGENT_COMPLETED:
             self._on_subagent_completed(event)
@@ -296,6 +305,47 @@ class TuiApp(App[None]):
         elif etype is EventType.RUN_COMPLETED:
             self._finish_run("done")  # a successful run adds no row to the conversation
         self._refresh_all()
+
+    def _on_approval_required(self, event: AgentEvent) -> None:
+        """Pause on the card and ask the human; the answer goes back through the Application."""
+        call_id = str(event.data.get("tool_call_id", ""))
+        tool = str(event.data.get("tool", "tool"))
+        args = event.data.get("args")
+        card = self.cards.get(call_id)
+        if card is not None:
+            card.await_approval()
+        self._awaiting += 1
+        detail = tool_detail(args) if tool == "run_command" else tool_args_lines(args)
+        approval_id = str(event.data.get("approval_id", ""))
+
+        def answer(approved: bool | None) -> None:
+            if not self._run_active:
+                return  # the run ended (cancelled) while the dialog was open
+            try:
+                self.application.decide_approval(
+                    approval_id,
+                    run_id=event.run_id,
+                    session_id=event.session_id,
+                    principal=self._principal,
+                    approve=bool(approved),
+                )
+            except Exception as exc:  # a refused decision must not take the UI down
+                self.notify(str(exc), severity="warning")
+
+        self.push_screen(ApprovalScreen(tool, detail), answer)
+        self._refresh_all()
+
+    def _on_approval_resolved(self, event: AgentEvent) -> None:
+        self._awaiting = max(0, self._awaiting - 1)
+        card = self.cards.get(str(event.data.get("tool_call_id", "")))
+        if card is not None and event.data.get("status") == "approved":
+            card.resume_running()
+        self._refresh_all()
+
+    def _close_approval_dialogs(self) -> None:
+        """Dismiss any open approval dialog (the run it belonged to is over)."""
+        while isinstance(self.screen, ApprovalScreen):
+            self.screen.dismiss(False)
 
     def _on_reasoning(self, event: AgentEvent) -> None:
         text = str(event.data.get("text", ""))
@@ -359,6 +409,8 @@ class TuiApp(App[None]):
     def _finish_run(self, outcome: str) -> None:
         if not self._run_active and outcome == "failed":
             return
+        self._close_approval_dialogs()
+        self._awaiting = 0
         self._last_elapsed = time.monotonic() - self._run_started if self._run_started else 0.0
         self._last_outcome = "cancelled" if self._cancel_sent and outcome == "failed" else outcome
         self._run_active = False
@@ -414,6 +466,8 @@ class TuiApp(App[None]):
         now = time.monotonic() if now is None else now
         if self._run_active and self._cancel_sent:
             state = "[$warning]◌ cancelling…[/]"
+        elif self._run_active and self._awaiting:
+            state = "[$warning]? needs your approval[/]"
         elif self._run_active:
             frame = _SPINNER[int(now * 10) % len(_SPINNER)]
             state = f"[$accent]{frame} working {format_duration(now - self._run_started)}[/]"
@@ -430,7 +484,13 @@ class TuiApp(App[None]):
     def _sidebar_state(self) -> SidebarState:
         running = sum(1 for c in self.cards.values() if c.status == "running")
         if self._run_active:
-            word = "cancelling" if self._cancel_sent else "working"
+            word = (
+                "cancelling"
+                if self._cancel_sent
+                else "awaiting approval"
+                if self._awaiting
+                else "working"
+            )
         else:
             word = self._last_outcome or "idle"
         return SidebarState(

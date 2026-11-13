@@ -9,6 +9,7 @@ from agent_stack.app.config import AppConfig
 from agent_stack.context.composer import SystemPromptComposer
 from agent_stack.context.instructions import InstructionsLoader
 from agent_stack.core.agent import Agent, SubAgentSpec
+from agent_stack.core.approval import ApprovalBroker, ToolPolicy
 from agent_stack.core.context import ContextBuilder
 from agent_stack.core.event_bus import InMemoryEventBus
 from agent_stack.core.factory import AgentFactory
@@ -148,13 +149,16 @@ def build_application(config: AppConfig | None = None) -> Application:
             ),
         ),
         system_prompt=DEFAULT_SYSTEM_PROMPT,
+        tool_policy=ToolPolicy(frozenset(resolved.approval_tools)),
     )
+    approvals = ApprovalBroker()
     factory = AgentFactory(
         session_store=session_store,
         event_bus=event_bus,
         session_lock=locks,
         context_builder=context_builder,
         system_parts=composer,
+        approvals=approvals,
     )
     runtime = factory.create(agent)
     run_manager = RunManager(
@@ -172,4 +176,5 @@ def build_application(config: AppConfig | None = None) -> Application:
         session_store=session_store,
         run_manager=run_manager,
         event_bus=event_bus,
+        approvals=approvals,
     )

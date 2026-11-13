@@ -31,6 +31,7 @@ from agent_stack.gateways.tui.render import diff_kind
 
 __all__ = [
     "AgentMessage",
+    "ApprovalScreen",
     "Disclosure",
     "HeaderBar",
     "HelpScreen",
@@ -246,6 +247,18 @@ class Disclosure(Vertical):
         self._stale = True
         self._sync()
 
+    def await_approval(self) -> None:
+        """Show that the call is paused for a human's decision."""
+        self.status = "waiting"
+        self._stale = True
+        self._sync()
+
+    def resume_running(self) -> None:
+        """The call was approved and is executing."""
+        self.status = "running"
+        self._stale = True
+        self._sync()
+
     def tick(self, now: float) -> None:
         if not self.needs_tick or not self._ready:
             return
@@ -270,6 +283,8 @@ class Disclosure(Vertical):
     def _glyph(self, now: float) -> str:
         if self.status == "running":
             return f"[$accent]{_spinner(now)}[/]"
+        if self.status == "waiting":
+            return "[$warning]?[/]"
         if self.status == "failed":
             return "[$error]✗[/]"
         if self.status == "done":
@@ -289,7 +304,9 @@ class Disclosure(Vertical):
         else:
             detail = f"  [$foreground-muted]{escape(self.detail)}[/]" if self.detail else ""
             main = f"{chevron} {self._glyph(now)} [bold $accent]{escape(self.label)}[/]{detail}"
-        if self.status == "running":
+        if self.status == "waiting":
+            meta = "[$warning]awaiting approval[/]"
+        elif self.status == "running":
             meta = f"[$foreground-muted]{format_duration(now - self._t0)}[/]"
         elif self.status in ("done", "failed"):
             lines = f" · {self.line_count} lines" if self.line_count > SHORT_OUTPUT else ""
@@ -632,3 +649,36 @@ class SessionPicker(ModalScreen[str | None]):
 
     def action_close(self) -> None:
         self.dismiss(None)
+
+
+class ApprovalScreen(ModalScreen[bool]):
+    """Ask whether a gated tool call may run: ``y`` approves, ``n`` / Esc rejects.
+
+    There is deliberately no Enter shortcut, so a stray keypress cannot approve a command.
+    """
+
+    BINDINGS: ClassVar[list[Any]] = [
+        Binding("y", "answer(True)", "approve"),
+        Binding("n,escape", "answer(False)", "reject"),
+    ]
+
+    def __init__(self, tool: str, detail: str) -> None:
+        super().__init__()
+        self._tool = tool
+        self._detail = detail
+
+    def compose(self):  # type: ignore[no-untyped-def]
+        with Vertical(id="approval-card"):
+            yield Static("[bold $warning]Approval needed[/]", id="approval-title")
+            yield Static(
+                f"The agent wants to run [bold $accent]{escape(self._tool)}[/]:",
+                id="approval-what",
+            )
+            yield Static(escape(self._detail) or "(no arguments)", id="approval-detail")
+            yield Static(
+                "[bold $success]y[/] approve    [bold $error]n[/] / esc reject",
+                id="approval-foot",
+            )
+
+    def action_answer(self, approved: bool) -> None:
+        self.dismiss(approved)
