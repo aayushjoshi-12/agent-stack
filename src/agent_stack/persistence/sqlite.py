@@ -471,7 +471,7 @@ class SqliteSessionStore:
     async def delete(self, session_id: str) -> None:
         await self._conversation.delete(session_id)
         await self._db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-        for table in ("runs", "message_index", "artifacts_index", "checkpoints"):
+        for table in ("runs", "message_index", "artifacts_index", "checkpoints", "todos"):
             await self._db.execute(f"DELETE FROM {table} WHERE session_id = ?", (session_id,))
         # tool_executions rows belong to runs (no session column): drop the orphans above.
         await self._db.execute(

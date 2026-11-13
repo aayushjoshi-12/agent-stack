@@ -1082,7 +1082,7 @@ file-based memory topics (P16d), which hold longer project notes. Tests:
 
 ---
 
-## Phase 22 — Planning / TODOs ⬜
+## Phase 22 — Planning / TODOs ✅
 
 **Goal.** Small explicit task list the model can manage. §55.
 
@@ -1092,6 +1092,12 @@ file-based memory topics (P16d), which hold longer project notes. Tests:
 
 **Acceptance**
 - Todos survive a checkpoint and resume.
+
+**Done:** `TodoItem` / `TodoStatus` in `core/state.py`; `persistence/todos.py` (`SqliteTodoStore`,
+new `todos` table, schema v4, removed when its session is deleted); `todo_list` / `todo_add` /
+`todo_complete` tools (`tools/builtins/todos.py`) wired in `bootstrap`. Todos belong to the
+*session*, not to a run, so they survive a checkpoint resume, a later message and a restart; ids
+are per session and never shared by concurrent adds. Tests: `tests/unit/test_todos.py`.
 
 **Defer:** sophisticated planners, DAG workflows.
 

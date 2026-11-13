@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -90,6 +90,15 @@ CREATE TABLE IF NOT EXISTS memory_items (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (namespace, key)
+);
+
+CREATE TABLE IF NOT EXISTS todos (
+    session_id TEXT NOT NULL,
+    id         INTEGER NOT NULL,
+    text       TEXT NOT NULL,
+    status     TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_checkpoints_run ON checkpoints(run_id);

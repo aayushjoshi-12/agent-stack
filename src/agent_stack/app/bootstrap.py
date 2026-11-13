@@ -26,11 +26,13 @@ from agent_stack.persistence.sqlite import (
     SqliteRunStore,
     SqliteSessionStore,
 )
+from agent_stack.persistence.todos import SqliteTodoStore
 from agent_stack.skills import SkillLoader, SkillRegistry, skill_tools
 from agent_stack.subagents.delegation import control_tools
 from agent_stack.tools.builtins.filesystem import filesystem_tools
 from agent_stack.tools.builtins.memory import persistent_memory_tools
 from agent_stack.tools.builtins.terminal import run_command_tool
+from agent_stack.tools.builtins.todos import todo_tools
 
 load_dotenv()
 
@@ -143,6 +145,7 @@ def build_application(config: AppConfig | None = None) -> Application:
             *skill_tools(skills),
             *memory_tools(memory),
             *persistent_memory_tools(SqliteMemoryStore(db)),
+            *todo_tools(SqliteTodoStore(db)),
         ),
         subagents=(
             SubAgentSpec(

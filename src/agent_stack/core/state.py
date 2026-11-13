@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-__all__ = ["Checkpoint", "CheckpointStatus"]
+__all__ = ["Checkpoint", "CheckpointStatus", "TodoItem", "TodoStatus"]
 
 
 class CheckpointStatus(StrEnum):
@@ -33,3 +33,17 @@ class Checkpoint:
     tool_call_count: int
     status: CheckpointStatus
     created_at: str
+
+
+class TodoStatus(StrEnum):
+    PENDING = "pending"
+    DONE = "done"
+
+
+@dataclass(frozen=True)
+class TodoItem:
+    """One entry of a session's task list; ``id`` is stable and unique within the session."""
+
+    id: int
+    text: str
+    status: TodoStatus = TodoStatus.PENDING
