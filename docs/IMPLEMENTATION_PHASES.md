@@ -1268,7 +1268,7 @@ Tests: `tests/unit/test_approval.py` (+ TUI and CLI tests).
 
 ---
 
-## Phase 27 — Observability & invariant tests ⬜
+## Phase 27 — Observability & invariant tests ✅
 
 **Goal.** Make the system debuggable and lock in the invariants. §87–89, §92.
 
@@ -1289,6 +1289,16 @@ Tests: `tests/unit/test_approval.py` (+ TUI and CLI tests).
 
 **Acceptance**
 - All invariants pass; no secret appears in logs (§81, §87).
+
+**Done:** `observability/redact.py` (one `redact()` for provider keys, bearer tokens, JWTs,
+`name=value` pairs, private-key blocks and known env secret values; the audit log now redacts
+values, not just key names), `observability/logging.py` (`JsonLogFormatter`, `configure_logging`
+-> `<workspace>/.agent/logs/agent.jsonl`, `EventLogger`), `observability/metrics.py` (counters and
+timings derived from events), `observability/sinks.py` (`FanoutSink`: audit + log + metrics hang
+off the one bus choke point, so the runtime carries no instrumentation). Run trace identity is
+`trace_id` on every log line (the root run of a delegation chain) beside `run_id` / `parent_run_id`,
+so there is no separate `tracing.py`. `tests/invariants/test_invariants.py` encodes all eight
+invariants; `tests/unit/test_observability.py` includes the no-secret-in-any-log acceptance test.
 
 **Defer:** OpenTelemetry exporters, dashboards.
 

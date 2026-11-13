@@ -19,6 +19,9 @@ from agent_stack.core.workspace import WorkspacePolicy
 from agent_stack.memory import MemoryIndex, memory_tools
 from agent_stack.memory.store import SqliteMemoryStore
 from agent_stack.observability.audit import AuditLogger, audit_log_path
+from agent_stack.observability.logging import EventLogger, configure_logging
+from agent_stack.observability.metrics import Metrics
+from agent_stack.observability.sinks import FanoutSink
 from agent_stack.persistence.conversation import FileConversationStore
 from agent_stack.persistence.sqlite import (
     SqliteCheckpointStore,
@@ -98,7 +101,9 @@ def build_application(config: AppConfig | None = None) -> Application:
     run_store = SqliteRunStore(db)
     checkpoint_store = SqliteCheckpointStore(db)
     audit = AuditLogger(audit_log_path(workspace))
-    event_bus = InMemoryEventBus(audit=audit)
+    metrics = Metrics()
+    configure_logging(workspace / ".agent" / "logs" / "agent.jsonl")
+    event_bus = InMemoryEventBus(audit=FanoutSink(audit, EventLogger(), metrics))
     locks = SessionLockManager()
 
     policy = WorkspacePolicy(root=workspace)
@@ -183,4 +188,5 @@ def build_application(config: AppConfig | None = None) -> Application:
         run_manager=run_manager,
         event_bus=event_bus,
         approvals=approvals,
+        metrics=metrics,
     )

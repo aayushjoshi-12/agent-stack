@@ -27,6 +27,7 @@ from agent_stack.core.factory import AgentFactory
 from agent_stack.core.run import Run, RunHandle, RunManager, RunRequest
 from agent_stack.core.session import Session, SessionStore
 from agent_stack.gateways.base import HistoryItem, MessageEnvelope, SessionSummary
+from agent_stack.observability.metrics import Metrics
 
 
 @dataclass
@@ -43,6 +44,7 @@ class Application:
     run_manager: RunManager
     event_bus: EventBus
     approvals: ApprovalBroker = field(default_factory=ApprovalBroker)
+    metrics: Metrics = field(default_factory=Metrics)
 
     async def send_message(
         self,

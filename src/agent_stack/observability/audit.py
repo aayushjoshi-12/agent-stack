@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_stack.core.events import AgentEvent
+from agent_stack.observability.redact import env_secrets, redact
 
 __all__ = ["AuditLogger", "audit_log_path", "read_audit"]
 
@@ -42,20 +43,20 @@ def _cap(value: str) -> str:
     return f"{kept}...[truncated {removed} bytes]"
 
 
-def _sanitize(value: Any) -> Any:
+def _sanitize(value: Any, known: list[str]) -> Any:
     if isinstance(value, str):
-        return _cap(value)
+        return _cap(redact(value, known))
     if isinstance(value, Mapping):
         return {
-            str(key): _REDACTED if _is_secret(str(key)) else _sanitize(item)
+            str(key): _REDACTED if _is_secret(str(key)) else _sanitize(item, known)
             for key, item in value.items()
         }
     if isinstance(value, (list, tuple)):
-        return [_sanitize(item) for item in value]
+        return [_sanitize(item, known) for item in value]
     return value
 
 
-def audit_record(event: AgentEvent) -> dict[str, Any]:
+def audit_record(event: AgentEvent, known: list[str] | None = None) -> dict[str, Any]:
     """The one-line schema: timestamp, identity, ordering, type, capped/redacted data."""
     return {
         "ts": event.timestamp.isoformat(),
@@ -64,7 +65,7 @@ def audit_record(event: AgentEvent) -> dict[str, Any]:
         "parent_run_id": event.parent_run_id,
         "sequence": event.sequence,
         "type": event.type.value,
-        "data": _sanitize(dict(event.data)),
+        "data": _sanitize(dict(event.data), env_secrets() if known is None else known),
     }
 
 
@@ -77,12 +78,13 @@ class AuditLogger:
 
     def __init__(self, path: Path) -> None:
         self.path = path
+        self._known = env_secrets()
         path.parent.mkdir(parents=True, exist_ok=True)
         self._file = path.open("a", encoding="utf-8")
 
     def write(self, event: AgentEvent) -> None:
         """Append one audit line for ``event`` and flush so a live tail sees it."""
-        line = json.dumps(audit_record(event), ensure_ascii=False, default=str)
+        line = json.dumps(audit_record(event, self._known), ensure_ascii=False, default=str)
         self._file.write(line + "\n")
         self._file.flush()
 
