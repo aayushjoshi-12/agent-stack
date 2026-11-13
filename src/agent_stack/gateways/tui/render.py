@@ -19,11 +19,13 @@ from agent_stack.core.events import AgentEvent
 
 __all__ = [
     "assistant_block",
+    "diff_kind",
     "failure_block",
     "human_block",
     "output_line_text",
     "reasoning_block",
     "subagent_block",
+    "tool_label",
     "tool_output_text",
     "tool_started_block",
 ]
@@ -101,6 +103,28 @@ def tool_output_text(event: AgentEvent) -> str:
     return str(event.data.get("chunk", ""))
 
 
+def diff_kind(line: str) -> str:
+    """Classify one output line: ``meta`` (file headers), ``hunk``, ``add``, ``del``, ``ctx``."""
+    if line.startswith(_DIFF_MARKERS):
+        return "meta"
+    if line.startswith("@@"):
+        return "hunk"
+    if line.startswith("+"):
+        return "add"
+    if line.startswith("-"):
+        return "del"
+    return "ctx"
+
+
+_DIFF_STYLE = {
+    "meta": "bold dim",
+    "hunk": _DIFF_HUNK,
+    "add": _DIFF_ADD,
+    "del": _DIFF_DEL,
+    "ctx": "dim",
+}
+
+
 def output_line_text(line: str, *, diff: bool) -> Text:
     """One line of tool output for the command panel.
 
@@ -110,17 +134,12 @@ def output_line_text(line: str, *, diff: bool) -> Text:
     line = line.rstrip("\n")
     if not diff:
         return Text(line if line else " ", style="dim")
-    if line.startswith(_DIFF_MARKERS):
-        style = "bold dim"
-    elif line.startswith("@@"):
-        style = _DIFF_HUNK
-    elif line.startswith("+"):
-        style = _DIFF_ADD
-    elif line.startswith("-"):
-        style = _DIFF_DEL
-    else:
-        style = "dim"
-    return Text(line, style=style)
+    return Text(line, style=_DIFF_STYLE[diff_kind(line)])
+
+
+def tool_label(event: AgentEvent) -> tuple[str, str]:
+    """``(tool name, short detail)`` for a ``tool.started`` event."""
+    return str(event.data.get("tool", "tool")), _detail(event.data.get("args")) or ""
 
 
 def subagent_block(event: AgentEvent, *, done: bool) -> Text:

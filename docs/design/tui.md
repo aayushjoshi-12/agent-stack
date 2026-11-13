@@ -1,114 +1,89 @@
 # TUI design conventions
 
-> The rules the Textual TUI (`gateways/tui/`) is built to. The theming *decision* is
-> [ADR 011](../decisions/011-terminal-native-theme.md); this is the working reference.
+> The rules the Textual TUI (`gateways/tui/`) is built to. The decision is
+> [ADR 012](../decisions/012-tui-revamp.md) (it partly supersedes
+> [ADR 011](../decisions/011-terminal-native-theme.md)); this is the working reference.
 
-## Principle
+## Principles
 
-The TUI is a **terminal citizen**: it borrows the user's colours and spacing conventions
-rather than importing a visual identity. It has no palette of its own and never paints a
-background except for the one deliberate surface below. It should look native whether the
-terminal is dark, light or custom — legibility is the terminal's job, not ours.
+1. **Roles, not colours.** The stylesheet (`styles.tcss`) and markup only name theme roles
+   (`$primary`, `$accent`, `$success`, `$error`, `$foreground-muted`, `$surface`, `$panel`).
+   Every literal colour lives in `theme.py`, so any theme restyles the whole app.
+2. **Depth from layers, not borders.** `$background < $surface < $panel`. Borders appear only
+   as a thick left accent bar (user message, composer, errors) and on the help overlay.
+3. **State is never colour alone.** Spinner / ✓ / ✗ glyphs plus words and durations.
+4. **Never block, always escapable.** Agent work runs in tasks; `esc` always cancels a live run
+   or returns focus to the prompt.
+5. **Fixed positions.** Header, conversation, composer, sidebar and footer never move.
+
+## Themes
+
+`agent-stack-dark` (default) and `agent-stack-light` are true-colour. `AGENT_STACK_THEME`
+accepts them, the terminal-native `ansi-dark` / `ansi-light`, or any built-in Textual theme;
+an unknown name falls back to the default. `ctrl+t` toggles dark/light; the command palette
+lists every theme.
 
 ## Layout
 
-Two columns, separated by **panel colour, never a rule or box**:
-
 ```
-conv-title  bold task title (the first user message) · "+" (new conversation)   height 1
-main        conversation (2fr) │ context sidebar (1fr)
-composer    darker panel with a 1-cell input accent on its left edge
-status      path · run/session · context usage · ctrl+p commands                height 1
+HeaderBar   ◆ agent-stack · task title ......... run state · model        height 1
+#body       conversation (1fr)                  │ sidebar (34 / 40 wide)
+              #chat  (VerticalScroll)           │   SESSION · CONTEXT meter
+              #composer (multi-line)            │   ACTIVITY · SUBAGENTS
+              #hints  model · key hint          │   WORKSPACE (path, branch)
+Footer      esc cancel · ^n new · ^b sidebar · f1 help ........ ^p palette
 ```
 
-- The conversation column holds the chat (`VerticalScroll`), the composer, then the
-  status bar. The sidebar holds the task title, a `Context` heading, an estimated token
-  count and percentage, empty space, and its own path at the bottom.
-- Every region that needs separation sits on a **slightly darker panel**: the sidebar,
-  the composer, user messages, terminal transcripts, and fenced code blocks. The `.panel`
-  class is `ansi_black` on dark terminals and flips to `ansi_bright_black` (`:light`) so
-  light themes stay readable. There are **no divider lines**; whitespace does the rest.
-- Spacing uses a fixed scale: `0 · 1 cell · 2 cells` (padding), and `margin-bottom: 1`
-  between conversation rows.
+## Responsive
 
-## Conversation
+Textual breakpoints put classes on the screen (`HORIZONTAL_BREAKPOINTS`,
+`VERTICAL_BREAKPOINTS` on `TuiApp`); `styles.tcss` reacts to them:
 
-The chat is a `VerticalScroll` of message widgets, not a raw `RichLog`, so rows can differ:
+| Class | When | Effect |
+|---|---|---|
+| `-narrow` | < 100 cols | sidebar and model name hidden, tighter gutters |
+| `-normal` / `-wide` | 100 to 139 / 140+ | sidebar 34 / 40 wide |
+| `-short` | < 24 rows | hints, welcome and row spacing dropped |
+| `-show-sidebar` / `-hide-sidebar` | `ctrl+b` | explicit override of the width default |
 
-| Row | Treatment |
-|---|---|
-| user message | `.msg-user panel` — a darker panel so it reads as *yours* |
-| assistant message | a Textual `Markdown` widget: headings are bold `ansi_magenta`, bold is bold, inline code sits on a darker tint |
-| fenced code | syntax-highlighted with Textual's ANSI-aware fence themes (only generated blocks: no language tag ⇒ no highlight) |
-| thinking | a `Collapsible` titled `Thinking` (yellow), collapsed by default; `[+]` / `[-]` toggles, body is dim italic. The widget's own `hkey` rule is removed — it is a divider line |
-| tool call | `.tool-line` — `→ <tool>  <command-or-arg>` (tool name green) |
-| `run_command` | a `.cmd-block panel` — an inline terminal transcript: the `→ run_command  <cmd>` line, then output. Output is diff-coloured once it shows `diff --git`/`@@` markers: headers dim bold, hunks cyan, `+` green, `-` red; otherwise it stays dim |
-| subagent | `.subagent-line` — `→ name  started` / `→ name  done` |
-| failure | `.msg-error` — the one alarming tone (`bold red`) |
+## Conversation rows (`widgets.py`)
 
-A successful run emits **no chat line** — there is no "run completed" noise. Child-run
-detail events stay out of the parent conversation; subagents appear only as their two
-lifecycle rows. The empty conversation starts blank: no banner, no ASCII art.
+| Row | Widget | Treatment |
+|---|---|---|
+| user message | `UserMessage` | `$panel` surface with a `$primary` accent bar |
+| assistant message | `AgentMessage` (Markdown) | headings coloured by level; inline code on `$panel`; fences on `$surface` |
+| thinking | `Disclosure("think")` | collapsed, italic muted; toggles with Enter / click |
+| tool call | `Disclosure("tool")` | header `chevron · spinner/✓/✗ · name · detail · duration`; `run_command` opens while running |
+| tool output | body of the card | last 10 lines while running, last 60 when opened later; 400 lines kept, older ones counted as "earlier lines hidden"; diff-coloured when it looks like a unified diff |
+| subagent | `SubagentRow` | one row, updated in place: running spinner then ✓ done |
+| failure | `Notice(kind="error")` | `$error-muted` surface with an error bar |
 
-## Task title, sidebar, status
+A successful run adds no row. Finished cards fold when their output is longer than 6 lines
+(failed cards stay open); a card the user toggled keeps the user's choice. Child-run detail
+events stay out of the parent conversation.
 
-- The first user message becomes the **task title**, shown in the conversation title row
-  (truncated) and the sidebar (wrapped). `+` or the palette's *New conversation* resets it.
-- The sidebar `Context` section shows an **estimated** token count (≈ 4 chars/token across
-  everything written to the chat, capped at a 200K window) and the percentage used; the
-  status bar repeats it as `12.3K (6%)`.
-- The status bar shows the workspace path (with the current `git` branch when available),
-  the active run id, the context usage, and the `ctrl+p commands` hint. The sidebar has
-  its own path line at its bottom.
+## Composer
 
-## Text
+`PromptArea` is a multi-line `TextArea` (1 to 8 lines). `enter` sends; `ctrl+j`, `shift+enter`
+or `alt+enter` inserts a newline; `up`/`down` walk the sent history from the first/last line;
+`pageup`/`pagedown` scroll the conversation. While a run is active, submitting is refused with a
+notification and the text is kept.
 
-Styling is **semantic, not decorative** (`render.py`):
+## Header and sidebar
 
-| Verb | Style |
-|---|---|
-| headings | bold `ansi_magenta` (ANSI standard, so it is the terminal's purple/lavender) |
-| tool / subagent names | green (ANSI standard) |
-| secondary (commands, status words, tokens, output) | dim |
-| the model's working (thinking body) | dim italic |
-| diff additions / removals / hunks | green / red / cyan (ANSI standard) |
-| failure | **bold red** — the only alarming tone |
-
-There are **no box-drawing glyphs** in the app: no tree guides or expanders, no
-`✓`/`✗`/`·` status marks, no divider lines. The collapsible toggle is plain `[+]` / `[-]`,
-and tool rows use the reference's `→` arrow. Status is carried by words.
-
-Colour is used sparingly as an accent: headings, tool names, the thinking label, the
-diff roles, and the status-bar context. It never carries meaning on its own.
-
-## Scrollbars
-
-One cell thick (`scrollbar-size-vertical: 1`) with a transparent track
-(`scrollbar-background: transparent`) and a muted `ansi_bright_black` thumb that brightens
-to `$accent` on hover/drag. Only the chat scrolls.
-
-## Responsive collapse
-
-Textual CSS has no media queries, so `_apply_responsive` toggles a `narrow` class on the
-screen from `on_resize` (using `event.size`, since `App.size` is stale inside the
-handler):
-
-- `< 100` columns → hide the context sidebar (keep the conversation readable)
-- `ctrl+b` → force the sidebar back on, overriding the width heuristic
+The header shows the run state (`● idle`, `⠋ working 12s`, `◌ cancelling…`, `✓ done 12s`,
+`■ cancelled`, `✗ failed`). The sidebar shows the session, an **estimated** context meter
+(about 4 chars per token against a 200K window; amber at 70%, red at 90%), tool-call count,
+the last four subagents, and the workspace with the git branch.
 
 ## Keys
 
-`Enter` send · `Ctrl+C` cancel a run, or quit when idle · `Ctrl+Q` quit ·
-`Ctrl+P` command palette (cancel run, new conversation, interrupt last subagent, focus
-prompt, quit) · `Ctrl+B` toggle the sidebar.
+`enter` send · `shift+enter`/`ctrl+j` newline · `esc` cancel run or focus prompt ·
+`ctrl+c` cancel, then quit · `ctrl+q` quit · `ctrl+n` new conversation · `ctrl+b` sidebar ·
+`ctrl+t` theme · `ctrl+p` palette · `f1` help overlay.
 
-## Overriding Textual's ANSI defaults
+## Performance
 
-Textual's `*:ansi` styles sometimes add noise or fail on one polarity. Overridden in
-`app.py` CSS, each with a comment:
-
-- `Collapsible` `hkey` border-top → removed (a divider line).
-- `Markdown` inline code / fences: the `:ansi` defaults make them transparent → darker
-  panels (`ansi_black`, flipped by `:light`).
-- `Button` — Textual's ANSI flat/default buttons are tall boxes → 1-line flat text.
-- scrollbars — Textual's bright-magenta thumb → muted grey (see above).
+Output is coalesced: cards mark themselves stale and a 10 Hz tick repaints them, so a fast
+stream costs one repaint per tick, not per chunk. The chat is anchored to the bottom only once
+a conversation exists (an anchored container bottom-aligns short content).

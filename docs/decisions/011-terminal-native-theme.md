@@ -1,6 +1,6 @@
 # ADR 011 — The TUI inherits the terminal's theme
 
-**Status:** Accepted
+**Status:** Partially superseded by [ADR 012](012-tui-revamp.md). The terminal-native `ansi-*` themes remain selectable via `AGENT_STACK_THEME`; the default look, layout and responsiveness changed.
 
 ## Context
 

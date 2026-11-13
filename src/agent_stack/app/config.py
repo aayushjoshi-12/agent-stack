@@ -25,10 +25,10 @@ class AppConfig:
     workspace: Path = field(default_factory=Path.cwd)
     #: Explicit index path; ``None`` means ``<workspace>/agent.db`` (see :attr:`database`).
     db_path: Path | None = None
-    #: TUI theme name. Defaults to Textual's terminal-native ANSI theme, whose
-    #: foreground/background/surface are the terminal's own colours; set ``ansi-light``
-    #: (or any Textual theme) to suit a light terminal. See ADR 011.
-    theme: str = "ansi-dark"
+    #: TUI theme name. Defaults to the app's true-colour ``agent-stack-dark``; set
+    #: ``agent-stack-light``, ``ansi-dark``/``ansi-light`` (terminal-native colours) or any
+    #: Textual theme. See ADR 012.
+    theme: str = "agent-stack-dark"
 
     @property
     def database(self) -> Path:
