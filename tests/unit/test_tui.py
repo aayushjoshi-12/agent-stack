@@ -272,6 +272,31 @@ async def test_help_overlay_keeps_the_dimmed_backdrop() -> None:
         assert 0 < background.a < 1  # translucent, so the app stays faintly visible
 
 
+async def test_a_failed_tool_shows_failed_and_stays_open() -> None:
+    app = _app()
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.handle_event(
+            event(
+                EventType.TOOL_STARTED, tool="run_command", tool_call_id="f", args={"command": "x"}
+            )
+        )
+        app.handle_event(
+            event(
+                EventType.TOOL_COMPLETED,
+                tool="run_command",
+                tool_call_id="f",
+                ok=False,
+                error="exit 2",
+            )
+        )
+        await _settle(pilot, 3)
+        card = app.cards["f"]
+        assert card.status == "failed"
+        assert card.has_class("-failed")
+        assert "✗" in str(card.query_one(".dh-main").render())
+
+
 async def test_tool_card_holds_partial_lines_until_complete() -> None:
     app = _app()
 

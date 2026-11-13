@@ -289,7 +289,8 @@ class TuiApp(App[None]):
         elif etype is EventType.TOOL_COMPLETED:
             card = self.cards.get(str(event.data.get("tool_call_id")))
             if card is not None:
-                card.finish("done")
+                ok = event.data.get("ok", True)  # older events carry no flag
+                card.finish("done" if ok else "failed")
         elif etype is EventType.RUN_FAILED:
             self._on_failed(event)
         elif etype is EventType.RUN_COMPLETED:

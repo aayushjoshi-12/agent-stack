@@ -76,6 +76,29 @@ async def test_unknown_tool_becomes_tool_message() -> None:
     assert result.message.tool_call_id == "u1"
 
 
+async def test_tool_timeout_becomes_error_message() -> None:
+    executor = ToolExecutor(ToolRegistry((SleepTool("slow", 5.0),)), timeout_seconds=0.05)
+
+    start = time.perf_counter()
+    result = await executor.execute_one(_call("slow", {}, id="t1"))
+
+    assert time.perf_counter() - start < 1.0  # cut off, not waited out
+    assert result.success is False
+    assert result.message.status == "error"
+    assert "timed out after 0.05s" in result.message.content
+    assert result.message.tool_call_id == "t1"
+
+
+async def test_tool_error_is_not_reported_as_a_timeout() -> None:
+    executor = ToolExecutor(
+        ToolRegistry((FailingTool(name="boom", message="kaboom"),)), timeout_seconds=5.0
+    )
+
+    result = await executor.execute_one(_call("boom", {}, id="e2"))
+
+    assert result.error == "kaboom"
+
+
 async def test_execute_many_preserves_order() -> None:
     first = _RecordingTool("first", result="one")
     second = _RecordingTool("second", result="two")

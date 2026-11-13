@@ -6,6 +6,7 @@ duck-typed echo tool, and real `ToolRegistry`/`ToolExecutor`. No network, no rea
 
 from __future__ import annotations
 
+import time
 from collections.abc import Sequence
 from typing import Any
 
@@ -13,13 +14,17 @@ import pytest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
 from agent_stack.core.agent import Agent
-from agent_stack.core.errors import StepLimitExceeded
+from agent_stack.core.errors import (
+    RuntimeDeadlineExceeded,
+    StepLimitExceeded,
+    ToolCallLimitExceeded,
+)
 from agent_stack.core.limits import AgentLimits
 from agent_stack.core.runtime import AgentRuntime
 from agent_stack.core.session import InMemorySessionStore
 from agent_stack.tools.executor import ToolExecutor
 from agent_stack.tools.registry import ToolRegistry
-from tests.fakes import FailingTool, FakeChatModel, ai, call
+from tests.fakes import FailingTool, FakeChatModel, SleepTool, ai, call
 
 
 class EchoTool:
@@ -135,6 +140,52 @@ async def test_stops_after_max_steps() -> None:
     runtime = _build_runtime(model, [EchoTool()], store, limits=AgentLimits(max_steps=1))
 
     with pytest.raises(StepLimitExceeded):
+        await runtime.run(session_id="s1", user_id="u1", message="go")
+
+
+async def test_stops_after_max_tool_calls() -> None:
+    store = InMemorySessionStore()
+    model = FakeChatModel(
+        [
+            ai(tool_calls=[call("echo", {"x": 1}), call("echo", {"x": 2})]),
+            ai(tool_calls=[call("echo", {"x": 3})]),
+        ]
+    )
+    runtime = _build_runtime(model, [EchoTool()], store, limits=AgentLimits(max_tool_calls=2))
+
+    with pytest.raises(ToolCallLimitExceeded):
+        await runtime.run(session_id="s1", user_id="u1", message="go")
+
+
+async def test_stops_after_runtime_deadline() -> None:
+    store = InMemorySessionStore()
+    model = FakeChatModel([ai(tool_calls=[call("slow", {})]), ai("never reached")])
+    runtime = _build_runtime(
+        model,
+        [SleepTool("slow", 5.0)],
+        store,
+        limits=AgentLimits(max_runtime_seconds=0.2, tool_timeout_seconds=60.0),
+    )
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeDeadlineExceeded):
+        await runtime.run(session_id="s1", user_id="u1", message="go")
+
+    assert time.monotonic() - started < 2.0  # stopped by the deadline, not by the tool
+
+
+async def test_provider_timeout_is_not_mistaken_for_the_run_deadline() -> None:
+    class TimingOutModel:
+        def bind_tools(self, tools: Any) -> TimingOutModel:
+            return self
+
+        async def ainvoke(self, messages: Any) -> Any:
+            raise TimeoutError("provider timed out")
+
+    store = InMemorySessionStore()
+    runtime = _build_runtime(TimingOutModel(), [], store)  # type: ignore[arg-type]
+
+    with pytest.raises(TimeoutError, match="provider timed out"):
         await runtime.run(session_id="s1", user_id="u1", message="go")
 
 

@@ -22,6 +22,7 @@ from typing import Any
 
 from langchain_core.messages import ToolMessage
 
+from agent_stack.core.errors import ToolTimeoutError
 from agent_stack.core.tool_stream import tool_output_sink
 from agent_stack.tools.registry import ToolRegistry
 
@@ -50,8 +51,10 @@ class ToolExecutionResult:
 class ToolExecutor:
     """Executes tool calls against a :class:`ToolRegistry`."""
 
-    def __init__(self, registry: ToolRegistry) -> None:
+    def __init__(self, registry: ToolRegistry, *, timeout_seconds: float | None = None) -> None:
         self.registry = registry
+        #: Per-call timeout; ``None`` means a call may run as long as it likes.
+        self.timeout_seconds = timeout_seconds
 
     async def execute_one(
         self,
@@ -68,14 +71,20 @@ class ToolExecutor:
         tool_call_id: str = tool_call["id"]
         tool_name = str(tool_call["name"])
 
+        deadline = asyncio.timeout(self.timeout_seconds)
         try:
             tool = self.registry.get(tool_name)
-            # Invoke with the *arguments*, never the whole tool_call dict.
-            if on_output is None:
-                result = await tool.ainvoke(tool_call["args"])
-            else:
-                result = await self._invoke_with_output(tool, tool_call, on_output)
+            async with deadline:
+                # Invoke with the *arguments*, never the whole tool_call dict.
+                if on_output is None:
+                    result = await tool.ainvoke(tool_call["args"])
+                else:
+                    result = await self._invoke_with_output(tool, tool_call, on_output)
         except Exception as exc:
+            if isinstance(exc, TimeoutError) and deadline.expired():
+                exc = ToolTimeoutError(
+                    f"tool '{tool_name}' timed out after {self.timeout_seconds}s"
+                )
             return ToolExecutionResult(
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,

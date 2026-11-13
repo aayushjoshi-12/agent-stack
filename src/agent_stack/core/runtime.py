@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 from uuid import uuid4
 
 from langchain_core.language_models import BaseChatModel
@@ -14,6 +16,7 @@ from agent_stack.core.cancellation import CancellationToken
 from agent_stack.core.context import ContextBuilder, SystemPartsProvider
 from agent_stack.core.errors import (
     AgentStackError,
+    RuntimeDeadlineExceeded,
     StepLimitExceeded,
     ToolCallLimitExceeded,
 )
@@ -50,6 +53,9 @@ def reasoning_text(message: AIMessage) -> str:
         return "\n\n".join(parts)
     raw = message.additional_kwargs.get("reasoning_content")
     return raw if isinstance(raw, str) else ""
+
+
+_T = TypeVar("_T")
 
 
 class AgentRuntime:
@@ -182,6 +188,7 @@ class AgentRuntime:
             history = compacted
 
         limits = self._agent.limits
+        deadline = time.monotonic() + limits.max_runtime_seconds
         step_count = 0
         tool_call_count = 0
 
@@ -202,8 +209,13 @@ class AgentRuntime:
                 if inbox is not None:
                     for text in inbox():
                         new_messages.append(HumanMessage(content=text))
-                response = await self._model.ainvoke(
-                    self._model_input(resident=resident, history=history, new_messages=new_messages)
+                response = await self._within(
+                    deadline,
+                    lambda: self._model.ainvoke(
+                        self._model_input(
+                            resident=resident, history=history, new_messages=new_messages
+                        )
+                    ),
                 )
                 if not isinstance(response, AIMessage):
                     raise AgentStackError(
@@ -286,15 +298,18 @@ class AgentRuntime:
                 # the model was thinking still stops the tools from running.
                 self._check_cancelled(cancel)
 
-                tool_results = await self._tool_executor.execute_many(
-                    pending,
-                    on_output=self._tool_output_emitter(
-                        run_id=run_id,
-                        session_id=session_id,
-                        parent_run_id=parent_run_id,
-                        tool_calls=pending,
-                    ),
-                )
+                def run_tools(batch: list[Any] = pending) -> Awaitable[list[Any]]:
+                    return self._tool_executor.execute_many(
+                        batch,
+                        on_output=self._tool_output_emitter(
+                            run_id=run_id,
+                            session_id=session_id,
+                            parent_run_id=parent_run_id,
+                            tool_calls=batch,
+                        ),
+                    )
+
+                tool_results = await self._within(deadline, run_tools)
 
                 if checkpoint_store is not None and tool_results:
                     # The whole batch lands in one transaction, atomically visible to recovery.
@@ -309,6 +324,8 @@ class AgentRuntime:
                         data={
                             "tool": result.tool_name,
                             "tool_call_id": result.tool_call_id,
+                            "ok": result.success,
+                            "error": result.error,
                         },
                     )
 
@@ -397,6 +414,26 @@ class AgentRuntime:
             return [SystemMessage(content=self._agent.system_prompt), *history, *new_messages]
         ctx = self._context_builder.build(system_parts=resident, history=[*history, *new_messages])
         return [SystemMessage(content="\n\n".join(ctx.system)), *ctx.messages]
+
+    async def _within(self, deadline: float, factory: Callable[[], Awaitable[_T]]) -> _T:
+        """Await ``factory()`` but never past the run's wall-clock ``deadline``.
+
+        The awaitable is built lazily so an already-expired deadline never leaves a
+        never-awaited coroutine behind. Only the timeout *this* scope set is converted;
+        a ``TimeoutError`` raised by the provider itself propagates unchanged.
+        """
+        remaining = deadline - time.monotonic()
+        limit = self._agent.limits.max_runtime_seconds
+        if remaining <= 0:
+            raise RuntimeDeadlineExceeded(f"Run exceeded its {limit}s runtime limit")
+        scope = asyncio.timeout(remaining)
+        try:
+            async with scope:
+                return await factory()
+        except TimeoutError as exc:
+            if scope.expired():
+                raise RuntimeDeadlineExceeded(f"Run exceeded its {limit}s runtime limit") from exc
+            raise
 
     def _check_cancelled(self, cancel: CancellationToken | None) -> None:
         if cancel is not None:

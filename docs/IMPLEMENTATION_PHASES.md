@@ -492,7 +492,7 @@ class AgentRuntime:
 
 ---
 
-## Phase 6 — Errors & limits ⬜
+## Phase 6 — Errors & limits ✅
 
 **Goal.** Classify failures; guarantee the loop terminates. §43, §93.
 
@@ -509,6 +509,14 @@ class AgentRuntime:
 - `test_stops_after_runtime_deadline`
 - `test_unknown_tool_becomes_error_message`
 - `test_tool_timeout_becomes_error_message`
+
+**Done:** `RuntimeDeadlineExceeded` and `ToolTimeoutError` join the hierarchy. The runtime
+enforces `max_runtime_seconds` as a wall-clock deadline around every model call and tool batch
+(a provider's own `TimeoutError` is not mistaken for it); the executor enforces
+`AgentLimits.tool_timeout_seconds` per call and returns an error `ToolMessage`. `tool.completed`
+now carries `ok` and `error`, so the TUI can show a failed tool (✗, card stays open). Tests:
+`test_stops_after_max_tool_calls`, `test_stops_after_runtime_deadline`,
+`test_tool_timeout_becomes_error_message` (+ the existing step-limit and unknown-tool tests).
 
 **Defer:** retry policies (§44–45) until a real transient failure appears.
 
@@ -1158,8 +1166,7 @@ multi-line composer with history, a header with run state, a richer sidebar, a f
 paragraph above describes the earlier terminal-native look. **P23c:** `ctrl+n` now creates a real
 new session and `ctrl+o` opens a conversation picker that replays stored history
 (`SessionStore.list_for_owner`, `Application.new_session`/`list_sessions`/`set_session_title`/
-`session_history`). Follow-up: `TOOL_COMPLETED` has no
-success flag, so failed tools still show ✓.
+`session_history`). 
 
 ## Phase 25 — Telegram gateway ⬜  ← SECOND gateway to build
 

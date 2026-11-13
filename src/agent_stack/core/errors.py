@@ -31,6 +31,14 @@ class ToolCallLimitExceeded(LimitExceededError):
     """Raised when a run exceeds its maximum number of tool calls."""
 
 
+class RuntimeDeadlineExceeded(LimitExceededError):
+    """The run used up ``AgentLimits.max_runtime_seconds`` of wall-clock time."""
+
+
+class ToolTimeoutError(ToolError):
+    """A tool call exceeded ``AgentLimits.tool_timeout_seconds``."""
+
+
 class WorkspaceEscapeError(ToolError):
     """Raised when a path resolves outside the configured workspace."""
 

@@ -43,7 +43,7 @@ class AgentFactory:
         model = build_model(agent.model)
         model_with_tools = cast(BaseChatModel, model.bind_tools(list(agent.tools)))
         registry = ToolRegistry(agent.tools)
-        executor = ToolExecutor(registry)
+        executor = ToolExecutor(registry, timeout_seconds=agent.limits.tool_timeout_seconds)
         return AgentRuntime(
             agent=agent,
             model=model_with_tools,

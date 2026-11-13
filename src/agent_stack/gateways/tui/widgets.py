@@ -19,6 +19,7 @@ from typing import Any, ClassVar
 from textual import events
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
 from textual.markup import escape
 from textual.message import Message
 from textual.screen import ModalScreen
@@ -295,10 +296,13 @@ class Disclosure(Vertical):
             meta = f"[$foreground-muted]{format_duration(self._elapsed)}{lines}[/]"
         else:
             meta = ""
-        self.query_one(".dh-main", Static).update(main)
-        self.query_one(".dh-meta", Static).update(meta)
-        if self._is_open and self.has_body:
-            self.query_one(".dh-body", Static).update(self._body_markup())
+        try:
+            self.query_one(".dh-main", Static).update(main)
+            self.query_one(".dh-meta", Static).update(meta)
+            if self._is_open and self.has_body:
+                self.query_one(".dh-body", Static).update(self._body_markup())
+        except NoMatches:
+            return  # torn down between the tick and now
 
     def _body_markup(self) -> str:
         limit = TAIL_RUNNING if self.status == "running" else TAIL_OPEN
@@ -410,14 +414,21 @@ class HeaderBar(Horizontal):
         yield Static("", id="run-state")
         yield Static("", id="model")
 
+    def _set(self, selector: str, markup: str) -> None:
+        # The repaint tick can fire while the app is tearing down and the children are
+        # already gone; a missing child is then simply nothing to update.
+        for widget in self.query(selector):
+            if isinstance(widget, Static):
+                widget.update(markup)
+
     def set_title(self, title: str) -> None:
-        self.query_one("#title", Static).update(escape(title))
+        self._set("#title", escape(title))
 
     def set_model(self, model: str) -> None:
-        self.query_one("#model", Static).update(escape(model))
+        self._set("#model", escape(model))
 
     def set_state(self, markup: str) -> None:
-        self.query_one("#run-state", Static).update(markup)
+        self._set("#run-state", markup)
 
 
 @dataclass
