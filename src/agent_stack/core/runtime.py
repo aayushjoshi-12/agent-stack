@@ -409,7 +409,14 @@ class AgentRuntime:
                 parent_run_id=parent_run_id,
                 data={"steps": step_count, "tool_calls": tool_call_count},
             )
+        except asyncio.CancelledError:
+            # Hard cancel: finish saving what happened even though this task is being torn down.
+            await asyncio.shield(
+                self._persist_partial(session, stored_version, session_id, new_messages)
+            )
+            raise
         except Exception as exc:
+            await self._persist_partial(session, stored_version, session_id, new_messages)
             await self._emit(
                 EventType.RUN_FAILED,
                 run_id=run_id,
@@ -446,6 +453,29 @@ class AgentRuntime:
             return [SystemMessage(content=self._agent.system_prompt), *history, *new_messages]
         ctx = self._context_builder.build(system_parts=resident, history=[*history, *new_messages])
         return [SystemMessage(content="\n\n".join(ctx.system)), *ctx.messages]
+
+    async def _persist_partial(
+        self,
+        session: Session,
+        stored_version: int,
+        session_id: str,
+        messages: Sequence[BaseMessage],
+    ) -> None:
+        """Save what a failed or cancelled run produced, so history keeps the user's message.
+
+        A trailing assistant message whose tool calls never got results is dropped: stored
+        as is, the next model call would be rejected for tool calls without responses. This
+        is best effort and never replaces the original error with a storage error.
+        """
+        keep = list(messages)
+        if keep and isinstance(keep[-1], AIMessage) and keep[-1].tool_calls:
+            keep.pop()
+        if not keep:
+            return
+        with contextlib.suppress(Exception):
+            await self._session_store.append_messages(session_id, keep)
+            session.version += 1
+            await self._session_store.save(session, expected_version=stored_version)
 
     async def _await_approval(
         self,

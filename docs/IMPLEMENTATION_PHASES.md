@@ -1290,7 +1290,7 @@ invariants; `tests/unit/test_observability.py` includes the no-secret-in-any-log
 
 ---
 
-## Phase 28 — Hardening ⬜
+## Phase 28 — Hardening 🟡
 
 **Goal.** Survive the ugly paths. §22, §148–149.
 
@@ -1309,6 +1309,24 @@ large conversation     gateway reconnect       approval race
 
 **Acceptance**
 - The hardening matrix is green; a documented delete-session path leaves no orphans.
+
+**Done (partly):** `tests/unit/test_hardening.py`.
+- A failed or cancelled run now saves a **consistent prefix** of its messages (the user's message
+  and every completed assistant/tool pair, never an assistant message whose tool calls got no
+  result, which a provider would reject on the next turn). A storage error while saving never
+  replaces the original error. A real crash (process death) still saves nothing and resumes from
+  the checkpoint as before.
+- What the model sees of a tool result is scrubbed of known env secrets and common secret shapes
+  (`redact(..., pairs=False)`: the generic `name = value` rule stays off so source code the agent
+  must read is not mangled) and capped at `MAX_OUTPUT_BYTES` (100 KB); error text gets the same.
+- Session deletion removes the row, runs, message and artifact indexes, checkpoints, tool
+  executions, todos and the transcript directory (tested for orphans); persistent memory
+  facts are the *user's*, so they deliberately outlive the conversation.
+- Matrix rows covered by tests: provider timeout, provider 429, tool timeout, tool exception,
+  concurrent session access, cancellation, approval race (decide twice or against another
+  run), large output, process crash (`recover`, now including runs paused for approval).
+- **Not covered yet:** database failure, duplicate gateway message, subagent failure/timeout,
+  large-conversation stress, gateway reconnect (no network gateway exists yet).
 
 ---
 

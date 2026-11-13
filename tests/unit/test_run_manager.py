@@ -203,11 +203,14 @@ async def test_cancel_run_mid_flight_persists_cancelled() -> None:
     run = await run_store.get(run_id)
     assert run is not None
     assert run.status == RunStatus.CANCELLED
-    # The interrupted run never finished its message append/save.
+    # The interrupted run keeps a consistent history: the user's message is saved, and the
+    # assistant message whose tool call never produced a result is not.
     session = await store.get("s1")
     assert session is not None
-    assert session.version == 0
-    assert await store.get_messages("s1") == []
+    assert session.version == 1
+    assert [(type(m).__name__, m.content) for m in await store.get_messages("s1")] == [
+        ("HumanMessage", "hello")
+    ]
     with pytest.raises(asyncio.CancelledError):
         await handle.result()
 

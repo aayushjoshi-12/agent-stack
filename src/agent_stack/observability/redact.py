@@ -49,11 +49,17 @@ def env_secrets(env: Mapping[str, str] | None = None) -> list[str]:
     return sorted(values, key=len, reverse=True)
 
 
-def redact(text: str, known: Iterable[str] = ()) -> str:
-    """``text`` with known secret values and common secret shapes replaced."""
+def redact(text: str, known: Iterable[str] = (), *, pairs: bool = True) -> str:
+    """``text`` with known secret values and common secret shapes replaced.
+
+    ``pairs=False`` skips the generic ``name=value`` rule. Use it for source code and tool
+    output the model must still read: ``token = get_token()`` is not a leak.
+    """
     for secret in known:
         if secret:
             text = text.replace(secret, REDACTED)
     for pattern in _PATTERNS:
         text = pattern.sub(REDACTED, text)
+    if not pairs:
+        return text
     return _PAIR.sub(lambda m: f"{m['name']}{m['sep']}{REDACTED}", text)

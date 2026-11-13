@@ -248,13 +248,24 @@ async def test_resumes_from_checkpoint(tmp_path: Any) -> None:
     tool_a = CountingTool("alpha")
     tool_b = CountingTool("beta")
 
-    # Attempt 1: completes tool alpha, then "crashes" (model exhausted) before persisting.
+    # Attempt 1: completes tool alpha, then the process dies before persisting. A real crash
+    # runs no handlers, so it is modelled with a BaseException that escapes them (an ordinary
+    # exception is a failed run, which keeps its history instead).
+    class ProcessDied(BaseException):
+        pass
+
+    class DiesAfterScript(FakeChatModel):
+        async def ainvoke(self, messages: Any, **kwargs: Any) -> Any:
+            if not self._responses:
+                raise ProcessDied
+            return await super().ainvoke(messages, **kwargs)
+
     crashed = _runtime(
-        FakeChatModel([ai(tool_calls=[call("alpha", id="a1")])]),
+        DiesAfterScript([ai(tool_calls=[call("alpha", id="a1")])]),
         [tool_a, tool_b],
         store,
     )
-    with pytest.raises(AssertionError):
+    with pytest.raises(ProcessDied):
         await crashed.run(
             session_id="s1",
             user_id="u1",

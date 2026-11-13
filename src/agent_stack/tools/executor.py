@@ -22,14 +22,19 @@ from typing import Any
 
 from langchain_core.messages import ToolMessage
 
+from agent_stack.core.context import truncate_bytes
 from agent_stack.core.errors import ToolTimeoutError
 from agent_stack.core.tool_stream import tool_output_sink
+from agent_stack.observability.redact import env_secrets, redact
 from agent_stack.tools.registry import ToolRegistry
 
 #: Per-call live-output hook: ``(tool_call_id, stream, chunk)``.
 ToolOutputHandler = Callable[[str, str, str], Awaitable[None]]
 
-__all__ = ["ToolExecutionResult", "ToolExecutor", "ToolOutputHandler"]
+#: Cap on one tool result handed to the model; the rest would only flood its context.
+MAX_OUTPUT_BYTES = 100_000
+
+__all__ = ["MAX_OUTPUT_BYTES", "ToolExecutionResult", "ToolExecutor", "ToolOutputHandler"]
 
 
 @dataclass(frozen=True)
@@ -51,10 +56,28 @@ class ToolExecutionResult:
 class ToolExecutor:
     """Executes tool calls against a :class:`ToolRegistry`."""
 
-    def __init__(self, registry: ToolRegistry, *, timeout_seconds: float | None = None) -> None:
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        *,
+        timeout_seconds: float | None = None,
+        max_output_bytes: int = MAX_OUTPUT_BYTES,
+    ) -> None:
         self.registry = registry
         #: Per-call timeout; ``None`` means a call may run as long as it likes.
         self.timeout_seconds = timeout_seconds
+        self.max_output_bytes = max_output_bytes
+        self._secrets = env_secrets()
+
+    def _for_model(self, text: str) -> str:
+        """What the model may see of a tool's result: no known secrets, bounded in size."""
+        text = redact(text, self._secrets, pairs=False)
+        raw = text.encode("utf-8")
+        return (
+            text
+            if len(raw) <= self.max_output_bytes
+            else truncate_bytes(raw, self.max_output_bytes)
+        )
 
     async def execute_one(
         self,
@@ -89,7 +112,7 @@ class ToolExecutor:
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
                 message=ToolMessage(
-                    content=f"Error: {exc}",
+                    content=self._for_model(f"Error: {exc}"),
                     tool_call_id=tool_call_id,
                     status="error",
                 ),
@@ -100,7 +123,7 @@ class ToolExecutor:
         return ToolExecutionResult(
             tool_call_id=tool_call_id,
             tool_name=tool_name,
-            message=ToolMessage(content=str(result), tool_call_id=tool_call_id),
+            message=ToolMessage(content=self._for_model(str(result)), tool_call_id=tool_call_id),
             success=True,
         )
 
