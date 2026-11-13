@@ -1150,6 +1150,14 @@ streaming output, command palette, running-shell status, agent/task list — and
 
 ---
 
+**P23b (revamp):** the TUI was rebuilt on named true-colour themes (ADR 012, partly
+superseding ADR 011): collapsible tool/thinking cards with live status and duration, a
+multi-line composer with history, a header with run state, a richer sidebar, a footer plus
+`F1` help overlay, and breakpoint-driven responsive layout. Code is split into `theme.py`,
+`styles.tcss`, `widgets.py`, `app.py`; conventions: `docs/design/tui.md`. The "Design pass"
+paragraph above describes the earlier terminal-native look. Follow-up: `TOOL_COMPLETED` has no
+success flag, so failed tools still show ✓.
+
 ## Phase 25 — Telegram gateway ⬜  ← SECOND gateway to build
 
 **Goal.** Adapter only; quirks stay at the edge. §64–65.
