@@ -17,6 +17,7 @@ from agent_stack.core.locks import SessionLockManager
 from agent_stack.core.run import RunManager
 from agent_stack.core.workspace import WorkspacePolicy
 from agent_stack.memory import MemoryIndex, memory_tools
+from agent_stack.memory.store import SqliteMemoryStore
 from agent_stack.observability.audit import AuditLogger, audit_log_path
 from agent_stack.persistence.conversation import FileConversationStore
 from agent_stack.persistence.sqlite import (
@@ -28,6 +29,7 @@ from agent_stack.persistence.sqlite import (
 from agent_stack.skills import SkillLoader, SkillRegistry, skill_tools
 from agent_stack.subagents.delegation import control_tools
 from agent_stack.tools.builtins.filesystem import filesystem_tools
+from agent_stack.tools.builtins.memory import persistent_memory_tools
 from agent_stack.tools.builtins.terminal import run_command_tool
 
 load_dotenv()
@@ -140,6 +142,7 @@ def build_application(config: AppConfig | None = None) -> Application:
             *control_tools(),
             *skill_tools(skills),
             *memory_tools(memory),
+            *persistent_memory_tools(SqliteMemoryStore(db)),
         ),
         subagents=(
             SubAgentSpec(

@@ -1057,7 +1057,7 @@ mid-run *pause-and-resume* beyond cooperative input injection.
 
 ---
 
-## Phase 21 — Persistent memory ⬜
+## Phase 21 — Persistent memory ✅
 
 **Goal.** Cross-session facts, explicitly managed. §56–59.
 
@@ -1068,6 +1068,15 @@ mid-run *pause-and-resume* beyond cooperative input injection.
 
 **Acceptance**
 - Facts persist across sessions; `recall` finds by keyword; namespaces isolate data.
+
+**Done:** `memory/models.py` (`MemoryItem`), `memory/store.py` (`MemoryStore` protocol +
+`SqliteMemoryStore` over a new `memory_items` table, schema v3), and the `remember` / `recall` /
+`forget` tools (`tools/builtins/memory.py`) wired in `bootstrap`. Facts live in the run user's
+namespace (`user:<id>`), so they carry across sessions and are invisible to other users. Recall
+is a case-insensitive match of *every* query word against key and value (SQL wildcards are
+literal); an empty query lists everything. These are short keyed facts, distinct from the
+file-based memory topics (P16d), which hold longer project notes. Tests:
+`tests/unit/test_persistent_memory.py`.
 
 **Defer:** vector embeddings, automatic extraction (§56, §171).
 
