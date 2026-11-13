@@ -25,6 +25,7 @@ __all__ = [
     "output_line_text",
     "reasoning_block",
     "subagent_block",
+    "tool_args_text",
     "tool_label",
     "tool_output_text",
     "tool_started_block",
@@ -135,6 +136,22 @@ def output_line_text(line: str, *, diff: bool) -> Text:
     if not diff:
         return Text(line if line else " ", style="dim")
     return Text(line, style=_DIFF_STYLE[diff_kind(line)])
+
+
+def tool_args_text(event: AgentEvent) -> str:
+    """The call's arguments as ``key: value`` lines, for the expandable body of a card.
+
+    ``run_command`` is excluded (its command is already the card's header and its output
+    is the body). Long values are cut so one huge argument cannot flood the card.
+    """
+    args = event.data.get("args")
+    if not isinstance(args, Mapping) or _command(args) is not None:
+        return ""
+    lines = []
+    for key, value in args.items():
+        text = " ".join(str(value).split())
+        lines.append(f"{key}: {text if len(text) <= 200 else text[:199] + '…'}")
+    return "\n".join(lines)
 
 
 def tool_label(event: AgentEvent) -> tuple[str, str]:

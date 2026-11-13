@@ -28,7 +28,7 @@ from textual.widgets import Footer, Static
 from agent_stack.app.application import Application, IdentityResolver, SessionResolver
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.gateways.base import MessageEnvelope
-from agent_stack.gateways.tui.render import tool_label
+from agent_stack.gateways.tui.render import tool_args_text, tool_label
 from agent_stack.gateways.tui.theme import DARK, DEFAULT_THEME, LIGHT, THEMES
 from agent_stack.gateways.tui.widgets import (
     AgentMessage,
@@ -80,6 +80,9 @@ class TuiApp(App[None]):
 
     TITLE = "agent-stack"
     CSS_PATH = "styles.tcss"
+    #: Footer keys register their descriptions as tooltips; on short terminals the popup
+    #: lands on the composer. The descriptions are already printed in the footer.
+    TOOLTIP_DELAY = 3600.0
     # Textual declares these as instance attributes, so mypy rejects ClassVar here.
     HORIZONTAL_BREAKPOINTS = [  # noqa: RUF012
         (0, "-narrow"),
@@ -296,7 +299,14 @@ class TuiApp(App[None]):
 
     def _on_tool_started(self, event: AgentEvent) -> None:
         name, detail = tool_label(event)
-        card = Disclosure("tool", name, detail, running=True, opened=name == "run_command")
+        card = Disclosure(
+            "tool",
+            name,
+            detail,
+            body=tool_args_text(event),
+            running=True,
+            opened=name == "run_command",
+        )
         self._remove_welcome()
         self._chat().mount(card)
         self._tools_run += 1

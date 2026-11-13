@@ -122,7 +122,8 @@ PromptArea > .text-area--placeholder { color: $text-muted; }
 Footer { background: $surface; }
 
 /* ── help overlay ───────────────────────────────────────────────────────── */
-HelpScreen { align: center middle; }
+/* declared after `Screen`, which would otherwise replace the modal's dimmed backdrop */
+HelpScreen { align: center middle; background: $background 70%; }
 #help-card {
     width: 80;
     max-width: 96%;
@@ -130,7 +131,7 @@ HelpScreen { align: center middle; }
     max-height: 92%;
     padding: 1 2;
     background: $surface;
-    border: round $primary;
+    border-left: thick $primary;
 }
 #help-title { margin-bottom: 1; }
 .help-group { margin-bottom: 1; }

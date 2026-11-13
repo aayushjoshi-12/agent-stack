@@ -228,6 +228,48 @@ async def test_tool_card_streams_output_and_diff_colours_it() -> None:
     assert str(output_line_text("plain output", diff=False).style) == "dim"
 
 
+async def test_non_shell_tool_card_is_expandable_and_shows_its_arguments() -> None:
+    app = _app()
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.handle_event(
+            event(
+                EventType.TOOL_STARTED,
+                tool="read_file",
+                tool_call_id="r",
+                args={"path": "src/x.py", "limit": 50},
+            )
+        )
+        app.handle_event(event(EventType.TOOL_COMPLETED, tool="read_file", tool_call_id="r"))
+        await _settle(pilot, 3)
+        card = app.cards["r"]
+        assert card.has_body  # so the header shows a chevron
+        assert "▸" in str(card.query_one(".dh-main").render())
+        assert not card.has_class("-open")  # arguments alone do not open the card
+
+        card.toggle()
+        await _settle(pilot, 3)
+        body = str(card.query_one(".dh-body").render())
+        assert "path: src/x.py" in body and "limit: 50" in body
+
+
+async def test_footer_tooltips_are_effectively_disabled() -> None:
+    """A tooltip over the composer hid the input on short terminals."""
+    assert TuiApp.TOOLTIP_DELAY >= 600
+
+
+async def test_help_overlay_keeps_the_dimmed_backdrop() -> None:
+    application = FakeApplication()
+    application.config.theme = "agent-stack-dark"  # ansi themes make modals transparent
+    app = _app(application)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.press("f1")
+        await pilot.pause()
+        background = app.screen.styles.background
+        assert 0 < background.a < 1  # translucent, so the app stays faintly visible
+
+
 async def test_tool_card_holds_partial_lines_until_complete() -> None:
     app = _app()
 

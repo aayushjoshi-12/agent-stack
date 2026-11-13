@@ -188,6 +188,7 @@ class Disclosure(Vertical):
         self._user_toggled = False
         self._is_open = opened
         self._ready = False
+        self._output_seen = False  # streamed output, as opposed to the static body
         if body:
             self._ingest(body, final=True)
 
@@ -222,6 +223,7 @@ class Disclosure(Vertical):
 
     def append(self, chunk: str) -> None:
         """Add raw output; held until a full line arrives (see :meth:`_ingest`)."""
+        self._output_seen = True
         self._ingest(chunk, final=False)
 
     def finish(self, status: str) -> None:
@@ -231,8 +233,11 @@ class Disclosure(Vertical):
         self.status = status
         self._elapsed = time.monotonic() - self._t0
         if not self._user_toggled:
-            # Short output and failures stay visible; long output folds away.
-            self._is_open = status == "failed" or self.line_count <= SHORT_OUTPUT
+            # Short streamed output and failures stay visible; long output folds away,
+            # and a card that only carries its arguments stays closed.
+            self._is_open = status == "failed" or (
+                self._output_seen and self.line_count <= SHORT_OUTPUT
+            )
         self._stale = True
         self._sync()
 
