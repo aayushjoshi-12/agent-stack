@@ -18,6 +18,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from agent_stack.app.application import Application, IdentityResolver, SessionResolver
 from agent_stack.app.config import AppConfig
 from agent_stack.core.agent import Agent
+from agent_stack.core.approval import ApprovalBroker
 from agent_stack.core.event_bus import InMemoryEventBus
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.factory import AgentFactory
@@ -26,6 +27,7 @@ from agent_stack.core.run import RunManager, RunStatus
 from agent_stack.core.runtime import AgentRuntime
 from agent_stack.core.session import InMemorySessionStore
 from agent_stack.gateways.base import Gateway, MessageEnvelope
+from agent_stack.observability.metrics import Metrics
 from agent_stack.persistence.memory import InMemoryRunStore
 from agent_stack.tools.executor import ToolExecutor
 from agent_stack.tools.registry import ToolRegistry
@@ -87,6 +89,8 @@ def _build_application(
         session_store=session_store,
         run_manager=manager,
         event_bus=bus,
+        approvals=ApprovalBroker(),
+        metrics=Metrics(),
     )
     return application, run_store, session_store
 

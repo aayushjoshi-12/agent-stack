@@ -30,9 +30,7 @@ from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.gateways.base import MessageEnvelope
 from agent_stack.gateways.tui.render import (
     tool_args_lines,
-    tool_args_text,
     tool_detail,
-    tool_label,
 )
 from agent_stack.gateways.tui.theme import DARK, DEFAULT_THEME, LIGHT, THEMES
 from agent_stack.gateways.tui.widgets import (
@@ -50,12 +48,12 @@ from agent_stack.gateways.tui.widgets import (
     UserMessage,
     Welcome,
     format_duration,
+    spinner_frame,
 )
 
 __all__ = ["TuiApp", "TuiCommands"]
 
 _QUIT_WORDS = frozenset({"exit", "quit"})
-_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
 class TuiCommands(Provider):
@@ -99,7 +97,6 @@ class TuiApp(App[None]):
 
     BINDINGS: ClassVar[list[Any]] = [
         Binding("ctrl+c", "cancel_or_quit", "cancel/quit", show=False, priority=True),
-        Binding("ctrl+q", "quit", "quit", show=False),
         Binding("escape", "escape_or_focus", "cancel", key_display="esc"),
         Binding("ctrl+n", "new_session", "new"),
         Binding("ctrl+o", "switch_session", "chats"),
@@ -108,7 +105,6 @@ class TuiApp(App[None]):
         Binding("f1", "help", "help"),
     ]
     COMMANDS: ClassVar[set[Any]] = {*App.COMMANDS, TuiCommands}
-    COMMAND_PALETTE_BINDING = "ctrl+p"
 
     def __init__(
         self,
@@ -141,7 +137,6 @@ class TuiApp(App[None]):
 
         self.cards: dict[str, Disclosure] = {}
         self.subagent_rows: dict[str, SubagentRow] = {}
-        self._subagent_state: dict[str, tuple[str, str]] = {}
         self._tools_run = 0
         self._titles: dict[str, str] = {}
         self._awaiting = 0  # approval requests currently open
@@ -196,8 +191,7 @@ class TuiApp(App[None]):
         if text in _QUIT_WORDS:
             self.exit()
             return
-        if self._run_active:
-            self.notify("A run is in progress. Press esc to cancel it first.", severity="warning")
+        if self._busy():
             return
         self.query_one("#prompt", PromptArea).clear_text()
         await self._submit_prompt(text)
@@ -220,6 +214,12 @@ class TuiApp(App[None]):
             name, task = delegated
             text = f"Delegate this task to the `{name}` subagent: {task}"
         await self._start_run(text)
+
+    def _busy(self) -> bool:
+        """True (after telling the user) while a run is active: one thing at a time."""
+        if self._run_active:
+            self.notify("A run is in progress. Press esc to cancel it first.", severity="warning")
+        return self._run_active
 
     async def _name_session(self, text: str) -> None:
         """Persist the first message as the session's title so it is findable later."""
@@ -304,7 +304,8 @@ class TuiApp(App[None]):
             self._on_failed(event)
         elif etype is EventType.RUN_COMPLETED:
             self._finish_run("done")  # a successful run adds no row to the conversation
-        self._refresh_all()
+        if etype is not EventType.TOOL_OUTPUT:  # output only moves the card; the tick repaints it
+            self._refresh_all()
 
     def _on_approval_required(self, event: AgentEvent) -> None:
         """Pause on the card and ask the human; the answer goes back through the Application."""
@@ -364,12 +365,13 @@ class TuiApp(App[None]):
         self._chat().mount(AgentMessage(content))
 
     def _on_tool_started(self, event: AgentEvent) -> None:
-        name, detail = tool_label(event)
+        name = str(event.data.get("tool", "tool"))
+        args = event.data.get("args")
         card = Disclosure(
             "tool",
             name,
-            detail,
-            body=tool_args_text(event),
+            tool_detail(args),
+            body=tool_args_lines(args),
             running=True,
             opened=name == "run_command",
         )
@@ -381,7 +383,7 @@ class TuiApp(App[None]):
             self.cards[call_id] = card
 
     def _on_failed(self, event: AgentEvent) -> None:
-        self._chat().mount(Notice(f"error: {event.data.get('error', 'run failed')}", kind="error"))
+        self._chat().mount(Notice(f"error: {event.data.get('error', 'run failed')}"))
         self._finish_run("failed")
 
     def _on_subagent_started(self, event: AgentEvent) -> None:
@@ -393,7 +395,6 @@ class TuiApp(App[None]):
         self._chat().mount(row)
         if child:
             self.subagent_rows[child] = row
-            self._subagent_state[child] = (name, "running")
         self._refresh_sidebar()
 
     def _on_subagent_completed(self, event: AgentEvent) -> None:
@@ -402,8 +403,6 @@ class TuiApp(App[None]):
         row = self.subagent_rows.get(child)
         if row is not None:
             row.finish(status)
-        if child in self._subagent_state:
-            self._subagent_state[child] = (self._subagent_state[child][0], status)
         self._refresh_sidebar()
 
     def _finish_run(self, outcome: str) -> None:
@@ -471,8 +470,7 @@ class TuiApp(App[None]):
         elif self._run_active and self._awaiting:
             state = "[$warning]? needs your approval[/]"
         elif self._run_active:
-            frame = _SPINNER[int(now * 10) % len(_SPINNER)]
-            state = f"[$accent]{frame} working {format_duration(now - self._run_started)}[/]"
+            state = f"[$accent]{spinner_frame(now)} working {format_duration(now - self._run_started)}[/]"
         elif self._last_outcome == "done":
             state = f"[$success]✓ done {format_duration(self._last_elapsed)}[/]"
         elif self._last_outcome == "cancelled":
@@ -502,7 +500,7 @@ class TuiApp(App[None]):
             window=self.application.config.context_window,
             tools_run=self._tools_run,
             tools_running=running,
-            subagents=list(self._subagent_state.values()),
+            subagents=[(r.agent_name, r.outcome) for r in self.subagent_rows.values()],
             workspace=_short_path(self.application.config.workspace, 28),
             branch=self._branch,
             state=word,
@@ -557,7 +555,6 @@ class TuiApp(App[None]):
         await chat.mount(Welcome())
         self.cards.clear()
         self.subagent_rows.clear()
-        self._subagent_state.clear()
         self._tools_run = 0
         self._task_title = None
         self._tokens = 0
@@ -566,8 +563,7 @@ class TuiApp(App[None]):
 
     async def action_new_session(self) -> None:
         """Start a fresh stored conversation; the current one stays in the picker."""
-        if self._run_active:
-            self.notify("A run is in progress. Press esc to cancel it first.", severity="warning")
+        if self._busy():
             return
         self._session_id = None  # a draft; stored when the first message is sent
         await self._reset_conversation()
@@ -576,8 +572,7 @@ class TuiApp(App[None]):
 
     async def action_switch_session(self) -> None:
         """Open the conversation picker."""
-        if self._run_active:
-            self.notify("A run is in progress. Press esc to cancel it first.", severity="warning")
+        if self._busy():
             return
         sessions = await self.application.list_sessions(self._principal)
         self._titles = {s.id: s.title for s in sessions}

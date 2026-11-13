@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
@@ -43,8 +43,8 @@ class Application:
     session_store: SessionStore
     run_manager: RunManager
     event_bus: EventBus
-    approvals: ApprovalBroker = field(default_factory=ApprovalBroker)
-    metrics: Metrics = field(default_factory=Metrics)
+    approvals: ApprovalBroker
+    metrics: Metrics
 
     async def send_message(
         self,
@@ -150,7 +150,8 @@ class IdentityResolver:
     """Map a gateway's external identity to a stable principal id.
 
     Owner-based only: ``gateway:external_user_id`` is the principal. No
-    authorization depth — ownership checks arrive with the approval phase.
+    authorization depth — an approval is checked against its own run, session and principal
+    (``ApprovalBroker.decide``), not against a session owner table.
     """
 
     def resolve(self, gateway: str, external_user_id: str) -> str:

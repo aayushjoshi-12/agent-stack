@@ -1109,33 +1109,29 @@ are per session and never shared by concurrent adds. Tests: `tests/unit/test_tod
 
 ## Phase 23 — TUI gateway (Textual + Rich) ✅  ← FIRST gateway to build
 
-**Done:** `gateways/tui/` (`app.py` Textual app, `render.py` pure event→Rich helpers),
-`gateways/cli.py` line REPL, `tui`/`chat` entry points in `observability/cli.py` (bare
-`agent-stack` launches the TUI). Chat log streams assistant/**reasoning**/tool activity;
-right tabs = Subagents (per-child interrupt/steer over `Application.subscribe(child_run_id)`)
-/Shells (`tool.output` grouped by `tool_call_id`, kill cancels the run)/Audit (byte-offset
-tail of `.agent/logs/audit.jsonl`). Boundary held (imports only
-`Application`/`gateways.base`/`core.events`, guarded by an AST test). Headless Pilot tests +
-a real-model smoke (`tmp/smoke_tests/P23-tui-smoke.py`).
+**Done (current state):** `gateways/tui/` is `app.py` (the Textual app and event routing),
+`widgets.py`, `theme.py`, `styles.tcss` and `render.py` (small text helpers shared with the REPL);
+`gateways/cli.py` is the line REPL; bare `agent-stack` launches the TUI. The chat streams user and
+assistant messages, collapsible thinking and tool cards (live spinner, duration, capped and
+diff-coloured shell output, ✓/✗), and subagent rows updated in place; a sidebar shows session,
+context usage, activity, subagents and workspace. The look is two named true-colour themes
+(ADR 012, which partly supersedes ADR 011's terminal-native look), the layout is responsive
+through Textual breakpoints, and the composer is multi-line with history. `ctrl+n` starts a fresh
+draft (stored on the first message), `ctrl+o` opens a picker that replays and deletes stored
+conversations (`SessionStore.list_for_owner`, `Application.new_session` / `list_sessions` /
+`set_session_title` / `session_history` / `delete_session`), and gated tool calls open an approval
+dialog (P26). The boundary holds (gateways import only `Application`, `gateways.base` and
+`core.events`, enforced by `tests/unit/test_gateway_contract.py` and the invariants suite).
+Conventions: `docs/design/tui.md`.
 
 **Also:** `model.reasoning` events (the runtime lifts the model's thinking out of
-`content_blocks`/`additional_kwargs` and emits it before the answer) render as dim
-`▸ think` blocks in the chat and subagent panes. The workspace now defaults to the current
-directory (ADR 010), so the agent and its subagents read the project you launch it in.
+`content_blocks`/`additional_kwargs` and emits it before the answer) render as collapsed
+"thinking" cards. The workspace defaults to the current directory (ADR 010), so the agent and
+its subagents read the project you launch it in.
 
-**Design pass:** the TUI is terminal-native — it inherits the terminal's colours instead of
-imposing a palette (ADR 011). The layout follows a reference coding-agent UI: a wide
-conversation column (2fr) with a bold task title, chat, composer and status bar, plus a
-narrow context sidebar (1fr, task title + `Context` token usage) that collapses as the
-terminal narrows (`ctrl+b` forces it back). Every region that needs separation sits on a
-**slightly darker panel** (sidebar, composer, user messages, terminal transcripts, code
-fences) — there are no divider lines or boxes. Assistant messages render as Markdown
-(headings bold `ansi_magenta`, fenced code gets Textual's ANSI-aware syntax highlighting),
-thinking is a collapsed `Collapsible`, `run_command` calls are inline terminal transcripts
-whose output is diff-coloured when it looks like unified-diff text, tool/subagent activity
-reads as `→ ` rows, and successful runs stay silent. The empty conversation is blank — no
-ASCII-art banner. Conventions: `docs/design/tui.md`; theming decision:
-`docs/decisions/011-terminal-native-theme.md`.
+> The deliverables below are the **original plan**. The separate Subagents / Shells / Audit panes
+> were replaced by inline cards and rows in the conversation (the audit log is a file:
+> `.agent/logs/audit.jsonl`); per-child cancel is the palette's *Interrupt last subagent*.
 
 **Goal.** Prove the whole stack locally with a real terminal UI. §66, §143.
 **Stack decision:** [`Textual`](https://textual.textualize.io) app with
@@ -1172,16 +1168,6 @@ streaming output, command palette, running-shell status, agent/task list — and
 **Defer:** execution trees beyond subagents + shells until the events prove out.
 
 ---
-
-**P23b (revamp):** the TUI was rebuilt on named true-colour themes (ADR 012, partly
-superseding ADR 011): collapsible tool/thinking cards with live status and duration, a
-multi-line composer with history, a header with run state, a richer sidebar, a footer plus
-`F1` help overlay, and breakpoint-driven responsive layout. Code is split into `theme.py`,
-`styles.tcss`, `widgets.py`, `app.py`; conventions: `docs/design/tui.md`. The "Design pass"
-paragraph above describes the earlier terminal-native look. **P23c:** `ctrl+n` now creates a real
-new session and `ctrl+o` opens a conversation picker that replays stored history
-(`SessionStore.list_for_owner`, `Application.new_session`/`list_sessions`/`set_session_title`/
-`session_history`). 
 
 ## Phase 25 — Telegram gateway ⬜  ← SECOND gateway to build
 
@@ -1242,7 +1228,7 @@ new session and `ctrl+o` opens a conversation picker that replays stored history
 **Deliverables**
 - `core/approval.py` — `ApprovalRequest`, `ApprovalStatus`.
 - `ToolPolicy.requires_approval`; run enters `WAITING_APPROVAL`; emits
-  `approval.required`; `Application.resume` executes after approval.
+  `approval.required`; the run waits in-process and `Application.decide_approval` answers it.
 - Validate `approval_id + run_id + session_id + principal_id` binding (§125).
 
 **Acceptance tests**

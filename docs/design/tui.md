@@ -9,8 +9,8 @@
 1. **Roles, not colours.** The stylesheet (`styles.tcss`) and markup only name theme roles
    (`$primary`, `$accent`, `$success`, `$error`, `$foreground-muted`, `$surface`, `$panel`).
    Every literal colour lives in `theme.py`, so any theme restyles the whole app.
-2. **Depth from layers, not borders.** `$background < $surface < $panel`. Borders appear only
-   as a thick left accent bar (user message, composer, errors) and on the help overlay.
+2. **Depth from layers, not borders.** `$background < $surface < $panel`. The only edges are a
+   thick left accent bar (user message, composer, failed cards, errors and the three dialogs).
 3. **State is never colour alone.** Spinner / ✓ / ✗ glyphs plus words and durations.
 4. **Never block, always escapable.** Agent work runs in tasks; `esc` always cancels a live run
    or returns focus to the prompt.
@@ -56,7 +56,7 @@ Textual breakpoints put classes on the screen (`HORIZONTAL_BREAKPOINTS`,
 | tool call | `Disclosure("tool")` | header `chevron · spinner/✓/✗ · name · detail · duration`; `run_command` opens while running |
 | tool output | body of the card | last 10 lines while running, last 60 when opened later; 400 lines kept, older ones counted as "earlier lines hidden"; diff-coloured when it looks like a unified diff |
 | subagent | `SubagentRow` | one row, updated in place: running spinner then ✓ done |
-| failure | `Notice(kind="error")` | `$error-muted` surface with an error bar |
+| failure | `Notice` | `$error-muted` surface with an error bar |
 
 A successful run adds no row. Finished cards fold when their output is longer than 6 lines
 (failed cards stay open); a card the user toggled keeps the user's choice. Child-run detail

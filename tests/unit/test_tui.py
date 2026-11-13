@@ -12,12 +12,13 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import pytest
 from textual.containers import VerticalScroll
 
 from agent_stack.core.events import EventType
 from agent_stack.gateways.base import HistoryItem, SessionSummary
 from agent_stack.gateways.tui.app import TuiApp
-from agent_stack.gateways.tui.render import diff_kind, output_line_text
+from agent_stack.gateways.tui.render import diff_kind
 from agent_stack.gateways.tui.widgets import (
     AgentMessage,
     ApprovalScreen,
@@ -227,8 +228,6 @@ async def test_tool_card_streams_output_and_diff_colours_it() -> None:
     assert diff_kind("@@ -1 +1 @@") == "hunk"
     assert diff_kind("diff --git a/x b/x") == "meta"
     assert diff_kind("plain") == "ctx"
-    assert str(output_line_text("+new line", diff=True).style) == "green"
-    assert str(output_line_text("plain output", diff=False).style) == "dim"
 
 
 async def test_non_shell_tool_card_is_expandable_and_shows_its_arguments() -> None:
@@ -256,15 +255,8 @@ async def test_non_shell_tool_card_is_expandable_and_shows_its_arguments() -> No
         assert "path: src/x.py" in body and "limit: 50" in body
 
 
-async def test_footer_tooltips_are_effectively_disabled() -> None:
-    """A tooltip over the composer hid the input on short terminals."""
-    assert TuiApp.TOOLTIP_DELAY >= 600
-
-
 async def test_help_overlay_keeps_the_dimmed_backdrop() -> None:
-    application = FakeApplication()
-    application.config.theme = "agent-stack-dark"  # ansi themes make modals transparent
-    app = _app(application)
+    app = _app()
 
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.press("f1")
@@ -443,38 +435,6 @@ async def test_submit_is_blocked_while_a_run_is_active() -> None:
 
 
 # ── cancel / quit ────────────────────────────────────────────────────────────
-async def test_ctrl_c_cancels_run_then_quits() -> None:
-    gate = asyncio.Event()
-    application = FakeApplication(events=[event(EventType.RUN_STARTED)], gate=gate)
-    app = _app(application)
-
-    async with app.run_test(size=(140, 40)) as pilot:
-        await _submit(pilot, "long task")
-        run_id = application.sent[0][1]
-        assert app._active_run_id == run_id
-
-        await pilot.press("ctrl+c")
-        await pilot.pause()
-        assert application.cancelled == [run_id]
-        assert app._cancel_sent
-
-        gate.set()
-        await pilot.pause()
-
-
-async def test_escape_cancels_a_live_run() -> None:
-    gate = asyncio.Event()
-    application = FakeApplication(events=[event(EventType.RUN_STARTED)], gate=gate)
-    app = _app(application)
-
-    async with app.run_test(size=(140, 40)) as pilot:
-        await _submit(pilot, "long task")
-        run_id = application.sent[0][1]
-        await pilot.press("escape")
-        await pilot.pause()
-        assert application.cancelled == [run_id]
-        gate.set()
-        await pilot.pause()
 
 
 async def test_escape_returns_focus_to_the_prompt_when_idle() -> None:
@@ -643,38 +603,6 @@ async def test_picker_with_no_conversations_says_so() -> None:
 
 
 # ── responsive layout ────────────────────────────────────────────────────────
-async def test_sidebar_follows_breakpoints() -> None:
-    app = _app()
-
-    async with app.run_test(size=(140, 40)) as pilot:
-        await pilot.pause()
-        sidebar = app.query_one("#sidebar")
-        assert sidebar.styles.display != "none"
-
-        await pilot.resize_terminal(88, 24)
-        await pilot.pause()
-        assert sidebar.styles.display == "none"  # narrow: conversation only
-
-        await pilot.resize_terminal(140, 40)
-        await pilot.pause()
-        assert sidebar.styles.display != "none"
-
-
-async def test_ctrl_b_overrides_the_width_default() -> None:
-    app = _app()
-
-    async with app.run_test(size=(88, 24)) as pilot:
-        await pilot.pause()
-        sidebar = app.query_one("#sidebar")
-        assert sidebar.styles.display == "none"
-
-        await pilot.press("ctrl+b")
-        await pilot.pause()
-        assert sidebar.styles.display != "none"  # forced on at a narrow width
-
-        await pilot.press("ctrl+b")
-        await pilot.pause()
-        assert sidebar.styles.display == "none"
 
 
 async def test_ctrl_b_twice_returns_to_the_responsive_default() -> None:
@@ -693,17 +621,6 @@ async def test_ctrl_b_twice_returns_to_the_responsive_default() -> None:
         assert sidebar.styles.display == "none"  # automatic: narrow hides it
 
 
-async def test_ctrl_b_can_hide_the_sidebar_on_a_wide_terminal() -> None:
-    app = _app()
-
-    async with app.run_test(size=(140, 40)) as pilot:
-        await pilot.pause()
-        sidebar = app.query_one("#sidebar")
-        await pilot.press("ctrl+b")
-        await pilot.pause()
-        assert sidebar.styles.display == "none"
-
-
 # ── help, themes ─────────────────────────────────────────────────────────────
 async def test_f1_opens_help_and_escape_closes_it() -> None:
     app = _app()
@@ -715,31 +632,6 @@ async def test_f1_opens_help_and_escape_closes_it() -> None:
         await pilot.press("escape")
         await pilot.pause()
         assert not isinstance(app.screen, HelpScreen)
-
-
-async def test_default_theme_is_the_named_dark_theme() -> None:
-    application = FakeApplication()
-    application.config.theme = "agent-stack-dark"
-    app = _app(application)
-
-    async with app.run_test(size=(140, 40)) as pilot:
-        await pilot.pause()
-        assert app.theme == "agent-stack-dark"
-        assert app.current_theme.dark
-
-
-async def test_ctrl_t_switches_between_dark_and_light() -> None:
-    application = FakeApplication()
-    application.config.theme = "agent-stack-dark"
-    app = _app(application)
-
-    async with app.run_test(size=(140, 40)) as pilot:
-        await pilot.press("ctrl+t")
-        await pilot.pause()
-        assert app.theme == "agent-stack-light"
-        await pilot.press("ctrl+t")
-        await pilot.pause()
-        assert app.theme == "agent-stack-dark"
 
 
 async def test_ansi_theme_still_selectable_and_unknown_falls_back() -> None:
@@ -973,3 +865,100 @@ async def test_a_failing_delete_is_reported_not_raised() -> None:
 
         assert isinstance(app.screen, SessionPicker)  # still open, app still alive
         assert app.screen.query_one("#picker-list").option_count == 2
+
+
+# ── consolidated: cancel keys, sidebar visibility, theme, quit ───────────────
+@pytest.mark.parametrize("key", ["escape", "ctrl+c"])
+async def test_cancel_keys_cancel_a_live_run(key: str) -> None:
+    gate = asyncio.Event()
+    application = FakeApplication(events=[event(EventType.RUN_STARTED)], gate=gate)
+    app = _app(application)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await _submit(pilot, "long task")
+        run_id = application.sent[0][1]
+        assert app._active_run_id == run_id
+
+        await pilot.press(key)
+        await pilot.pause()
+
+        assert application.cancelled == [run_id]
+        assert app._cancel_sent
+        gate.set()
+        await pilot.pause()
+
+
+async def test_a_second_ctrl_c_quits_while_cancelling() -> None:
+    gate = asyncio.Event()
+    app = _app(FakeApplication(events=[event(EventType.RUN_STARTED)], gate=gate))
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await _submit(pilot, "long task")
+        await pilot.press("ctrl+c")  # cancel
+        await pilot.pause()
+        await pilot.press("ctrl+c")  # the run is still winding down: now quit
+        await _settle(pilot, 3)
+
+        assert not app.is_running
+
+
+async def test_ctrl_q_quits() -> None:
+    """Quit is Textual's own binding now (ours duplicated it)."""
+    app = _app()
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.press("ctrl+q")
+        await _settle(pilot, 3)
+
+        assert not app.is_running
+
+
+@pytest.mark.parametrize(
+    ("size", "presses", "visible"),
+    [
+        ((140, 40), (), True),  # wide: shown by default
+        ((88, 24), (), False),  # narrow: hidden by default
+        ((88, 24), ("ctrl+b",), True),  # forced on at a narrow width
+        ((88, 24), ("ctrl+b", "ctrl+b"), False),  # a second press returns to automatic
+        ((140, 40), ("ctrl+b",), False),  # hidden on a wide terminal
+    ],
+)
+async def test_sidebar_visibility(
+    size: tuple[int, int], presses: tuple[str, ...], visible: bool
+) -> None:
+    app = _app()
+
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        if presses:
+            await pilot.press(*presses)
+            await pilot.pause()
+
+        assert (app.query_one("#sidebar").styles.display != "none") is visible
+
+
+async def test_sidebar_follows_the_width_as_the_terminal_is_resized() -> None:
+    app = _app()
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        sidebar = app.query_one("#sidebar")
+        await pilot.resize_terminal(88, 24)
+        await pilot.pause()
+        assert sidebar.styles.display == "none"
+        await pilot.resize_terminal(140, 40)
+        await pilot.pause()
+        assert sidebar.styles.display != "none"
+
+
+async def test_default_theme_is_dark_and_ctrl_t_toggles_dark_and_light() -> None:
+    app = _app()  # the fake config now carries the real default theme
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        assert app.theme == "agent-stack-dark" and app.current_theme.dark
+        await pilot.press("ctrl+t")
+        await pilot.pause()
+        assert app.theme == "agent-stack-light"
+        await pilot.press("ctrl+t")
+        await pilot.pause()
+        assert app.theme == "agent-stack-dark"

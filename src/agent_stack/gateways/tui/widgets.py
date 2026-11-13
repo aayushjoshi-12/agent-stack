@@ -44,6 +44,7 @@ __all__ = [
     "UserMessage",
     "Welcome",
     "format_duration",
+    "spinner_frame",
 ]
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -74,7 +75,7 @@ def format_duration(seconds: float) -> str:
     return f"{minutes}m{rest:02d}s"
 
 
-def _spinner(now: float) -> str:
+def spinner_frame(now: float) -> str:
     return SPINNER[int(now * 10) % len(SPINNER)]
 
 
@@ -94,19 +95,18 @@ class AgentMessage(Markdown):
 
 
 class Notice(Static):
-    """A run-level message: failures (error) or neutral information (info)."""
+    """A failed run's message, on an error-coloured bar."""
 
-    def __init__(self, text: str, *, kind: str = "info") -> None:
-        icon = "✗" if kind == "error" else "•"
-        super().__init__(f"{icon} {escape(text)}", classes=f"notice -{kind}")
+    def __init__(self, text: str) -> None:
+        super().__init__(f"✗ {escape(text)}", classes="notice")
 
 
 class SubagentRow(Static):
     """One subagent's lifecycle, updated in place (running → done)."""
 
     def __init__(self, name: str) -> None:
-        self._agent = name
-        self._state = "running"
+        self.agent_name = name
+        self.outcome = "running"
         self._t0 = time.monotonic()
         self._elapsed = 0.0
         super().__init__(classes="subagent-row")
@@ -116,10 +116,10 @@ class SubagentRow(Static):
 
     @property
     def running(self) -> bool:
-        return self._state == "running"
+        return self.outcome == "running"
 
     def finish(self, status: str) -> None:
-        self._state = status
+        self.outcome = status
         self._elapsed = time.monotonic() - self._t0
         self._paint(time.monotonic())
 
@@ -128,14 +128,14 @@ class SubagentRow(Static):
             self._paint(now)
 
     def _paint(self, now: float) -> None:
-        name = escape(self._agent)
+        name = escape(self.agent_name)
         if self.running:
-            glyph = f"[$accent]{_spinner(now)}[/]"
+            glyph = f"[$accent]{spinner_frame(now)}[/]"
             meta = f"running {format_duration(now - self._t0)}"
-        elif self._state == "completed":
+        elif self.outcome == "completed":
             glyph, meta = "[$success]✓[/]", f"done {format_duration(self._elapsed)}"
         else:
-            glyph, meta = "[$error]✗[/]", f"{escape(self._state)} {format_duration(self._elapsed)}"
+            glyph, meta = "[$error]✗[/]", f"{escape(self.outcome)} {format_duration(self._elapsed)}"
         self.update(f"  ⤷ {glyph} [bold]{name}[/] [$foreground-muted]subagent · {meta}[/]")
 
 
@@ -282,7 +282,7 @@ class Disclosure(Vertical):
 
     def _glyph(self, now: float) -> str:
         if self.status == "running":
-            return f"[$accent]{_spinner(now)}[/]"
+            return f"[$accent]{spinner_frame(now)}[/]"
         if self.status == "waiting":
             return "[$warning]?[/]"
         if self.status == "failed":

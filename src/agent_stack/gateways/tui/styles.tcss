@@ -46,9 +46,13 @@ HeaderBar {
 .agent-message { margin: 1 0 0 0; padding: 0 0 0 2; }
 .subagent-row { height: 1; margin: 0; }
 
-.notice { margin: 1 0 0 0; padding: 0 1; }
-.notice.-error { background: $error-muted; border-left: thick $error; color: $text; }
-.notice.-info { color: $text-muted; }
+.notice {
+    margin: 1 0 0 0;
+    padding: 0 1;
+    background: $error-muted;
+    border-left: thick $error;
+    color: $text;
+}
 
 #welcome {
     margin: 2 0 0 0;
@@ -122,39 +126,25 @@ PromptArea > .text-area--placeholder { color: $text-muted; }
 Footer { background: $surface; }
 
 /* ── help overlay ───────────────────────────────────────────────────────── */
-/* declared after `Screen`, which would otherwise replace the modal's dimmed backdrop */
-HelpScreen { align: center middle; background: $background 70%; }
-#help-card {
+/* Modals share one look. Declared after `Screen`, whose background would otherwise replace
+   the modal's dimmed backdrop. Cards differ only in width and the colour of the left bar. */
+HelpScreen, ApprovalScreen, SessionPicker {
+    align: center middle;
+    background: $background 70%;
+}
+#help-card, #approval-card, #picker-card {
     width: 80;
     max-width: 96%;
     height: auto;
-    max-height: 92%;
+    max-height: 90%;
     padding: 1 2;
     background: $surface;
     border-left: thick $primary;
 }
-ApprovalScreen { align: center middle; background: $background 70%; }
-#approval-card {
-    width: 80;
-    max-width: 96%;
-    height: auto;
-    max-height: 85%;
-    padding: 1 2;
-    background: $surface;
-    border-left: thick $warning;
-}
+#picker-card { width: 72; }
+#approval-card { border-left: thick $warning; }
 #approval-what { margin-top: 1; }
 #approval-detail { margin: 1 0; padding: 0 1; background: $panel; }
-SessionPicker { align: center middle; background: $background 70%; }
-#picker-card {
-    width: 72;
-    max-width: 96%;
-    height: auto;
-    max-height: 85%;
-    padding: 1 2;
-    background: $surface;
-    border-left: thick $primary;
-}
 #picker-title { margin-bottom: 1; }
 #picker-foot { margin-top: 1; }
 #picker-list {

@@ -17,6 +17,7 @@ from langchain_core.messages import HumanMessage
 from agent_stack.app.application import Application
 from agent_stack.app.config import AppConfig
 from agent_stack.core.agent import Agent, SubAgentSpec
+from agent_stack.core.approval import ApprovalBroker
 from agent_stack.core.event_bus import InMemoryEventBus
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.factory import AgentFactory
@@ -26,6 +27,7 @@ from agent_stack.core.run_context import RunContext, run_context
 from agent_stack.core.runtime import AgentRuntime
 from agent_stack.core.session import InMemorySessionStore
 from agent_stack.gateways.base import MessageEnvelope
+from agent_stack.observability.metrics import Metrics
 from agent_stack.persistence.memory import InMemoryRunStore
 from agent_stack.subagents.delegation import (
     delegate,
@@ -410,6 +412,8 @@ async def test_application_send_input() -> None:
         session_store=session_store,
         run_manager=manager,
         event_bus=bus,
+        approvals=ApprovalBroker(),
+        metrics=Metrics(),
     )
 
     handle = await application.send_message(

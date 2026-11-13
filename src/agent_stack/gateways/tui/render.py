@@ -1,11 +1,9 @@
-"""Pure event → Rich rendering helpers for the TUI gateway.
+"""Pure event → Rich rendering helpers shared by the line REPL, plus the small text helpers
+the TUI widgets use (``diff_kind``, ``tool_detail``, ``tool_args_lines``).
 
-Styling is *semantic, not decorative*: content inherits the terminal's default
-foreground, and emphasis uses attributes (bold, dim, italic) plus a small set of
-ANSI accents that resolve to the terminal's own palette (no hex/RGB literals).
-These functions hold no Textual state, so they unit-test without a running app and
-are reused by the line REPL. Panels (the darker backgrounds behind user messages,
-command blocks and the sidebar) are applied by the TUI stylesheet, never here.
+The REPL prints with Rich styles named after the terminal's own palette; the Textual TUI
+styles through theme variables instead (``styles.tcss``, ``widgets.py``). These functions hold
+no Textual state, so they unit-test without a running app.
 """
 
 from __future__ import annotations
@@ -21,14 +19,10 @@ __all__ = [
     "assistant_block",
     "diff_kind",
     "failure_block",
-    "human_block",
-    "output_line_text",
     "reasoning_block",
     "subagent_block",
     "tool_args_lines",
-    "tool_args_text",
     "tool_detail",
-    "tool_label",
     "tool_output_text",
     "tool_started_block",
 ]
@@ -37,17 +31,9 @@ _META = "dim"  # secondary text (commands, ids, status words)
 _THINK = "dim italic"  # the model's working, deliberately de-emphasised
 _FAIL = "bold red"  # the one alarming tone: failures must stand out
 _TOOL = "green"  # tool / subagent names (terminal's own green)
-_DIFF_HUNK = "cyan"  # diff hunk headers (@@ ... @@)
-_DIFF_ADD = "green"  # added lines (+)
-_DIFF_DEL = "red"  # removed lines (-)
 
 #: A line that marks the start of unified-diff output (git, patch, diff -u).
 _DIFF_MARKERS = ("diff --git", "Index: ", "+++ ", "--- ")
-
-
-def human_block(text: str) -> Text:
-    """The user's own message (the panel around it is CSS, see ``.msg-user``)."""
-    return Text(text)
 
 
 def assistant_block(event: AgentEvent) -> Text:
@@ -87,11 +73,7 @@ def _detail(args: Any) -> str | None:
 
 
 def tool_started_block(event: AgentEvent) -> Text:
-    """A tool call, reference-style: ``→ <tool> <command-or-arg>``.
-
-    ``run_command`` calls get a dedicated terminal-transcript panel below (see the
-    app), so they re-use this row as the panel's first line.
-    """
+    """A tool call as one REPL row: ``→ <tool> <command-or-arg>``."""
     line = Text("→ ")
     line.append(str(event.data.get("tool", "tool")), style=_TOOL)
     detail = _detail(event.data.get("args"))
@@ -119,27 +101,6 @@ def diff_kind(line: str) -> str:
     return "ctx"
 
 
-_DIFF_STYLE = {
-    "meta": "bold dim",
-    "hunk": _DIFF_HUNK,
-    "add": _DIFF_ADD,
-    "del": _DIFF_DEL,
-    "ctx": "dim",
-}
-
-
-def output_line_text(line: str, *, diff: bool) -> Text:
-    """One line of tool output for the command panel.
-
-    In diff mode the unified-diff markers are highlighted so streamed ``git diff``
-    output reads like the reference; otherwise output stays muted gray-blue (dim).
-    """
-    line = line.rstrip("\n")
-    if not diff:
-        return Text(line if line else " ", style="dim")
-    return Text(line, style=_DIFF_STYLE[diff_kind(line)])
-
-
 def tool_args_lines(args: Any) -> str:
     """A call's arguments as ``key: value`` lines, for the expandable body of a card.
 
@@ -155,19 +116,9 @@ def tool_args_lines(args: Any) -> str:
     return "\n".join(lines)
 
 
-def tool_args_text(event: AgentEvent) -> str:
-    """:func:`tool_args_lines` for a ``tool.started`` event."""
-    return tool_args_lines(event.data.get("args"))
-
-
 def tool_detail(args: Any) -> str:
     """The short header detail of a call: its command, else its first short argument."""
     return _detail(args) or ""
-
-
-def tool_label(event: AgentEvent) -> tuple[str, str]:
-    """``(tool name, short detail)`` for a ``tool.started`` event."""
-    return str(event.data.get("tool", "tool")), tool_detail(event.data.get("args"))
 
 
 def subagent_block(event: AgentEvent, *, done: bool) -> Text:

@@ -46,7 +46,7 @@ def event(
 class FakeConfig:
     workspace: Path = Path(".")
     model: str = "test:model"
-    theme: str = "ansi-dark"
+    theme: str = "agent-stack-dark"
     context_window: int = 200_000
 
 
