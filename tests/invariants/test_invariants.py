@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import contextlib
 from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
@@ -251,10 +252,9 @@ async def _terminal_outcome(
     if cancel_after is not None:
         await asyncio.sleep(cancel_after)
         await manager.cancel(handle.run_id)
-    try:
+    # The run may legitimately end in an exception (that is what several scenarios test).
+    with contextlib.suppress(BaseException):
         await asyncio.wait_for(handle.result(), 3.0)
-    except BaseException:  # the run may legitimately end in an exception
-        pass
     await asyncio.wait_for(collector, 3.0)
     run = await run_store.get(handle.run_id)
     assert run is not None
