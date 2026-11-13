@@ -19,11 +19,14 @@ _GATEWAY_FILES = (
     "src/agent_stack/gateways/tui/__init__.py",
     "src/agent_stack/gateways/tui/app.py",
     "src/agent_stack/gateways/tui/render.py",
+    "src/agent_stack/gateways/telegram/__init__.py",
+    "src/agent_stack/gateways/telegram/api.py",
+    "src/agent_stack/gateways/telegram/gateway.py",
     "src/agent_stack/gateways/tui/theme.py",
     "src/agent_stack/gateways/tui/widgets.py",
 )
 
-#: The only internal modules a gateway may import (plus its own ``gateways.tui`` package).
+#: The only internal modules a gateway may import (plus its own gateway package, never another gateway's).
 _ALLOWED = frozenset(
     {
         "agent_stack.app.application",
@@ -51,7 +54,12 @@ def test_gateway_modules_import_only_the_contract() -> None:
         path = Path(filename)
         assert path.exists(), f"missing gateway module {filename}"
         for target in _imported_agent_stack_modules(path.read_text()):
-            allowed = target in _ALLOWED or target.startswith("agent_stack.gateways.tui")
+            own = (
+                "agent_stack.gateways.telegram"
+                if "telegram" in filename
+                else "agent_stack.gateways.tui"
+            )
+            allowed = target in _ALLOWED or target.startswith(own)  # a gateway uses only itself
             assert allowed, f"{filename} imports forbidden module {target}"
 
 

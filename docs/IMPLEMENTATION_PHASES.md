@@ -1169,7 +1169,7 @@ streaming output, command palette, running-shell status, agent/task list — and
 
 ---
 
-## Phase 25 — Telegram gateway ⬜  ← SECOND gateway to build
+## Phase 25 — Telegram gateway ✅  ← SECOND gateway to build
 
 **Goal.** Adapter only; quirks stay at the edge. §64–65.
 
@@ -1181,7 +1181,22 @@ streaming output, command palette, running-shell status, agent/task list — and
 **Acceptance**
 - Same `session_id` continues a conversation started in the TUI gateway.
 
-**Defer:** inline-keyboard approvals until Phase 26.
+**Done:** `gateways/telegram/` (`api.py` a minimal Bot API client over `httpx`, no new dependency;
+`gateway.py` the adapter; `agent-stack telegram` to run it). Long-polling; an **allow-list of
+Telegram user ids is mandatory** (`AGENT_STACK_TELEGRAM_USERS`; the bot runs tools on this
+machine, so strangers get no reply and the process refuses to start without one). Commands:
+`/new`, `/sessions` (inline buttons to switch, with a two-message recap), `/cancel`, `/help`.
+A run shows one status message edited at most every 1.5 s (debounced for Telegram's rate
+limits), replies are split under the 4096-character limit, and gated tool calls ask with
+inline **Approve / Reject** buttons (answered through `Application.decide_approval`, so the
+run/session/principal binding still applies). Idempotency: each update id and message id is
+acted on once, and the message key rides along as `MessageEnvelope.metadata["idempotency_key"]`.
+`AGENT_STACK_TELEGRAM_PRINCIPAL=tui:local-user` makes the bot share the TUI's identity, so a
+conversation started in the TUI is continued from Telegram (the acceptance criterion).
+`TELEGRAM_BOT_TOKEN` is never logged: errors carry no URL and `redact` knows the token shape.
+Tests: `tests/unit/test_telegram_gateway.py`.
+
+**Defer:** webhooks (long-polling is enough for one owner), media, group-chat behaviour.
 
 ---
 

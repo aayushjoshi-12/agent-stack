@@ -22,6 +22,9 @@ _PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bsk-[A-Za-z0-9_\-]{16,}"),  # OpenAI / OpenRouter / Anthropic style
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"),  # GitHub tokens
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),  # AWS access key id
+    re.compile(
+        r"(?<!\d)\d{8,10}:[A-Za-z0-9_-]{30,}"
+    ),  # Telegram bot token (also inside /bot<token>/ URLs)
     re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),  # JWT
     re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{12,}"),
 )
