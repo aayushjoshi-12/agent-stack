@@ -47,6 +47,9 @@ class RunStatus(StrEnum):
 
 
 _TERMINAL_RUN_STATUSES = frozenset({RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED})
+#: Runs that have not finished: after a crash they are all stale, and a run paused for a
+#: human's approval is as live as a running one (it still holds its session and its slot).
+LIVE_RUN_STATUSES = frozenset({RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING_APPROVAL})
 
 
 @dataclass
@@ -494,7 +497,7 @@ class RunManager:
         return record
 
     async def recover(self) -> int:
-        """Mark every stale PENDING/RUNNING run FAILED; return how many were marked.
+        """Mark every stale unfinished run FAILED (pending, running or awaiting approval).
 
         Called at startup after a crash: a run that never finished is not retried —
         it is recorded as failed so the run store reflects reality.

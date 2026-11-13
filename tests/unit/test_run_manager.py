@@ -230,11 +230,15 @@ async def test_recover_finds_incomplete_runs_on_startup() -> None:
     # Simulate a crash: a run stuck in RUNNING from a previous process.
     await run_store.save(Run(id="stale-1", session_id="s1", status=RunStatus.RUNNING))
     await run_store.save(Run(id="stale-2", session_id="s1", status=RunStatus.PENDING))
+    # A crash while a human was being asked leaves this behind; it is stale too.
+    await run_store.save(Run(id="stale-3", session_id="s1", status=RunStatus.WAITING_APPROVAL))
     await run_store.save(Run(id="fresh", session_id="s1", status=RunStatus.COMPLETED))
 
     count = await manager.recover()
 
-    assert count == 2
+    assert count == 3
+    waiting = await run_store.get("stale-3")
+    assert waiting is not None and waiting.status == RunStatus.FAILED
     stale = await run_store.get("stale-1")
     assert stale is not None
     assert stale.status == RunStatus.FAILED

@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-from agent_stack.core.run import Run, RunStatus
+from agent_stack.core.run import LIVE_RUN_STATUSES, Run, RunStatus
 from agent_stack.core.session import Session
 from agent_stack.persistence.conversation import FileConversationStore
 from agent_stack.persistence.sqlite import (
@@ -165,11 +165,12 @@ async def test_list_incomplete_finds_running_runs(db: SqliteDatabase) -> None:
     await store.save(Run(id="r1", session_id="s1", status=RunStatus.PENDING))
     await store.save(Run(id="r2", session_id="s1", status=RunStatus.RUNNING))
     await store.save(Run(id="r3", session_id="s1", status=RunStatus.COMPLETED))
+    await store.save(Run(id="r4", session_id="s1", status=RunStatus.WAITING_APPROVAL))
 
     incomplete = await store.list_incomplete()
 
-    assert {run.id for run in incomplete} == {"r1", "r2"}
-    assert incomplete[0].status in (RunStatus.PENDING, RunStatus.RUNNING)
+    assert {run.id for run in incomplete} == {"r1", "r2", "r4"}
+    assert all(run.status in LIVE_RUN_STATUSES for run in incomplete)
 
 
 @pytest.mark.integration

@@ -418,6 +418,8 @@ class TuiApp(App[None]):
         for card in self.cards.values():
             if card.status == "running":
                 card.finish("done")
+            elif card.status == "waiting":  # the run ended while it was asking
+                card.finish("failed")
         self._refresh_all()
 
     # ── conversation helpers ──────────────────────────────────────────────────

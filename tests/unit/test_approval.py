@@ -327,3 +327,60 @@ async def test_run_status_mirrors_the_pause_and_resume() -> None:
     await asyncio.wait_for(handle.result(), 2.0)
 
     assert await status() is RunStatus.COMPLETED
+
+
+async def test_a_gated_tool_with_no_approval_channel_fails_closed() -> None:
+    """Regression: with no broker wired, a gated call must be refused, not run unasked."""
+    store, tool = InMemorySessionStore(), CountingTool("danger")
+    model = FakeChatModel([ai(tool_calls=[call("danger", {"x": 1})]), ai("ok")])
+    runtime = _runtime(
+        model,
+        [tool],
+        gated=frozenset({"danger"}),
+        broker=None,  # type: ignore[arg-type]
+        store=store,
+    )
+
+    await asyncio.wait_for(_start(runtime, "r1"), 2.0)
+
+    assert tool.runs == 0
+    (message,) = await _tool_messages(store)
+    assert message.status == "error" and "no approval channel" in str(message.content)
+
+
+async def test_a_subagent_waiting_for_approval_still_counts_toward_the_limit() -> None:
+    """Regression: only RUNNING children were counted, so a blocked one freed its slot."""
+    from agent_stack.core.limits import AgentLimits
+    from agent_stack.core.run_context import RunContext, RunView, run_context
+    from agent_stack.subagents.delegation import delegate
+
+    class Services:
+        async def list_child_ids(self, run_id: str) -> list[str]:
+            return ["child-1"]
+
+        async def get_run_view(self, run_id: str) -> RunView:
+            return RunView(run_id=run_id, status="waiting_approval")
+
+    from agent_stack.core.agent import SubAgentSpec
+
+    child = Agent(name="explorer", model="test:model")
+    parent = Agent(
+        name="assistant",
+        model="test:model",
+        subagents=(SubAgentSpec(name="explorer", description="d", agent=child),),
+        limits=AgentLimits(max_subagents=1),
+    )
+    context = RunContext(
+        run_id="r1",
+        session_id="s1",
+        user_id="u1",
+        depth=0,
+        parent_run_id=None,
+        agent=parent,
+        services=Services(),  # type: ignore[arg-type]
+    )
+
+    with run_context(context):
+        result = await delegate.ainvoke({"agent_name": "explorer", "task": "look around"})
+
+    assert "subagent limit reached" in result

@@ -20,6 +20,8 @@ from agent_stack.core.run_context import RunView, current_run_context
 
 __all__ = ["control_tools", "delegate", "subagent_feed", "subagent_interrupt", "subagent_status"]
 
+#: A child paused for approval still occupies one of the parent's subagent slots.
+_ACTIVE_CHILD_STATUSES = frozenset({RunStatus.RUNNING.value, RunStatus.WAITING_APPROVAL.value})
 _TERMINAL_STATUSES = frozenset(
     {RunStatus.COMPLETED.value, RunStatus.FAILED.value, RunStatus.CANCELLED.value}
 )
@@ -69,7 +71,7 @@ async def delegate(agent_name: str, task: str) -> str:
     running = 0
     for child_id in await ctx.services.list_child_ids(ctx.run_id):
         view = await ctx.services.get_run_view(child_id)
-        if view is not None and view.status == RunStatus.RUNNING.value:
+        if view is not None and view.status in _ACTIVE_CHILD_STATUSES:
             running += 1
     if running >= limits.max_subagents:
         return (

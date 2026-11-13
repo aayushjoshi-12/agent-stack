@@ -643,7 +643,11 @@ class SessionPicker(ModalScreen[str | None]):
             self._foot("[$warning]Press d again to delete this conversation for good[/]")
             return
         self._pending = None
-        await self._delete(session_id)
+        try:
+            await self._delete(session_id)
+        except Exception as exc:  # a failed delete must not take the picker (or app) down
+            self.notify(f"Could not delete: {exc}", severity="error")
+            return
         listing.remove_option(session_id)
         self._foot(self.FOOT if listing.option_count else self._EMPTY)
 

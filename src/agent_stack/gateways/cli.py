@@ -83,13 +83,16 @@ class LineGateway:
             print_event(self._out, event)
             if event.type is EventType.APPROVAL_REQUIRED:
                 approved = await self._approver(event) if self._approver is not None else False
-                application.decide_approval(
-                    str(event.data["approval_id"]),
-                    run_id=event.run_id,
-                    session_id=event.session_id,
-                    principal=envelope.principal,
-                    approve=approved,
-                )
+                try:
+                    application.decide_approval(
+                        str(event.data["approval_id"]),
+                        run_id=event.run_id,
+                        session_id=event.session_id,
+                        principal=envelope.principal,
+                        approve=approved,
+                    )
+                except Exception as exc:  # e.g. the run was cancelled while we asked
+                    self._out.print(f"[yellow]approval not applied:[/] {exc}")
             yield event
 
 

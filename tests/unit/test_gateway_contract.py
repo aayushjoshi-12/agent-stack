@@ -19,6 +19,8 @@ _GATEWAY_FILES = (
     "src/agent_stack/gateways/tui/__init__.py",
     "src/agent_stack/gateways/tui/app.py",
     "src/agent_stack/gateways/tui/render.py",
+    "src/agent_stack/gateways/tui/theme.py",
+    "src/agent_stack/gateways/tui/widgets.py",
 )
 
 #: The only internal modules a gateway may import (plus its own ``gateways.tui`` package).

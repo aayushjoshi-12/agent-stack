@@ -934,3 +934,42 @@ async def test_a_stream_that_ends_without_a_terminal_event_returns_the_ui_to_idl
         assert "failed" in str(app.query_one("#run-state").render())
         await _submit(pilot, "second")  # and the next message is accepted
         assert len(application.sent) == 2
+
+
+async def test_a_card_left_waiting_when_the_run_ends_is_marked_failed() -> None:
+    """Regression: a cancelled run left its card on 'awaiting approval' forever."""
+    gate = asyncio.Event()
+    app = _app(_approval_stream(gate))
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await _submit(pilot, "clean up")
+        await _settle(pilot, 8)
+        assert app.cards["c1"].status == "waiting"
+
+        app._cancel_sent = True
+        app._finish_run("failed")  # what _consume does when the stream ends after a cancel
+        await _settle(pilot, 4)
+
+        assert app.cards["c1"].status == "failed"
+        assert not isinstance(app.screen, ApprovalScreen)  # the dialog closed too
+        gate.set()
+        await _settle(pilot)
+
+
+async def test_a_failing_delete_is_reported_not_raised() -> None:
+    application = _with_sessions()
+
+    async def broken(session_id: str) -> None:
+        raise OSError("disk full")
+
+    application.delete_session = broken  # type: ignore[method-assign]
+    app = _app(application)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.press("ctrl+o")
+        await _settle(pilot, 4)
+        await pilot.press("d", "d")
+        await _settle(pilot, 4)
+
+        assert isinstance(app.screen, SessionPicker)  # still open, app still alive
+        assert app.screen.query_one("#picker-list").option_count == 2

@@ -305,22 +305,27 @@ class AgentRuntime:
                 # Rejected calls never execute; they become error ToolMessages. The time a
                 # human takes is not the run's time, so it is added back to the deadline.
                 rejected: dict[str, ToolExecutionResult] = {}
-                if self._approvals is not None:
-                    asked = time.monotonic()
-                    for gated in pending:
-                        if not self._agent.tool_policy.needs_approval(str(gated["name"])):
-                            continue
-                        status = await self._await_approval(
-                            gated,
-                            run_id=run_id,
-                            session_id=session_id,
-                            user_id=user_id,
-                            parent_run_id=parent_run_id,
+                asked = time.monotonic()
+                for gated in pending:
+                    if not self._agent.tool_policy.needs_approval(str(gated["name"])):
+                        continue
+                    if self._approvals is None:
+                        # Fail closed: a gated tool with nobody to ask must not run.
+                        rejected[str(gated["id"])] = _rejected_result(
+                            gated, "this tool needs approval and no approval channel is configured"
                         )
-                        if status is not ApprovalStatus.APPROVED:
-                            rejected[str(gated["id"])] = _rejected_result(gated)
-                    deadline += time.monotonic() - asked
-                    self._check_cancelled(cancel)
+                        continue
+                    status = await self._await_approval(
+                        gated,
+                        run_id=run_id,
+                        session_id=session_id,
+                        user_id=user_id,
+                        parent_run_id=parent_run_id,
+                    )
+                    if status is not ApprovalStatus.APPROVED:
+                        rejected[str(gated["id"])] = _rejected_result(gated)
+                deadline += time.monotonic() - asked
+                self._check_cancelled(cancel)
                 runnable = [c for c in pending if str(c["id"]) not in rejected]
 
                 def run_tools(batch: list[Any] = runnable) -> Awaitable[list[Any]]:
@@ -598,10 +603,11 @@ class AgentRuntime:
         )
 
 
-def _rejected_result(tool_call: Mapping[str, Any]) -> ToolExecutionResult:
-    """The outcome of a call a human declined: an error the model can read and adapt to."""
+def _rejected_result(
+    tool_call: Mapping[str, Any], reason: str = "the user rejected this tool call"
+) -> ToolExecutionResult:
+    """The outcome of a call that did not get approved: an error the model can read."""
     call_id = str(tool_call["id"])
-    reason = "the user rejected this tool call"
     return ToolExecutionResult(
         tool_call_id=call_id,
         tool_name=str(tool_call["name"]),

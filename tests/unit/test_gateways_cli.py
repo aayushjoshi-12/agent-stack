@@ -90,3 +90,17 @@ async def test_cli_gateway_without_an_approver_rejects_instead_of_hanging() -> N
         pass
 
     assert [d[-1] for d in application.decisions] == [False]
+
+
+async def test_cli_survives_a_refused_approval_decision() -> None:
+    """Regression: an ApprovalError (e.g. run cancelled while asking) aborted the REPL turn."""
+    application = FakeApplication(events=_approval_events())
+
+    def refuse(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("approval already cancelled")
+
+    application.decide_approval = refuse  # type: ignore[method-assign]
+
+    output = await _run_with_input(application, "go\ny\nexit\n")
+
+    assert "approval not applied" in output and "bye" in output

@@ -21,7 +21,7 @@ from typing import Any, Protocol
 from langchain_core.messages import BaseMessage
 
 from agent_stack.core.errors import SessionVersionConflictError
-from agent_stack.core.run import Run, RunStatus
+from agent_stack.core.run import LIVE_RUN_STATUSES, Run, RunStatus
 from agent_stack.core.session import Session, SessionStore
 from agent_stack.core.state import Checkpoint, CheckpointStatus
 from agent_stack.persistence.conversation import ConversationStore
@@ -172,10 +172,11 @@ class SqliteRunStore:
         return [_row_to_run(row) for row in rows]
 
     async def list_incomplete(self) -> list[Run]:
-        """Return runs that are still pending or running (recovery dropdown for P11)."""
+        """Return runs that are still pending, running or awaiting approval (for recovery)."""
+        statuses = sorted(status.value for status in LIVE_RUN_STATUSES)
+        marks = ", ".join("?" for _ in statuses)
         rows = await self._db.query(
-            "SELECT * FROM runs WHERE status IN (?, ?) ORDER BY id",
-            (RunStatus.PENDING.value, RunStatus.RUNNING.value),
+            f"SELECT * FROM runs WHERE status IN ({marks}) ORDER BY id", tuple(statuses)
         )
         return [_row_to_run(row) for row in rows]
 

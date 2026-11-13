@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from agent_stack.core.run import Run, RunStatus
+from agent_stack.core.run import LIVE_RUN_STATUSES, Run
 
 __all__ = ["InMemoryRunStore"]
 
@@ -33,9 +33,5 @@ class InMemoryRunStore:
 
     async def list_incomplete(self) -> list[Run]:
         """Return copies of runs still pending or running (recovery dropdown)."""
-        incomplete = (
-            run
-            for run in self._runs.values()
-            if run.status in (RunStatus.PENDING, RunStatus.RUNNING)
-        )
+        incomplete = (run for run in self._runs.values() if run.status in LIVE_RUN_STATUSES)
         return [replace(run) for run in incomplete]
