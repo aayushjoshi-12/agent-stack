@@ -187,6 +187,7 @@ class Disclosure(Vertical):
         self._stale = False
         self._user_toggled = False
         self._is_open = opened
+        self._ready = False
         if body:
             self._ingest(body, final=True)
 
@@ -196,6 +197,7 @@ class Disclosure(Vertical):
         yield Static("", classes="dh-body")
 
     def on_mount(self) -> None:
+        self._ready = True  # `is_mounted` is still False inside our own Mount handler
         self._sync()
 
     # -- state --------------------------------------------------------------
@@ -235,7 +237,7 @@ class Disclosure(Vertical):
         self._sync()
 
     def tick(self, now: float) -> None:
-        if not self.needs_tick or not self.is_mounted:
+        if not self.needs_tick or not self._ready:
             return
         self._stale = False
         self._sync(now)
@@ -265,7 +267,7 @@ class Disclosure(Vertical):
         return "[$secondary]◇[/]" if self.kind == "think" else "[$accent]•[/]"
 
     def _sync(self, now: float | None = None) -> None:
-        if not self.is_mounted:
+        if not self._ready:
             return
         now = time.monotonic() if now is None else now
         self.set_class(self._is_open and self.has_body, "-open")
@@ -453,7 +455,7 @@ class Sidebar(Vertical):
         )
         running = f"  [$accent]{s.tools_running} running[/]" if s.tools_running else ""
         self.query_one("#sb-activity", Static).update(
-            f"[$foreground-muted]ACTIVITY[/]\n{s.tools_run} tool calls{running}\nstatus: {s.state}"
+            f"[$foreground-muted]ACTIVITY[/]\n{s.tools_run} tool call{'' if s.tools_run == 1 else 's'}{running}\nstatus: {s.state}"
         )
         if s.subagents:
             rows = "\n".join(
@@ -479,7 +481,7 @@ class Welcome(Static):
         text = (
             "[bold $primary]◆ agent-stack[/]\n"
             "[$foreground-muted]Ask for something. Tools, subagents and thinking appear as you go.[/]\n\n"
-            "  [bold $accent]enter[/] send    [bold $accent]shift+enter[/] new line    "
+            "  [bold $accent]enter[/] send    [bold $accent]ctrl+j[/] new line    "
             "[bold $accent]esc[/] cancel\n"
             "  [bold $accent]ctrl+p[/] commands    [bold $accent]f1[/] all shortcuts\n"
             "  [bold $accent]@name task[/] delegate to a subagent"
@@ -492,7 +494,7 @@ HELP = (
         "Conversation",
         (
             ("enter", "send message"),
-            ("shift+enter / ctrl+j", "new line"),
+            ("ctrl+j / shift+enter", "new line (shift+enter needs a modern terminal)"),
             ("up / down", "message history (on first / last line)"),
             ("pageup / pagedown", "scroll the conversation"),
             ("esc", "cancel the run, or return to the prompt"),

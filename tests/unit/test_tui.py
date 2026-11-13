@@ -149,6 +149,17 @@ async def test_tui_renders_collapsible_thinking_card() -> None:
     assert "the answer" in text
 
 
+async def test_thinking_header_is_painted_without_any_interaction() -> None:
+    """Regression: a think card is never ticked, so its header must paint on mount."""
+    app = _app()
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.handle_event(event(EventType.MODEL_REASONING, text="weighing options"))
+        await _settle(pilot, 3)
+        header = app.query_one(Disclosure).query_one(".dh-main")
+        assert "thinking" in str(header.render())
+
+
 async def test_tui_run_failure_shows_error_notice_and_state() -> None:
     application = FakeApplication(
         events=[event(EventType.RUN_STARTED), event(EventType.RUN_FAILED, error="boom")]
@@ -487,6 +498,22 @@ async def test_ctrl_b_overrides_the_width_default() -> None:
         await pilot.press("ctrl+b")
         await pilot.pause()
         assert sidebar.styles.display == "none"
+
+
+async def test_ctrl_b_twice_returns_to_the_responsive_default() -> None:
+    """Regression: show -> hide -> show must not pin the sidebar open on a narrow terminal."""
+    app = _app()
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        sidebar = app.query_one("#sidebar")
+        await pilot.press("ctrl+b", "ctrl+b")  # hide, then back to automatic
+        await pilot.pause()
+        assert sidebar.styles.display != "none"  # wide again
+
+        await pilot.resize_terminal(70, 24)
+        await pilot.pause()
+        assert sidebar.styles.display == "none"  # automatic: narrow hides it
 
 
 async def test_ctrl_b_can_hide_the_sidebar_on_a_wide_terminal() -> None:

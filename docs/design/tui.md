@@ -64,8 +64,8 @@ events stay out of the parent conversation.
 
 ## Composer
 
-`PromptArea` is a multi-line `TextArea` (1 to 8 lines). `enter` sends; `ctrl+j`, `shift+enter`
-or `alt+enter` inserts a newline; `up`/`down` walk the sent history from the first/last line;
+`PromptArea` is a multi-line `TextArea` (1 to 8 lines). `enter` sends; `ctrl+j` (works in every terminal), `shift+enter`
+or `alt+enter` (modern terminals) inserts a newline; `up`/`down` walk the sent history from the first/last line;
 `pageup`/`pagedown` scroll the conversation. While a run is active, submitting is refused with a
 notification and the text is kept.
 
@@ -79,7 +79,7 @@ the last four subagents, and the workspace with the git branch.
 ## Keys
 
 `enter` send · `shift+enter`/`ctrl+j` newline · `esc` cancel run or focus prompt ·
-`ctrl+c` cancel, then quit · `ctrl+q` quit · `ctrl+n` new conversation · `ctrl+b` sidebar ·
+`ctrl+c` cancel, then quit · `ctrl+q` quit · `ctrl+n` new conversation · `ctrl+b` sidebar (a second press returns to automatic) ·
 `ctrl+t` theme · `ctrl+p` palette · `f1` help overlay.
 
 ## Performance

@@ -429,7 +429,7 @@ class TuiApp(App[None]):
         if len(self.query("#hints")) == 0:
             return
         model = self.application.config.model
-        state = "esc to cancel" if self._run_active else "shift+enter for a new line"
+        state = "esc to cancel" if self._run_active else "ctrl+j for a new line"
         self.query_one("#hints", Static).update(f"{model}  ·  {state}")
         prompt = self.query_one("#prompt", PromptArea)
         prompt.placeholder = "Working…" if self._run_active else "Ask anything…"
@@ -476,11 +476,18 @@ class TuiApp(App[None]):
         self._refresh_all()
 
     def action_toggle_sidebar(self) -> None:
-        """Flip the sidebar, overriding the width default (kept until toggled again)."""
-        visible = self.query_one("#sidebar").styles.display != "none"
-        self._sidebar_override = not visible
-        self.screen.set_class(self._sidebar_override, "-show-sidebar")
-        self.screen.set_class(not self._sidebar_override, "-hide-sidebar")
+        """Flip the sidebar against the width default; a second press returns to automatic.
+
+        The override never sticks: otherwise show → hide → show would pin the sidebar open
+        and break the responsive layout on the next resize.
+        """
+        if self._sidebar_override is None:
+            visible = self.query_one("#sidebar").styles.display != "none"
+            self._sidebar_override = not visible
+        else:
+            self._sidebar_override = None
+        self.screen.set_class(self._sidebar_override is True, "-show-sidebar")
+        self.screen.set_class(self._sidebar_override is False, "-hide-sidebar")
 
     def action_toggle_theme(self) -> None:
         self.theme = LIGHT.name if self.theme == DARK.name else DARK.name
