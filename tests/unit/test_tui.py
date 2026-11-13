@@ -15,6 +15,7 @@ from typing import Any
 from textual.containers import VerticalScroll
 
 from agent_stack.core.events import EventType
+from agent_stack.gateways.base import HistoryItem, SessionSummary
 from agent_stack.gateways.tui.app import TuiApp
 from agent_stack.gateways.tui.render import diff_kind, output_line_text
 from agent_stack.gateways.tui.widgets import (
@@ -24,6 +25,7 @@ from agent_stack.gateways.tui.widgets import (
     HelpScreen,
     Notice,
     PromptArea,
+    SessionPicker,
     SubagentRow,
     UserMessage,
     Welcome,
@@ -485,26 +487,110 @@ async def test_header_shows_done_after_a_completed_run() -> None:
         assert app.query_one(HeaderBar)
 
 
-async def test_welcome_shows_when_empty_and_new_conversation_resets() -> None:
-    app = _app(
-        FakeApplication(events=[event(EventType.RUN_STARTED), event(EventType.RUN_COMPLETED)])
-    )
+async def test_welcome_shows_when_empty() -> None:
+    app = _app()
 
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause()
         assert len(app.query(Welcome)) == 1  # the empty state explains the basics
 
+
+async def test_new_conversation_starts_a_new_session_and_keeps_the_old_one() -> None:
+    application = FakeApplication(
+        events=[event(EventType.RUN_STARTED), event(EventType.RUN_COMPLETED)]
+    )
+    app = _app(application)
+
+    async with app.run_test(size=(140, 40)) as pilot:
         await _submit(pilot, "first task")
-        assert len(app.query(Welcome)) == 0  # replaced by the conversation
+        assert len(app.query(Welcome)) == 0
         assert app._tokens > 0
+        first = app._session_id
+        assert application.titles[first] == "first task"  # persisted so it can be found
 
         await pilot.press("ctrl+n")
         await _settle(pilot, 3)
+
+        assert app._session_id != first  # a real new session, not just a cleared screen
         assert len(app.query(Welcome)) == 1
         assert len(app.query(UserMessage)) == 0
         assert app._tokens == 0
         assert app._task_title is None
         assert "New conversation" in str(app.query_one("#title").render())
+
+
+async def test_new_conversation_is_refused_while_a_run_is_active() -> None:
+    gate = asyncio.Event()
+    app = _app(FakeApplication(events=[event(EventType.RUN_STARTED)], gate=gate))
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await _submit(pilot, "busy")
+        before = app._session_id
+        await pilot.press("ctrl+n")
+        await _settle(pilot, 3)
+        assert app._session_id == before
+        assert len(app.query(UserMessage)) == 1
+        gate.set()
+        await _settle(pilot)
+
+
+async def test_switching_conversation_replays_its_history() -> None:
+    application = FakeApplication()
+    application.sessions = [
+        SessionSummary(id="old-1", title="Fix the retry bug"),
+        SessionSummary(id="old-2", title="Other"),
+    ]
+    application.histories["old-1"] = [
+        HistoryItem("user", "fix the retry bug"),
+        HistoryItem("tool", "read_file", {"path": "fetch.py"}),
+        HistoryItem("assistant", "Done, I added backoff."),
+    ]
+    app = _app(application)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.press("ctrl+o")
+        await _settle(pilot, 4)
+        assert isinstance(app.screen, SessionPicker)
+
+        await pilot.press("enter")  # the first (most recent) entry is highlighted
+        await _settle(pilot, 8)
+
+        assert not isinstance(app.screen, SessionPicker)
+        assert app._session_id == "old-1"
+        assert app._task_title == "Fix the retry bug"
+        assert len(app.query(Welcome)) == 0
+        assert len(app.query(UserMessage)) == 1
+        assert len(app.query(AgentMessage)) == 1
+        card = app.query_one(Disclosure)
+        assert card.has_body  # arguments are available behind the chevron
+        text = _chat_text(app)
+        assert "fix the retry bug" in text and "added backoff" in text
+        assert "Fix the retry bug" in str(app.query_one("#title").render())
+
+
+async def test_picker_escape_keeps_the_current_conversation() -> None:
+    application = FakeApplication()
+    application.sessions = [SessionSummary(id="old-1", title="Earlier")]
+    app = _app(application)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        current = app._session_id
+        await pilot.press("ctrl+o")
+        await _settle(pilot, 4)
+        await pilot.press("escape")
+        await _settle(pilot, 3)
+        assert not isinstance(app.screen, SessionPicker)
+        assert app._session_id == current
+
+
+async def test_picker_with_no_conversations_says_so() -> None:
+    app = _app()
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.press("ctrl+o")
+        await _settle(pilot, 4)
+        assert isinstance(app.screen, SessionPicker)
+        await pilot.press("escape")
 
 
 # ── responsive layout ────────────────────────────────────────────────────────

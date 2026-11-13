@@ -69,6 +69,17 @@ or `alt+enter` (modern terminals) inserts a newline; `up`/`down` walk the sent h
 `pageup`/`pagedown` scroll the conversation. While a run is active, submitting is refused with a
 notification and the text is kept.
 
+## Conversations
+
+`ctrl+n` creates a **new stored session** (`Application.new_session`) and clears the screen; the
+previous session is kept, not discarded. `ctrl+o` (or the palette's *Switch conversation…*) opens
+`SessionPicker`: the principal's sessions, most recent first, the current one marked. Picking one
+replays its stored history (user text, assistant text, tool calls with their arguments) into the
+chat. The first message of a session is saved as its title so it is findable. Both actions are
+refused while a run is active. Reasoning and tool output are not stored, so a replayed
+conversation shows neither. The data comes through gateway-neutral `SessionSummary` and
+`HistoryItem` (in `gateways/base.py`); the TUI never touches the store.
+
 ## Header and sidebar
 
 The header shows the run state (`● idle`, `⠋ working 12s`, `◌ cancelling…`, `✓ done 12s`,
@@ -79,7 +90,7 @@ the last four subagents, and the workspace with the git branch.
 ## Keys
 
 `enter` send · `shift+enter`/`ctrl+j` newline · `esc` cancel run or focus prompt ·
-`ctrl+c` cancel, then quit · `ctrl+q` quit · `ctrl+n` new conversation · `ctrl+b` sidebar (a second press returns to automatic) ·
+`ctrl+c` cancel, then quit · `ctrl+q` quit · `ctrl+n` new conversation · `ctrl+o` switch conversation · `ctrl+b` sidebar (a second press returns to automatic) ·
 `ctrl+t` theme · `ctrl+p` palette · `f1` help overlay.
 
 ## Performance

@@ -133,6 +133,26 @@ HelpScreen { align: center middle; background: $background 70%; }
     background: $surface;
     border-left: thick $primary;
 }
+SessionPicker { align: center middle; background: $background 70%; }
+#picker-card {
+    width: 72;
+    max-width: 96%;
+    height: auto;
+    max-height: 85%;
+    padding: 1 2;
+    background: $surface;
+    border-left: thick $primary;
+}
+#picker-title { margin-bottom: 1; }
+#picker-foot { margin-top: 1; }
+#picker-list {
+    height: auto;
+    max-height: 20;
+    padding: 0;
+    border: none;
+    background: transparent;
+}
+#picker-list > .option-list--option-highlighted { background: $panel; color: $text; text-style: bold; }
 #help-title { margin-bottom: 1; }
 .help-group { margin-bottom: 1; }
 

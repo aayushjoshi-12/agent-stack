@@ -25,7 +25,9 @@ __all__ = [
     "output_line_text",
     "reasoning_block",
     "subagent_block",
+    "tool_args_lines",
     "tool_args_text",
+    "tool_detail",
     "tool_label",
     "tool_output_text",
     "tool_started_block",
@@ -138,13 +140,12 @@ def output_line_text(line: str, *, diff: bool) -> Text:
     return Text(line, style=_DIFF_STYLE[diff_kind(line)])
 
 
-def tool_args_text(event: AgentEvent) -> str:
-    """The call's arguments as ``key: value`` lines, for the expandable body of a card.
+def tool_args_lines(args: Any) -> str:
+    """A call's arguments as ``key: value`` lines, for the expandable body of a card.
 
     ``run_command`` is excluded (its command is already the card's header and its output
     is the body). Long values are cut so one huge argument cannot flood the card.
     """
-    args = event.data.get("args")
     if not isinstance(args, Mapping) or _command(args) is not None:
         return ""
     lines = []
@@ -154,9 +155,19 @@ def tool_args_text(event: AgentEvent) -> str:
     return "\n".join(lines)
 
 
+def tool_args_text(event: AgentEvent) -> str:
+    """:func:`tool_args_lines` for a ``tool.started`` event."""
+    return tool_args_lines(event.data.get("args"))
+
+
+def tool_detail(args: Any) -> str:
+    """The short header detail of a call: its command, else its first short argument."""
+    return _detail(args) or ""
+
+
 def tool_label(event: AgentEvent) -> tuple[str, str]:
     """``(tool name, short detail)`` for a ``tool.started`` event."""
-    return str(event.data.get("tool", "tool")), _detail(event.data.get("args")) or ""
+    return str(event.data.get("tool", "tool")), tool_detail(event.data.get("args"))
 
 
 def subagent_block(event: AgentEvent, *, done: bool) -> Text:

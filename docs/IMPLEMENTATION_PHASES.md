@@ -1155,7 +1155,10 @@ superseding ADR 011): collapsible tool/thinking cards with live status and durat
 multi-line composer with history, a header with run state, a richer sidebar, a footer plus
 `F1` help overlay, and breakpoint-driven responsive layout. Code is split into `theme.py`,
 `styles.tcss`, `widgets.py`, `app.py`; conventions: `docs/design/tui.md`. The "Design pass"
-paragraph above describes the earlier terminal-native look. Follow-up: `TOOL_COMPLETED` has no
+paragraph above describes the earlier terminal-native look. **P23c:** `ctrl+n` now creates a real
+new session and `ctrl+o` opens a conversation picker that replays stored history
+(`SessionStore.list_for_owner`, `Application.new_session`/`list_sessions`/`set_session_title`/
+`session_history`). Follow-up: `TOOL_COMPLETED` has no
 success flag, so failed tools still show ✓.
 
 ## Phase 25 — Telegram gateway ⬜  ← SECOND gateway to build

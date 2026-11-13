@@ -364,20 +364,14 @@ class SqliteSessionStore:
 
     async def get(self, session_id: str) -> Session | None:
         rows = await self._db.query("SELECT * FROM sessions WHERE id = ?", (session_id,))
-        if not rows:
-            return None
-        row = rows[0]
-        metadata_raw = row["metadata_json"] or "{}"
-        metadata: Any = json.loads(metadata_raw)
-        return Session(
-            id=str(row["id"]),
-            owner_id=str(row["owner_id"]),
-            agent_name=str(row["agent_name"]),
-            title=None if row["title"] is None else str(row["title"]),
-            status=str(row["status"]),
-            version=int(row["version"]),
-            metadata=dict(metadata) if isinstance(metadata, dict) else {},
+        return _row_to_session(rows[0]) if rows else None
+
+    async def list_for_owner(self, owner_id: str, limit: int = 50) -> list[Session]:
+        rows = await self._db.query(
+            "SELECT * FROM sessions WHERE owner_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT ?",
+            (owner_id, limit),
         )
+        return [_row_to_session(row) for row in rows]
 
     async def save(self, session: Session, *, expected_version: int | None = None) -> None:
         now = _now_iso()
@@ -483,6 +477,19 @@ class SqliteSessionStore:
         await self._db.execute(
             "DELETE FROM tool_executions WHERE run_id NOT IN (SELECT id FROM runs)"
         )
+
+
+def _row_to_session(row: sqlite3.Row) -> Session:
+    metadata: Any = json.loads(row["metadata_json"] or "{}")
+    return Session(
+        id=str(row["id"]),
+        owner_id=str(row["owner_id"]),
+        agent_name=str(row["agent_name"]),
+        title=None if row["title"] is None else str(row["title"]),
+        status=str(row["status"]),
+        version=int(row["version"]),
+        metadata=dict(metadata) if isinstance(metadata, dict) else {},
+    )
 
 
 def _row_to_run(row: sqlite3.Row) -> Run:

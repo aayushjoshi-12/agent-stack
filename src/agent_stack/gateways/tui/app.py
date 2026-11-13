@@ -28,7 +28,12 @@ from textual.widgets import Footer, Static
 from agent_stack.app.application import Application, IdentityResolver, SessionResolver
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.gateways.base import MessageEnvelope
-from agent_stack.gateways.tui.render import tool_args_text, tool_label
+from agent_stack.gateways.tui.render import (
+    tool_args_lines,
+    tool_args_text,
+    tool_detail,
+    tool_label,
+)
 from agent_stack.gateways.tui.theme import DARK, DEFAULT_THEME, LIGHT, THEMES
 from agent_stack.gateways.tui.widgets import (
     AgentMessage,
@@ -37,6 +42,7 @@ from agent_stack.gateways.tui.widgets import (
     HelpScreen,
     Notice,
     PromptArea,
+    SessionPicker,
     Sidebar,
     SidebarState,
     SubagentRow,
@@ -61,7 +67,8 @@ class TuiCommands(Provider):
         app = cast("TuiApp", self.app)
         commands: list[tuple[str, Any]] = [
             ("Cancel current run", app.action_cancel_run),
-            ("New conversation", app.action_clear_chat),
+            ("New conversation", app.action_new_session),
+            ("Switch conversation…", app.action_switch_session),
             ("Toggle sidebar", app.action_toggle_sidebar),
             ("Switch dark / light theme", app.action_toggle_theme),
             ("Keyboard shortcuts", app.action_help),
@@ -95,7 +102,8 @@ class TuiApp(App[None]):
         Binding("ctrl+c", "cancel_or_quit", "cancel/quit", show=False, priority=True),
         Binding("ctrl+q", "quit", "quit", show=False),
         Binding("escape", "escape_or_focus", "cancel", key_display="esc"),
-        Binding("ctrl+n", "clear_chat", "new"),
+        Binding("ctrl+n", "new_session", "new"),
+        Binding("ctrl+o", "switch_session", "chats"),
         Binding("ctrl+b", "toggle_sidebar", "sidebar"),
         Binding("ctrl+t", "toggle_theme", "theme", show=False),
         Binding("f1", "help", "help"),
@@ -136,6 +144,7 @@ class TuiApp(App[None]):
         self.subagent_rows: dict[str, SubagentRow] = {}
         self._subagent_state: dict[str, tuple[str, str]] = {}
         self._tools_run = 0
+        self._titles: dict[str, str] = {}
         self._tasks: set[asyncio.Task[None]] = set()
 
     # ── layout ────────────────────────────────────────────────────────────────
@@ -201,6 +210,7 @@ class TuiApp(App[None]):
         self._remove_welcome()
         if self._task_title is None:
             self._task_title = text
+            await self._name_session(text)
         self._bump_tokens(text)
         self._chat().mount(UserMessage(text))
         delegated = _parse_delegation(text)
@@ -210,6 +220,13 @@ class TuiApp(App[None]):
             name, task = delegated
             text = f"Delegate this task to the `{name}` subagent: {task}"
         await self._start_run(text)
+
+    async def _name_session(self, text: str) -> None:
+        """Persist the first message as the session's title so it is findable later."""
+        try:
+            await self.application.set_session_title(self._session_id or "", text[:80])
+        except Exception:  # a cosmetic title must never block the message
+            return
 
     async def _start_run(self, text: str) -> None:
         envelope = MessageEnvelope(
@@ -471,11 +488,12 @@ class TuiApp(App[None]):
         else:
             chat.scroll_page_down()
 
-    def action_clear_chat(self) -> None:
-        """New conversation: drop history, reset the title, counters and cards."""
-        self._chat().release_anchor()
-        self._chat().remove_children()
-        self._chat().mount(Welcome())
+    async def _reset_conversation(self) -> None:
+        """Empty the screen and per-conversation counters (the stored session is untouched)."""
+        chat = self._chat()
+        chat.release_anchor()
+        await chat.remove_children()  # awaited: the old Welcome shares its id
+        await chat.mount(Welcome())
         self.cards.clear()
         self.subagent_rows.clear()
         self._subagent_state.clear()
@@ -483,7 +501,59 @@ class TuiApp(App[None]):
         self._task_title = None
         self._tokens = 0
         self._last_outcome = ""
+        self._last_child_id = None
+
+    async def action_new_session(self) -> None:
+        """Start a fresh stored conversation; the current one stays in the picker."""
+        if self._run_active:
+            self.notify("A run is in progress. Press esc to cancel it first.", severity="warning")
+            return
+        self._session_id = await self.application.new_session(self._principal)
+        await self._reset_conversation()
         self._refresh_all()
+        self.query_one("#prompt", PromptArea).focus()
+
+    async def action_switch_session(self) -> None:
+        """Open the conversation picker."""
+        if self._run_active:
+            self.notify("A run is in progress. Press esc to cancel it first.", severity="warning")
+            return
+        sessions = await self.application.list_sessions(self._principal)
+        self._titles = {s.id: s.title for s in sessions}
+        self.push_screen(SessionPicker(sessions, self._session_id), self._on_session_picked)
+
+    def _on_session_picked(self, session_id: str | None) -> None:
+        if session_id is not None and session_id != self._session_id:
+            self._spawn(self._open_session(session_id))
+
+    async def _open_session(self, session_id: str) -> None:
+        """Switch to a stored conversation and replay its history into the chat."""
+        history = await self.application.session_history(session_id)
+        self._session_id = session_id
+        await self._reset_conversation()
+        title = self._titles.get(session_id, "")
+        self._task_title = None if title in ("", "Untitled") else title
+        chat = self._chat()
+        if history:
+            self._remove_welcome()
+        for item in history:
+            if item.kind == "user":
+                chat.mount(UserMessage(item.text))
+            elif item.kind == "assistant":
+                chat.mount(AgentMessage(item.text))
+            elif item.kind == "tool":
+                chat.mount(
+                    Disclosure(
+                        "tool",
+                        item.text,
+                        tool_detail(item.args),
+                        body=tool_args_lines(item.args),
+                    )
+                )
+            self._tokens += max(1, len(item.text) // 4)
+        self._refresh_all()
+        self.call_after_refresh(chat.scroll_end, animate=False)
+        self.query_one("#prompt", PromptArea).focus()
 
     def action_toggle_sidebar(self) -> None:
         """Flip the sidebar against the width default; a second press returns to automatic.

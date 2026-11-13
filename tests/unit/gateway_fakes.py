@@ -16,6 +16,7 @@ from typing import Any
 from langchain_core.messages import AIMessage
 
 from agent_stack.core.events import AgentEvent, EventType
+from agent_stack.gateways.base import HistoryItem, SessionSummary
 
 _counter = itertools.count()
 
@@ -109,6 +110,10 @@ class FakeApplication:
         self.cancelled: list[str] = []
         self.inputs: list[tuple[str, str]] = []
         self._run_counter = 0
+        self._session_counter = 0
+        self.sessions: list[SessionSummary] = []
+        self.titles: dict[str, str] = {}
+        self.histories: dict[str, list[HistoryItem]] = {}
 
     async def send_message(self, envelope: Any, *, parent_run_id: str | None = None) -> FakeHandle:
         self._run_counter += 1
@@ -131,6 +136,25 @@ class FakeApplication:
 
     async def get_session(self, session_id: str) -> None:
         return None
+
+    # -- conversations (new / list / title / history) ----------------------
+    async def new_session(self, principal: str) -> str:
+        self._session_counter += 1
+        session_id = f"{principal}-new{self._session_counter}"
+        self.sessions.insert(0, SessionSummary(id=session_id, title="Untitled"))
+        return session_id
+
+    async def list_sessions(self, principal: str, limit: int = 30) -> list[SessionSummary]:
+        return list(self.sessions)[:limit]
+
+    async def set_session_title(self, session_id: str, title: str) -> None:
+        self.titles[session_id] = title
+        self.sessions = [
+            SessionSummary(id=s.id, title=title) if s.id == session_id else s for s in self.sessions
+        ]
+
+    async def session_history(self, session_id: str) -> list[HistoryItem]:
+        return list(self.histories.get(session_id, ()))
 
     def subscribe(self, run_id: str) -> AsyncIterator[AgentEvent]:
         canned = list(self._child_events.get(run_id, ()))

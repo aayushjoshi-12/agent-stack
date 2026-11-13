@@ -85,6 +85,9 @@ class FileConversationStore:
     async def save(self, session: Session, *, expected_version: int | None = None) -> None:
         await asyncio.to_thread(self._save_session_sync, session, expected_version)
 
+    async def list_for_owner(self, owner_id: str, limit: int = 50) -> list[Session]:
+        return await asyncio.to_thread(self._list_sync, owner_id, limit)
+
     async def get_messages(self, session_id: str) -> list[BaseMessage]:
         return await self.read_messages(session_id)
 
@@ -120,6 +123,18 @@ class FileConversationStore:
                 if stripped:
                     records.append(record_from_json(stripped))
         return records
+
+    def _list_sync(self, owner_id: str, limit: int) -> list[Session]:
+        """Scan ``session.json`` files; recency is the file's modification time."""
+        if not self._sessions_root.exists():
+            return []
+        found: list[tuple[float, Session]] = []
+        for path in self._sessions_root.glob("*/session.json"):
+            session = self._get_session_sync(path.parent.name)
+            if session is not None and session.owner_id == owner_id:
+                found.append((path.stat().st_mtime, session))
+        found.sort(key=lambda item: item[0], reverse=True)
+        return [session for _, session in found[:limit]]
 
     def _get_session_sync(self, session_id: str) -> Session | None:
         path = self.session_dir(session_id) / "session.json"

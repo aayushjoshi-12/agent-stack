@@ -21,8 +21,10 @@ from textual.containers import Horizontal, Vertical
 from textual.markup import escape
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import Markdown, Static, TextArea
+from textual.widgets import Markdown, OptionList, Static, TextArea
+from textual.widgets.option_list import Option
 
+from agent_stack.gateways.base import SessionSummary
 from agent_stack.gateways.tui.render import diff_kind
 
 __all__ = [
@@ -32,6 +34,7 @@ __all__ = [
     "HelpScreen",
     "Notice",
     "PromptArea",
+    "SessionPicker",
     "Sidebar",
     "SidebarState",
     "SubagentRow",
@@ -511,7 +514,8 @@ HELP = (
         "App",
         (
             ("ctrl+p", "command palette (themes, new conversation, …)"),
-            ("ctrl+n", "new conversation"),
+            ("ctrl+n", "new conversation (the current one is kept)"),
+            ("ctrl+o", "switch to an earlier conversation"),
             ("ctrl+b", "show or hide the context sidebar"),
             ("ctrl+t", "switch dark / light theme"),
             ("ctrl+c", "cancel the run; press again to quit"),
@@ -539,4 +543,43 @@ class HelpScreen(ModalScreen[None]):
             yield Static("[$foreground-muted]esc to close[/]", id="help-foot")
 
     def action_dismiss_help(self) -> None:
+        self.dismiss(None)
+
+
+class SessionPicker(ModalScreen[str | None]):
+    """Pick an earlier conversation: Enter opens it, Esc closes without choosing."""
+
+    BINDINGS: ClassVar[list[Any]] = [Binding("escape,q", "close", "close")]
+
+    def __init__(self, sessions: list[SessionSummary], current: str | None) -> None:
+        super().__init__()
+        self._sessions = sessions
+        self._current = current
+
+    def compose(self):  # type: ignore[no-untyped-def]
+        with Vertical(id="picker-card"):
+            yield Static("[bold $primary]Conversations[/]", id="picker-title")
+            if self._sessions:
+                yield OptionList(*(self._option(s) for s in self._sessions), id="picker-list")
+            else:
+                yield Static("[$foreground-muted]No conversations yet.[/]")
+            yield Static("[$foreground-muted]enter open · esc close[/]", id="picker-foot")
+
+    def _option(self, session: SessionSummary) -> Option:
+        here = session.id == self._current
+        mark = "[$accent]●[/] " if here else "  "
+        tag = " [$foreground-muted](current)[/]" if here else ""
+        return Option(f"{mark}{escape(session.title)}{tag}", id=session.id)
+
+    def on_mount(self) -> None:
+        for widget in self.query(OptionList):
+            widget.focus()
+            for index, session in enumerate(self._sessions):
+                if session.id == self._current:
+                    widget.highlighted = index
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(event.option.id)
+
+    def action_close(self) -> None:
         self.dismiss(None)

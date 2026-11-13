@@ -23,6 +23,10 @@ sidebar. The result read as unfinished.
   instead of `on_resize`; the sidebar auto-hides below 100 columns, Ctrl+B overrides.
 - **Footer + `?` help overlay**: the footer shows the few keys that matter now, the overlay
   lists all of them. Esc always cancels the run; Ctrl+C cancels, then quits.
+- **Conversations are first-class**: `ctrl+n` starts a new stored session instead of only
+  clearing the screen (which left the model's context intact and the old chat unreachable);
+  `ctrl+o` reopens earlier ones. This needed `SessionStore.list_for_owner` and the
+  `Application` methods `new_session`, `list_sessions`, `set_session_title`, `session_history`.
 - The gateway still touches only `Application`, `gateways.base` and `core.events`.
 
 ## Consequences

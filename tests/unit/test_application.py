@@ -13,7 +13,7 @@ import asyncio
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from agent_stack.app.application import Application, IdentityResolver, SessionResolver
 from agent_stack.app.config import AppConfig
@@ -203,3 +203,76 @@ async def test_session_resolver_creates_and_reuses_default_session() -> None:
 
     # Idempotent: the same principal resolves to the same session.
     assert await resolver.resolve("telegram:user-123") == session_id
+
+
+# ── conversations: new / list / title / history ─────────────────────────────
+async def test_new_session_is_owned_listed_and_distinct() -> None:
+    application, _, _ = _build_application(FakeChatModel([ai("hi")]))
+
+    first = await application.new_session("tui:me")
+    second = await application.new_session("tui:me")
+    await application.new_session("tui:someone-else")
+
+    assert first != second
+    assert first.startswith("tui:me-")
+    listed = await application.list_sessions("tui:me")
+    assert [s.id for s in listed] == [second, first]  # most recent first, own sessions only
+    assert all(s.title == "Untitled" for s in listed)
+
+
+async def test_set_session_title_names_once_and_keeps_the_first() -> None:
+    application, _, _ = _build_application(FakeChatModel([ai("hi")]))
+    session_id = await application.new_session("tui:me")
+
+    await application.set_session_title(session_id, "Fix the retry bug")
+    await application.set_session_title(session_id, "A later message")
+    await application.set_session_title("no-such-session", "ignored")  # no error
+
+    assert [s.title for s in await application.list_sessions("tui:me")] == ["Fix the retry bug"]
+
+
+async def test_session_history_maps_messages_to_display_rows() -> None:
+    application, _, store = _build_application(FakeChatModel([ai("hi")]))
+    session_id = await application.new_session("tui:me")
+    await store.append_messages(
+        session_id,
+        [
+            SystemMessage(content="be helpful"),
+            HumanMessage(content="read the file"),
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "read_file", "args": {"path": "a.py"}, "id": "t1"}],
+            ),
+            ToolMessage(content="print(1)", tool_call_id="t1"),
+            AIMessage(content=[{"type": "text", "text": "It prints 1."}]),
+        ],
+    )
+
+    history = await application.session_history(session_id)
+
+    assert [(h.kind, h.text) for h in history] == [
+        ("user", "read the file"),
+        ("tool", "read_file"),
+        ("assistant", "It prints 1."),
+    ]
+    assert history[1].args == {"path": "a.py"}
+
+
+async def test_history_replays_what_a_real_run_persisted() -> None:
+    application, _, _ = _build_application(FakeChatModel([ai("Retries added.")]))
+    session_id = await application.new_session("tui:me")
+    handle = await application.send_message(
+        MessageEnvelope(principal="tui:me", session=session_id, text="add retries")
+    )
+    async for _ in handle.events():
+        pass
+
+    history = await application.session_history(session_id)
+
+    assert [(h.kind, h.text) for h in history] == [
+        ("user", "add retries"),
+        ("assistant", "Retries added."),
+    ]
+    other = await application.new_session("tui:me")
+    assert await application.session_history(other) == []  # a new session starts empty
+    assert [s.id for s in await application.list_sessions("tui:me")] == [other, session_id]

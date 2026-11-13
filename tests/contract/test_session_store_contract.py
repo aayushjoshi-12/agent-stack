@@ -8,6 +8,7 @@ The fixture takes a *factory* (path -> store) so each backend gets an isolated `
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from itertools import count
 from pathlib import Path
@@ -65,6 +66,27 @@ def store(request: pytest.FixtureRequest, tmp_path: Path) -> Any:
     indirect=True,
 )
 class TestSessionStoreContract:
+    async def test_list_for_owner_filters_and_orders_most_recent_first(self, store: Any) -> None:
+        mine_old = Session(id="list-old", owner_id="lister", agent_name="a", title="old")
+        mine_new = Session(id="list-new", owner_id="lister", agent_name="a", title="new")
+        other = Session(id="list-other", owner_id="someone-else", agent_name="a")
+        await store.save(mine_old)
+        await store.save(other)
+        await asyncio.sleep(0.02)  # file mtimes / ISO timestamps must differ
+        await store.save(mine_new)
+
+        listed = await store.list_for_owner("lister")
+
+        assert [s.id for s in listed] == ["list-new", "list-old"]
+        assert [s.title for s in listed] == ["new", "old"]
+
+    async def test_list_for_owner_respects_limit_and_empty(self, store: Any) -> None:
+        assert await store.list_for_owner("nobody") == []
+        for i in range(3):
+            await store.save(Session(id=f"lim-{i}", owner_id="limiter", agent_name="a"))
+            await asyncio.sleep(0.02)
+        assert len(await store.list_for_owner("limiter", limit=2)) == 2
+
     async def test_create_and_get_session(self, store: Any) -> None:
         session = _session()
 

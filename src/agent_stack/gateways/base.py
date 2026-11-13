@@ -23,7 +23,7 @@ from agent_stack.core.events import AgentEvent
 if TYPE_CHECKING:
     from agent_stack.app.application import Application
 
-__all__ = ["Gateway", "MessageEnvelope"]
+__all__ = ["Gateway", "HistoryItem", "MessageEnvelope", "SessionSummary"]
 
 
 @dataclass(frozen=True)
@@ -40,6 +40,27 @@ class MessageEnvelope:
     session: str
     text: str
     metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SessionSummary:
+    """One conversation in a picker: its id and a human title (first message)."""
+
+    id: str
+    title: str
+
+
+@dataclass(frozen=True)
+class HistoryItem:
+    """One row of a stored conversation, in a gateway-neutral shape.
+
+    ``kind`` is ``user``, ``assistant`` or ``tool``; ``text`` is the message text or the
+    tool name, and ``args`` carries a tool call's arguments.
+    """
+
+    kind: str
+    text: str
+    args: Mapping[str, Any] | None = None
 
 
 @runtime_checkable

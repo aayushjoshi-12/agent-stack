@@ -39,6 +39,10 @@ class SessionStore(Protocol):
 
     async def save(self, session: Session, *, expected_version: int | None = None) -> None: ...
 
+    async def list_for_owner(self, owner_id: str, limit: int = 50) -> list[Session]:
+        """The owner's sessions, most recently active first (at most ``limit``)."""
+        ...
+
     async def get_messages(self, session_id: str) -> list[BaseMessage]: ...
 
     async def append_messages(self, session_id: str, messages: Sequence[BaseMessage]) -> None: ...
@@ -71,6 +75,12 @@ class InMemorySessionStore:
                 f"{stored.version if stored is not None else 'absent'}"
             )
         self._sessions[session.id] = replace(session, metadata=dict(session.metadata))
+
+    async def list_for_owner(self, owner_id: str, limit: int = 50) -> list[Session]:
+        # Dicts keep insertion order and `save` rewrites in place, so recency here is
+        # creation order; a volatile test double does not track activity times.
+        owned = [s for s in reversed(self._sessions.values()) if s.owner_id == owner_id]
+        return [replace(s, metadata=dict(s.metadata)) for s in owned[:limit]]
 
     async def get_messages(self, session_id: str) -> list[BaseMessage]:
         return list(self._messages.get(session_id, []))

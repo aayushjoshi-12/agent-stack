@@ -10,17 +10,22 @@ session; gateways use it to build :class:`~agent_stack.gateways.base.MessageEnve
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from uuid import uuid4
+
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 from agent_stack.app.config import AppConfig
 from agent_stack.core.agent import Agent
+from agent_stack.core.errors import SessionVersionConflictError
 from agent_stack.core.event_bus import EventBus
 from agent_stack.core.events import AgentEvent
 from agent_stack.core.factory import AgentFactory
 from agent_stack.core.run import Run, RunHandle, RunManager, RunRequest
 from agent_stack.core.session import Session, SessionStore
-from agent_stack.gateways.base import MessageEnvelope
+from agent_stack.gateways.base import HistoryItem, MessageEnvelope, SessionSummary
 
 
 @dataclass
@@ -76,6 +81,36 @@ class Application:
         """Return a session's metadata, or ``None`` when it does not exist."""
         return await self.session_store.get(session_id)
 
+    async def new_session(self, principal: str) -> str:
+        """Create an empty session for ``principal`` and return its id."""
+        session = Session(
+            id=f"{principal}-{uuid4().hex[:8]}",
+            owner_id=principal,
+            agent_name=self.agent.name,
+        )
+        await self.session_store.save(session)
+        return session.id
+
+    async def list_sessions(self, principal: str, limit: int = 30) -> list[SessionSummary]:
+        """The principal's sessions, most recently active first, for a picker."""
+        sessions = await self.session_store.list_for_owner(principal, limit)
+        return [SessionSummary(id=s.id, title=s.title or "Untitled") for s in sessions]
+
+    async def set_session_title(self, session_id: str, title: str) -> None:
+        """Name a session once (the first message); an existing title is kept."""
+        session = await self.session_store.get(session_id)
+        if session is None or session.title:
+            return
+        session.title = title
+        # A run may bump the version first; the title is cosmetic, so a conflict is skipped.
+        with contextlib.suppress(SessionVersionConflictError):
+            await self.session_store.save(session, expected_version=session.version)
+
+    async def session_history(self, session_id: str) -> list[HistoryItem]:
+        """A stored conversation as display rows: user text, assistant text, tool calls."""
+        messages = await self.session_store.get_messages(session_id)
+        return [item for message in messages for item in _history_items(message)]
+
     def subscribe(self, run_id: str) -> AsyncIterator[AgentEvent]:
         """A live event stream for a run (single-consumption, no replay)."""
         return self.event_bus.subscribe(run_id)
@@ -114,3 +149,34 @@ class SessionResolver:
             )
             await self._session_store.save(session)
         return session.id
+
+
+def _text_of(message: BaseMessage) -> str:
+    """A message's text, whether ``content`` is a string or a list of content blocks."""
+    content = message.content
+    if isinstance(content, str):
+        return content
+    parts = [
+        block if isinstance(block, str) else str(block.get("text", ""))
+        for block in content
+        if isinstance(block, (str, dict))
+    ]
+    return "".join(parts)
+
+
+def _history_items(message: BaseMessage) -> list[HistoryItem]:
+    """Map one stored message to display rows; system and tool results are not shown."""
+    if isinstance(message, HumanMessage):
+        text = _text_of(message)
+        return [HistoryItem("user", text)] if text.strip() else []
+    if isinstance(message, AIMessage):
+        items: list[HistoryItem] = []
+        text = _text_of(message)
+        if text.strip():
+            items.append(HistoryItem("assistant", text))
+        items.extend(
+            HistoryItem("tool", str(call["name"]), dict(call.get("args") or {}))
+            for call in message.tool_calls
+        )
+        return items
+    return []
