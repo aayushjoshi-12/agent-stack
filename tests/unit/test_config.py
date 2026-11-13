@@ -52,3 +52,12 @@ def test_from_env_expands_user() -> None:
     assert "~" not in str(cfg.db_path)
     assert cfg.workspace == Path.home() / "agent-stack-ws"
     assert cfg.db_path == Path.home() / "agent-stack-ws" / "agent.db"
+
+
+def test_default_model_is_deepseek_v4_pro_on_openrouter() -> None:
+    assert AppConfig().model == "openrouter:deepseek/deepseek-v4-pro"
+
+
+def test_context_window_defaults_and_is_overridable() -> None:
+    assert AppConfig().context_window == 1_000_000
+    assert AppConfig.from_env({"AGENT_STACK_CONTEXT_WINDOW": "128000"}).context_window == 128_000

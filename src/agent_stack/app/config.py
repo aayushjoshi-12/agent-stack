@@ -21,7 +21,9 @@ class AppConfig:
     `AGENT_STACK_DB` (``db_path``) overrides it.
     """
 
-    model: str = "openrouter:z-ai/glm-5.3"
+    model: str = "openrouter:deepseek/deepseek-v4-pro"
+    #: Context window (tokens) of ``model``; only used for the TUI's usage meter.
+    context_window: int = 1_000_000
     workspace: Path = field(default_factory=Path.cwd)
     #: Explicit index path; ``None`` means ``<workspace>/agent.db`` (see :attr:`database`).
     db_path: Path | None = None
@@ -54,6 +56,7 @@ class AppConfig:
 
         return cls(
             model=source.get("AGENT_STACK_MODEL", defaults.model),
+            context_window=int(source.get("AGENT_STACK_CONTEXT_WINDOW", defaults.context_window)),
             workspace=workspace,
             db_path=db_path,
             theme=source.get("AGENT_STACK_THEME", defaults.theme),

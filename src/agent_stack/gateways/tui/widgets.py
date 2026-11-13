@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import time
 from collections import deque
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
@@ -547,23 +548,36 @@ class HelpScreen(ModalScreen[None]):
 
 
 class SessionPicker(ModalScreen[str | None]):
-    """Pick an earlier conversation: Enter opens it, Esc closes without choosing."""
+    """Pick an earlier conversation: Enter opens it, ``d`` (twice) deletes it, Esc closes.
 
-    BINDINGS: ClassVar[list[Any]] = [Binding("escape,q", "close", "close")]
+    ``delete`` is supplied by the app, so the picker never touches storage itself.
+    """
 
-    def __init__(self, sessions: list[SessionSummary], current: str | None) -> None:
+    BINDINGS: ClassVar[list[Any]] = [
+        Binding("escape,q", "close", "close"),
+        Binding("d,delete", "delete", "delete"),
+    ]
+    FOOT = "[$foreground-muted]enter open · d delete · esc close[/]"
+
+    def __init__(
+        self,
+        sessions: list[SessionSummary],
+        current: str | None,
+        delete: Callable[[str], Awaitable[None]],
+    ) -> None:
         super().__init__()
         self._sessions = sessions
         self._current = current
+        self._delete = delete
+        self._pending: str | None = None  # the id awaiting a second `d`
 
     def compose(self):  # type: ignore[no-untyped-def]
         with Vertical(id="picker-card"):
             yield Static("[bold $primary]Conversations[/]", id="picker-title")
-            if self._sessions:
-                yield OptionList(*(self._option(s) for s in self._sessions), id="picker-list")
-            else:
-                yield Static("[$foreground-muted]No conversations yet.[/]")
-            yield Static("[$foreground-muted]enter open · esc close[/]", id="picker-foot")
+            yield OptionList(*(self._option(s) for s in self._sessions), id="picker-list")
+            yield Static(self.FOOT if self._sessions else self._EMPTY, id="picker-foot")
+
+    _EMPTY = "[$foreground-muted]No conversations yet. esc to close[/]"
 
     def _option(self, session: SessionSummary) -> Option:
         here = session.id == self._current
@@ -572,14 +586,38 @@ class SessionPicker(ModalScreen[str | None]):
         return Option(f"{mark}{escape(session.title)}{tag}", id=session.id)
 
     def on_mount(self) -> None:
-        for widget in self.query(OptionList):
-            widget.focus()
-            for index, session in enumerate(self._sessions):
-                if session.id == self._current:
-                    widget.highlighted = index
+        listing = self.query_one(OptionList)
+        listing.focus()
+        for index, session in enumerate(self._sessions):
+            if session.id == self._current:
+                listing.highlighted = index
+
+    def _foot(self, markup: str) -> None:
+        self.query_one("#picker-foot", Static).update(markup)
+
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        if self._pending is not None and event.option.id != self._pending:
+            self._pending = None
+            self._foot(self.FOOT)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         self.dismiss(event.option.id)
+
+    async def action_delete(self) -> None:
+        listing = self.query_one(OptionList)
+        if listing.highlighted is None or listing.option_count == 0:
+            return
+        session_id = listing.get_option_at_index(listing.highlighted).id
+        if session_id is None:
+            return
+        if self._pending != session_id:  # first press asks, second press deletes
+            self._pending = session_id
+            self._foot("[$warning]Press d again to delete this conversation for good[/]")
+            return
+        self._pending = None
+        await self._delete(session_id)
+        listing.remove_option(session_id)
+        self._foot(self.FOOT if listing.option_count else self._EMPTY)
 
     def action_close(self) -> None:
         self.dismiss(None)

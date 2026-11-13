@@ -71,20 +71,23 @@ notification and the text is kept.
 
 ## Conversations
 
-`ctrl+n` creates a **new stored session** (`Application.new_session`) and clears the screen; the
-previous session is kept, not discarded. `ctrl+o` (or the palette's *Switch conversation…*) opens
-`SessionPicker`: the principal's sessions, most recent first, the current one marked. Picking one
-replays its stored history (user text, assistant text, tool calls with their arguments) into the
-chat. The first message of a session is saved as its title so it is findable. Both actions are
-refused while a run is active. Reasoning and tool output are not stored, so a replayed
-conversation shows neither. The data comes through gateway-neutral `SessionSummary` and
-`HistoryItem` (in `gateways/base.py`); the TUI never touches the store.
+A launch always opens a **fresh draft**, never the last chat. Nothing is stored until the first
+message is sent (`Application.new_session` then runs), so opening and quitting leaves no empty
+conversation behind. `ctrl+n` returns to a fresh draft the same way; the conversation you leave is
+kept. `ctrl+o` (or the palette's *Switch conversation…*) opens `SessionPicker`: the principal's
+sessions, most recent first, the current one marked. Enter replays the stored history (user text,
+assistant text, tool calls with their arguments) into the chat; `d` then `d` again deletes the
+highlighted conversation for good (moving the highlight cancels the first press), and deleting the
+open one returns to a fresh draft. The first message of a session is saved as its title.
+Switching and new/delete are refused while a run is active. Reasoning and tool output are not
+stored, so a replayed conversation shows neither. Data crosses the boundary as gateway-neutral
+`SessionSummary` and `HistoryItem` (in `gateways/base.py`); the TUI never touches the store.
 
 ## Header and sidebar
 
 The header shows the run state (`● idle`, `⠋ working 12s`, `◌ cancelling…`, `✓ done 12s`,
 `■ cancelled`, `✗ failed`). The sidebar shows the session, an **estimated** context meter
-(about 4 chars per token against a 200K window; amber at 70%, red at 90%), tool-call count,
+(about 4 chars per token against `AGENT_STACK_CONTEXT_WINDOW`, default 1M for the default model; amber at 70%, red at 90%), tool-call count,
 the last four subagents, and the workspace with the git branch.
 
 ## Keys

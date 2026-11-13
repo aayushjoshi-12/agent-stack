@@ -511,12 +511,35 @@ async def test_new_conversation_starts_a_new_session_and_keeps_the_old_one() -> 
         await pilot.press("ctrl+n")
         await _settle(pilot, 3)
 
-        assert app._session_id != first  # a real new session, not just a cleared screen
+        assert app._session_id is None  # a draft: stored only when a message is sent
         assert len(app.query(Welcome)) == 1
         assert len(app.query(UserMessage)) == 0
         assert app._tokens == 0
         assert app._task_title is None
         assert "New conversation" in str(app.query_one("#title").render())
+
+        await _submit(pilot, "second task")
+        assert app._session_id not in (None, first)  # a real, separate session
+        assert application.titles[app._session_id] == "second task"
+
+
+async def test_launch_is_a_fresh_draft_and_stores_nothing_until_the_first_message() -> None:
+    application = FakeApplication(
+        events=[event(EventType.RUN_STARTED), event(EventType.RUN_COMPLETED)]
+    )
+    app = TuiApp(application)  # type: ignore[arg-type]  # no session_id: a normal launch
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        assert app._session_id is None
+        assert application.sessions == []  # opening (and quitting) leaves no empty chat
+        assert len(app.query(Welcome)) == 1
+        assert "not saved yet" in str(app.query_one("#sb-session").render())
+
+        await _submit(pilot, "hello")
+        assert app._session_id is not None
+        assert [s.id for s in application.sessions] == [app._session_id]
+        assert application.sent[0][0].session == app._session_id
 
 
 async def test_new_conversation_is_refused_while_a_run_is_active() -> None:
@@ -714,3 +737,68 @@ def test_format_duration_is_compact() -> None:
     assert format_duration(0.42) == "0.4s"
     assert format_duration(12.4) == "12s"
     assert format_duration(65) == "1m05s"
+
+
+# ── deleting conversations from the picker ───────────────────────────────────
+def _with_sessions() -> FakeApplication:
+    application = FakeApplication()
+    application.sessions = [
+        SessionSummary(id="keep", title="Keep me"),
+        SessionSummary(id="gone", title="Delete me"),
+    ]
+    return application
+
+
+async def test_picker_delete_needs_a_second_press() -> None:
+    application = _with_sessions()
+    app = _app(application)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.press("ctrl+o")
+        await _settle(pilot, 4)
+        await pilot.press("down", "d")  # highlight "Delete me", ask once
+        await _settle(pilot, 3)
+        assert application.deleted == []
+        assert "again" in str(app.screen.query_one("#picker-foot").render())
+
+        await pilot.press("d")  # confirm
+        await _settle(pilot, 4)
+        assert application.deleted == ["gone"]
+        assert app.screen.query_one("#picker-list").option_count == 1
+
+
+async def test_picker_delete_is_cancelled_by_moving_the_highlight() -> None:
+    application = _with_sessions()
+    app = _app(application)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.press("ctrl+o")
+        await _settle(pilot, 4)
+        await pilot.press("down", "d", "up", "d")  # the second d targets a different row
+        await _settle(pilot, 4)
+        assert application.deleted == []
+
+
+async def test_deleting_the_open_conversation_returns_to_a_fresh_draft() -> None:
+    application = _with_sessions()
+    application.histories["keep"] = [HistoryItem("user", "hi"), HistoryItem("assistant", "yo")]
+    app = _app(application)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.press("ctrl+o")
+        await _settle(pilot, 4)
+        await pilot.press("enter")  # open "Keep me"
+        await _settle(pilot, 8)
+        assert app._session_id == "keep"
+        assert len(app.query(UserMessage)) == 1
+
+        await pilot.press("ctrl+o")
+        await _settle(pilot, 4)
+        await pilot.press("d", "d")  # the highlighted row is the current conversation
+        await _settle(pilot, 6)
+        assert application.deleted == ["keep"]
+        assert app._session_id is None
+        await pilot.press("escape")
+        await _settle(pilot, 4)
+        assert len(app.query(UserMessage)) == 0
+        assert len(app.query(Welcome)) == 1

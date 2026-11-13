@@ -25,7 +25,7 @@ from textual.command import Hit, Hits, Provider
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Footer, Static
 
-from agent_stack.app.application import Application, IdentityResolver, SessionResolver
+from agent_stack.app.application import Application, IdentityResolver
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.gateways.base import MessageEnvelope
 from agent_stack.gateways.tui.render import (
@@ -54,8 +54,6 @@ from agent_stack.gateways.tui.widgets import (
 __all__ = ["TuiApp", "TuiCommands"]
 
 _QUIT_WORDS = frozenset({"exit", "quit"})
-#: Rough context window used for the usage meter (the estimate is ~4 chars per token).
-CONTEXT_WINDOW = 200_000
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
@@ -160,10 +158,6 @@ class TuiApp(App[None]):
         yield Footer()
 
     async def on_mount(self) -> None:
-        if self._session_id is None:
-            resolver = SessionResolver(self.application.session_store, self.application.agent.name)
-            self._session_id = await resolver.resolve(self._principal)
-
         self.query_one(HeaderBar).set_model(self.application.config.model)
         self.query_one("#prompt", PromptArea).focus()
         self.set_interval(0.1, self._tick)
@@ -208,6 +202,10 @@ class TuiApp(App[None]):
 
     async def _submit_prompt(self, text: str) -> None:
         self._remove_welcome()
+        if self._session_id is None:
+            # A launch (or ctrl+n) is only a draft: the session is stored on first message,
+            # so opening and quitting never leaves an empty conversation behind.
+            self._session_id = await self.application.new_session(self._principal)
         if self._task_title is None:
             self._task_title = text
             await self._name_session(text)
@@ -436,9 +434,9 @@ class TuiApp(App[None]):
             word = self._last_outcome or "idle"
         return SidebarState(
             title=self._task_title or "New conversation",
-            session=f"session {self._session_id or ''}",
+            session=f"session {self._session_id}" if self._session_id else "not saved yet",
             tokens=self._tokens,
-            window=CONTEXT_WINDOW,
+            window=self.application.config.context_window,
             tools_run=self._tools_run,
             tools_running=running,
             subagents=list(self._subagent_state.values()),
@@ -508,7 +506,7 @@ class TuiApp(App[None]):
         if self._run_active:
             self.notify("A run is in progress. Press esc to cancel it first.", severity="warning")
             return
-        self._session_id = await self.application.new_session(self._principal)
+        self._session_id = None  # a draft; stored when the first message is sent
         await self._reset_conversation()
         self._refresh_all()
         self.query_one("#prompt", PromptArea).focus()
@@ -520,7 +518,20 @@ class TuiApp(App[None]):
             return
         sessions = await self.application.list_sessions(self._principal)
         self._titles = {s.id: s.title for s in sessions}
-        self.push_screen(SessionPicker(sessions, self._session_id), self._on_session_picked)
+        self.push_screen(
+            SessionPicker(sessions, self._session_id, self._delete_session),
+            self._on_session_picked,
+        )
+
+    async def _delete_session(self, session_id: str) -> None:
+        """Delete a stored conversation; deleting the open one returns to a fresh draft."""
+        await self.application.delete_session(session_id)
+        self._titles.pop(session_id, None)
+        if session_id == self._session_id:
+            self._session_id = None
+            await self._reset_conversation()
+            self._refresh_all()
+        self.notify("Conversation deleted.")
 
     def _on_session_picked(self, session_id: str | None) -> None:
         if session_id is not None and session_id != self._session_id:

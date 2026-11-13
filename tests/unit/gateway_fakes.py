@@ -47,6 +47,7 @@ class FakeConfig:
     workspace: Path = Path(".")
     model: str = "test:model"
     theme: str = "ansi-dark"
+    context_window: int = 200_000
 
 
 class FakeAgent:
@@ -113,6 +114,7 @@ class FakeApplication:
         self._session_counter = 0
         self.sessions: list[SessionSummary] = []
         self.titles: dict[str, str] = {}
+        self.deleted: list[str] = []
         self.histories: dict[str, list[HistoryItem]] = {}
 
     async def send_message(self, envelope: Any, *, parent_run_id: str | None = None) -> FakeHandle:
@@ -146,6 +148,10 @@ class FakeApplication:
 
     async def list_sessions(self, principal: str, limit: int = 30) -> list[SessionSummary]:
         return list(self.sessions)[:limit]
+
+    async def delete_session(self, session_id: str) -> None:
+        self.deleted.append(session_id)
+        self.sessions = [s for s in self.sessions if s.id != session_id]
 
     async def set_session_title(self, session_id: str, title: str) -> None:
         self.titles[session_id] = title

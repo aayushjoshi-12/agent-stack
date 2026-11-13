@@ -96,6 +96,10 @@ class Application:
         sessions = await self.session_store.list_for_owner(principal, limit)
         return [SessionSummary(id=s.id, title=s.title or "Untitled") for s in sessions]
 
+    async def delete_session(self, session_id: str) -> None:
+        """Permanently delete a session and its stored conversation (idempotent)."""
+        await self.session_store.delete(session_id)
+
     async def set_session_title(self, session_id: str, title: str) -> None:
         """Name a session once (the first message); an existing title is kept."""
         session = await self.session_store.get(session_id)
