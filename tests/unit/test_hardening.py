@@ -276,3 +276,181 @@ async def test_deleting_a_session_leaves_no_orphans_anywhere(tmp_path: Path) -> 
     assert conversation.session_dir("kept").exists()
     # Facts are the user's, not the session's: they deliberately outlive the conversation.
     assert (await memory.get("user:u", "city")) is not None
+
+
+# ── a long conversation never reaches the model as a broken window ───────────
+def _tool_conversation(turns: int) -> list[Any]:
+    """Human, assistant-with-tool-call, tool result, assistant: repeated ``turns`` times."""
+    history: list[Any] = []
+    for i in range(turns):
+        history += [
+            HumanMessage(content=f"q{i}"),
+            AIMessage(content="", tool_calls=[call("t", id=f"c{i}")]),
+            ToolMessage(content="result", tool_call_id=f"c{i}"),
+            AIMessage(content=f"a{i}"),
+        ]
+    return history
+
+
+def test_the_window_never_starts_on_a_tool_result_whose_call_was_cut_off() -> None:
+    """Regression: some history lengths cut between a tool call and its result, which
+    providers reject ("tool message without a preceding tool call")."""
+    from agent_stack.core.context import ContextBuilder
+
+    builder = ContextBuilder(recent_window=40)
+    history = _tool_conversation(30)
+
+    for end in range(1, len(history) + 1):
+        window = builder.build(system_parts=["s"], history=history[:end]).messages
+        assert not window or not isinstance(window[0], ToolMessage), f"history[:{end}]"
+        called = {c["id"] for m in window if isinstance(m, AIMessage) for c in m.tool_calls}
+        assert all(m.tool_call_id in called for m in window if isinstance(m, ToolMessage))
+
+
+async def test_compaction_does_not_leave_an_orphaned_tool_result_either() -> None:
+    from agent_stack.core.context import ContextBuilder
+
+    history = _tool_conversation(30)[:114]  # a length whose naive cut lands on a ToolMessage
+    compacted = await ContextBuilder(recent_window=40).compact(history)
+
+    assert not isinstance(compacted[0], ToolMessage)
+
+
+async def test_a_very_long_conversation_reaches_the_model_bounded_and_fast() -> None:
+    import time
+
+    from agent_stack.core.context import ContextBuilder
+
+    store = InMemorySessionStore()
+    await store.append_messages("s", _tool_conversation(1500))  # 6,000 messages of history
+    model = FakeChatModel([ai("ok")])
+    agent = Agent(name="assistant", model="m")
+    runtime = AgentRuntime(
+        agent=agent,
+        model=model,
+        tool_executor=ToolExecutor(ToolRegistry([])),
+        session_store=store,
+        context_builder=ContextBuilder(recent_window=40),
+    )
+
+    started = time.monotonic()
+    await runtime.run(session_id="s", user_id="u", message="latest question")
+
+    sent = model.calls[0]
+    assert len(sent) <= 42  # one system message + the recent window (+ the new message)
+    assert not isinstance(sent[1], ToolMessage)
+    assert sent[-1].content == "latest question"
+    assert time.monotonic() - started < 2.0
+
+
+# ── the database failing underneath a run ────────────────────────────────────
+async def test_a_failing_checkpoint_database_fails_the_run_cleanly() -> None:
+    import sqlite3
+
+    class LockedStore:
+        async def save(self, checkpoint: Any) -> None:
+            raise sqlite3.OperationalError("database is locked")
+
+        async def completed_tool_call_ids(self, run_id: str) -> set[str]:
+            return set()
+
+        async def record_tool_executions(self, run_id: str, results: Any) -> None:
+            raise sqlite3.OperationalError("database is locked")
+
+    store = InMemorySessionStore()
+    events: list[AgentEvent] = []
+
+    class Recording(InMemoryEventBus):
+        async def publish(self, event: AgentEvent) -> None:
+            events.append(event)
+            await super().publish(event)
+
+    runtime = _runtime(FakeChatModel([ai("hi")]), store=store, bus=Recording())
+
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        await runtime.run(
+            session_id="s",
+            user_id="u",
+            message="hello",
+            run_id="r1",
+            checkpoint_store=LockedStore(),
+        )
+
+    assert [e.type for e in events if e.type is EventType.RUN_FAILED] == [EventType.RUN_FAILED]
+    assert [m.content for m in await store.get_messages("s")][:1] == ["hello"]  # nothing lost
+    again = _runtime(FakeChatModel([ai("fine")]), store=store)  # the next run is unaffected
+    assert (await again.run(session_id="s", user_id="u", message="again")).content == "fine"
+
+
+# ── a subagent that fails or times out does not take its parent down ─────────
+async def _delegate_to(
+    child_model: Any, child_limits: AgentLimits | None = None, tools: Any = ()
+) -> str:
+    from agent_stack.core.agent import SubAgentSpec
+    from agent_stack.subagents.delegation import delegate
+    from tests.unit.test_subagents import FakeFactory
+
+    store, bus = InMemorySessionStore(), InMemoryEventBus()
+    child = Agent(
+        name="explorer",
+        model="m",
+        tools=tuple(tools),
+        limits=child_limits or AgentLimits(),
+    )
+    child_runtime = AgentRuntime(
+        agent=child,
+        model=child_model,
+        tool_executor=ToolExecutor(ToolRegistry(list(tools))),
+        session_store=store,
+        event_bus=bus,
+    )
+    parent = Agent(
+        name="assistant",
+        model="m",
+        tools=(delegate,),
+        subagents=(SubAgentSpec("explorer", "explore", child),),
+    )
+    parent_runtime = AgentRuntime(
+        agent=parent,
+        model=FakeChatModel(
+            [
+                ai(
+                    tool_calls=[
+                        call("delegate", {"agent_name": "explorer", "task": "look"}, id="d1")
+                    ]
+                ),
+                ai("parent finished"),
+            ]
+        ),
+        tool_executor=ToolExecutor(ToolRegistry([delegate])),  # type: ignore[list-item]
+        session_store=store,
+        event_bus=bus,
+    )
+    manager = RunManager(
+        runtime=parent_runtime,
+        run_store=InMemoryRunStore(),
+        event_bus=bus,
+        agent_factory=FakeFactory({"explorer": child_runtime}),  # type: ignore[arg-type]
+    )
+
+    handle = await manager.start(RunRequest(session_id="s", user_id="u", message="go"))
+    result = await asyncio.wait_for(handle.result(), 5.0)
+    assert result.content == "parent finished"  # the parent carried on regardless
+    (tool_message,) = [m for m in await store.get_messages("s") if isinstance(m, ToolMessage)]
+    return str(tool_message.content)
+
+
+async def test_a_failing_subagent_is_reported_to_the_parent_not_raised() -> None:
+    reported = await _delegate_to(RaisingModel(RuntimeError("explorer exploded")))
+
+    assert "explorer exploded" in reported
+
+
+async def test_a_subagent_that_times_out_is_reported_to_the_parent() -> None:
+    reported = await _delegate_to(
+        FakeChatModel([ai(tool_calls=[call("slow", id="s1")]), ai("never")]),
+        AgentLimits(max_runtime_seconds=0.1, tool_timeout_seconds=30.0),
+        tools=[SleepTool("slow", 5.0)],
+    )
+
+    assert "runtime limit" in reported

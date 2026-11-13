@@ -1305,7 +1305,7 @@ invariants; `tests/unit/test_observability.py` includes the no-secret-in-any-log
 
 ---
 
-## Phase 28 — Hardening 🟡
+## Phase 28 — Hardening ✅
 
 **Goal.** Survive the ugly paths. §22, §148–149.
 
@@ -1340,8 +1340,14 @@ large conversation     gateway reconnect       approval race
 - Matrix rows covered by tests: provider timeout, provider 429, tool timeout, tool exception,
   concurrent session access, cancellation, approval race (decide twice or against another
   run), large output, process crash (`recover`, now including runs paused for approval).
-- **Not covered yet:** database failure, duplicate gateway message, subagent failure/timeout,
-  large-conversation stress, gateway reconnect (no network gateway exists yet).
+- Also covered: a **long conversation** (the model window never begins on a tool result whose
+  call was cut off, which providers reject; this was a real bug in `ContextBuilder`), a **failing
+  checkpoint database** (the run fails cleanly, the user's message is kept, the next run is
+  unaffected), and a **subagent failure or timeout** (reported to the parent as a result, never
+  raised). Gateway reconnect is the Telegram poll loop's backoff; a duplicate gateway message is
+  the Telegram update/message-id dedupe (the TUI and REPL have no redelivery).
+- **Known limit:** if recording a tool batch fails *after* the tools ran, a same-`run_id` retry
+  could run a mutating tool again; the failed run saves no tool results, so the history stays valid.
 
 ---
 

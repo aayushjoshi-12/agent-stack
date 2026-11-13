@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from langchain_core.messages import BaseMessage, SystemMessage
+from langchain_core.messages import BaseMessage, SystemMessage, ToolMessage
 
 from agent_stack.core.errors import ConfigurationError
 
@@ -73,6 +73,18 @@ class SystemPartsProvider(Protocol):
     async def parts(self, *, base_prompt: str) -> Sequence[str]: ...
 
 
+def _recent(history: Sequence[BaseMessage], window: int) -> list[BaseMessage]:
+    """The last ``window`` messages, never starting on an orphaned tool result.
+
+    A cut that lands between an assistant message and its tool results would leave
+    ToolMessages whose tool call the model can no longer see, which providers reject.
+    """
+    recent = list(history[-window:])
+    while recent and isinstance(recent[0], ToolMessage):
+        recent.pop(0)
+    return recent
+
+
 class ContextBuilder:
     """Assembles bounded contexts and compacts oversized conversation history.
 
@@ -99,7 +111,7 @@ class ContextBuilder:
     def build(self, *, system_parts: Sequence[str], history: Sequence[BaseMessage]) -> Context:
         """Build a context: budget-fit system parts plus the last ``recent_window`` messages."""
         system = tuple(self._fit_system_parts(system_parts))
-        messages = tuple(history[-self.recent_window :])
+        messages = tuple(_recent(history, self.recent_window))
         return Context(system=system, messages=messages)
 
     async def compact(self, history: list[BaseMessage]) -> list[BaseMessage]:
@@ -110,10 +122,10 @@ class ContextBuilder:
         """
         if len(history) <= self.recent_window:
             return history
-        recent = history[-self.recent_window :]
+        recent = _recent(history, self.recent_window)
         if self.summarizer is None:
             return recent
-        old = history[: -self.recent_window]
+        old = history[: len(history) - len(recent)]
         summary = await self.summarizer.summarize(old)
         return [SystemMessage(content=summary), *recent]
 
