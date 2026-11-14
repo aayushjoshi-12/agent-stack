@@ -105,33 +105,35 @@ _UPDATE_IDS = iter(range(1, 10_000))
 
 
 def _message(
-    text: str, *, user: int = OWNER, chat: int = 50, message_id: int | None = None
+    text: str, *, user: int = OWNER, chat: int | None = None, message_id: int | None = None
 ) -> dict[str, Any]:
     update_id = next(_UPDATE_IDS)
+    chat = user if chat is None else chat  # in a private chat the chat id is the user's id
     return {
         "update_id": update_id,
         "message": {
             "message_id": message_id or update_id,
             "from": {"id": user},
-            "chat": {"id": chat},
+            "chat": {"id": chat, "type": "private"},
             "text": text,
         },
     }
 
 
-def _callback(data: str, *, user: int = OWNER, chat: int = 50) -> dict[str, Any]:
+def _callback(data: str, *, user: int = OWNER, chat: int | None = None) -> dict[str, Any]:
+    chat = user if chat is None else chat
     return {
         "update_id": next(_UPDATE_IDS),
         "callback_query": {
             "id": f"cb-{data}",
             "from": {"id": user},
             "data": data,
-            "message": {"chat": {"id": chat}, "message_id": 1},
+            "message": {"chat": {"id": chat, "type": "private"}, "message_id": 1},
         },
     }
 
 
-async def _settle(gateway: TelegramGateway, chat: int = 50) -> None:
+async def _settle(gateway: TelegramGateway, chat: int = OWNER) -> None:
     """Wait for the chat's run task (if any) to finish."""
     state = gateway._chats.get(chat)
     if state is not None and state.task is not None:
@@ -140,7 +142,7 @@ async def _settle(gateway: TelegramGateway, chat: int = 50) -> None:
 
 async def _say(gateway: TelegramGateway, text: str, **kwargs: Any) -> None:
     await gateway.handle_update(_message(text, **kwargs))
-    await _settle(gateway, kwargs.get("chat", 50))
+    await _settle(gateway, kwargs.get("chat", OWNER))
 
 
 def _reply_events(text: str = "all done") -> list[Any]:
@@ -215,10 +217,10 @@ async def test_a_message_starts_a_run_in_a_new_titled_session() -> None:
     assert envelope.text == "fix the retry bug"
     assert envelope.principal == f"telegram:{OWNER}"
     assert envelope.session == f"telegram:{OWNER}-new1"  # created on the first message
-    assert envelope.metadata == {"idempotency_key": "message:50:42"}
+    assert envelope.metadata == {"idempotency_key": f"message:{OWNER}:42"}
     assert application.titles[envelope.session] == "fix the retry bug"
     assert "here you go" in api.texts()
-    assert api.actions == [50]  # a typing indicator
+    assert api.actions == [OWNER]  # a typing indicator
     assert api.edits[-1][2].startswith("✓ done")
     assert run_id == "run-1"
 
@@ -569,8 +571,8 @@ async def test_an_internal_error_is_reported_and_the_chat_stays_usable() -> None
     await _say(gateway, "hello")
 
     assert any("model down" in t for t in api.texts())
-    assert gateway._chats[50].busy is False
-    assert gateway._chats[50].run_id is None
+    assert gateway._chats[OWNER].busy is False
+    assert gateway._chats[OWNER].run_id is None
 
 
 # ── the polling loop ─────────────────────────────────────────────────────────
@@ -770,7 +772,12 @@ async def test_non_text_messages_get_a_polite_reply_and_strangers_none() -> None
     gateway, api = _gateway(FakeApplication())
     photo = {
         "update_id": 9001,
-        "message": {"message_id": 1, "from": {"id": OWNER}, "chat": {"id": 50}, "photo": []},
+        "message": {
+            "message_id": 1,
+            "from": {"id": OWNER},
+            "chat": {"id": OWNER, "type": "private"},
+            "photo": [],
+        },
     }
     stranger = {
         "update_id": 9002,
@@ -1024,7 +1031,9 @@ async def test_a_conversation_deleted_while_the_bot_was_off_becomes_a_new_draft(
     tmp_path: Any,
 ) -> None:
     state = tmp_path / "telegram.json"
-    state.write_text(json.dumps({"50": {"session": "gone", "title": "Old", "mode": "compact"}}))
+    state.write_text(
+        json.dumps({str(OWNER): {"session": "gone", "title": "Old", "mode": "compact"}})
+    )
     application = FakeApplication(events=_reply_events())
     gateway, _ = _gateway(application, settings=_settings(state_path=state))
 
@@ -1150,3 +1159,102 @@ async def test_cost_shows_the_budget_when_one_is_set() -> None:
     await _say(gateway, "/cost")
 
     assert "Budget: $0.500 of $2.00" in api.texts()[-1]
+
+
+# ── only the owner, only in their own private chat ───────────────────────────
+import logging  # noqa: E402
+
+
+def _group_message(text: str, *, kind: str = "supergroup") -> dict[str, Any]:
+    update_id = next(_UPDATE_IDS)
+    return {
+        "update_id": update_id,
+        "message": {
+            "message_id": update_id,
+            "from": {"id": OWNER},  # the owner, but speaking in a group
+            "chat": {"id": -100123, "type": kind},
+            "text": text,
+        },
+    }
+
+
+async def test_the_owner_is_ignored_in_groups_and_channels_so_nothing_leaks_to_members() -> None:
+    application = FakeApplication(events=_reply_events("secret output"))
+    gateway, api = _gateway(application)
+
+    for kind in ("group", "supergroup", "channel"):
+        await gateway.handle_update(_group_message("list my files", kind=kind))
+        await gateway.handle_update(_group_message("/sessions", kind=kind))
+
+    assert api.sent == [] and api.edits == [] and application.sent == []
+
+
+async def test_a_message_that_is_not_in_the_senders_own_private_chat_is_ignored() -> None:
+    application = FakeApplication(events=_reply_events())
+    gateway, api = _gateway(application)
+    spoofed = _message("hello", chat=12345)  # a private-typed chat that is not the sender's own
+    no_type = _message("hello")
+    del no_type["message"]["chat"]["type"]
+    no_sender = _message("hello")
+    del no_sender["message"]["from"]
+
+    for update in (spoofed, no_type, no_sender):
+        await gateway.handle_update(update)
+    await asyncio.sleep(0.1)  # a wrongly accepted message would have started its run by now
+
+    assert api.sent == [] and application.sent == []
+
+
+async def test_a_button_tap_from_a_group_message_is_ignored_even_from_the_owner() -> None:
+    gateway, api, application, gate = await _start_pending_approval()
+    tap = _callback("ap:a1b2c3:y")
+    tap["callback_query"]["message"]["chat"] = {"id": -100123, "type": "supergroup"}
+
+    await gateway.handle_update(tap)
+
+    assert application.decisions == [] and api.answers == []
+    gate.set()
+    await _settle(gateway)
+
+
+async def test_a_stranger_gets_no_reply_and_the_owner_sees_it_in_the_local_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    application = FakeApplication(events=_reply_events())
+    now = [1000.0]
+    api = FakeApi()
+    gateway = TelegramGateway(
+        application,  # type: ignore[arg-type]
+        api,  # type: ignore[arg-type]
+        _settings(),
+        edit_interval=0.0,
+        clock=lambda: now[0],
+    )
+
+    with caplog.at_level(logging.WARNING, logger="agent_stack.telegram"):
+        for _ in range(5):  # a flood from one stranger is logged once a minute
+            await gateway.handle_update(
+                _message("delete everything, my password is hunter2", user=999)
+            )
+        now[0] += 61
+        await gateway.handle_update(_message("again", user=999))
+        await gateway.handle_update(_message("hi", user=1000))  # a different stranger
+
+    assert api.sent == [] and application.sent == []
+    lines = [r.getMessage() for r in caplog.records]
+    assert len(lines) == 3
+    assert all("allow-list" in line for line in lines)
+    assert any("999" in line for line in lines) and any("1000" in line for line in lines)
+    assert not any("hunter2" in line or "delete everything" in line for line in lines)  # no content
+
+
+async def test_the_owner_in_their_private_chat_still_works_and_is_not_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    application = FakeApplication(events=_reply_events("fine"))
+    gateway, api = _gateway(application)
+
+    with caplog.at_level(logging.WARNING, logger="agent_stack.telegram"):
+        await _say(gateway, "hello")
+
+    assert "fine" in api.texts() and not caplog.records

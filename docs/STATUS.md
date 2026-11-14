@@ -5,7 +5,7 @@ cold. Everything below was true at commit `2be1c43`; `git log` has the later tru
 
 ## State
 
-- 503 tests, `make check` (ruff + strict mypy + pytest) green. Private repo, `master`, in sync.
+- 508 tests, `make check` (ruff + strict mypy + pytest) green. Private repo, `master`, in sync.
 - Run it: `agent-stack` (TUI), `agent-stack chat` (line REPL), `agent-stack telegram`
   (bot), `agent-stack audit tail`. Default model `openrouter:deepseek/deepseek-v4-pro`
   (`AGENT_STACK_MODEL`); see `.env.example` for every variable.
@@ -80,7 +80,10 @@ cold. Everything below was true at commit `2be1c43`; `git log` has the later tru
 ## Decisions already made (do not relitigate)
 
 - The two commits titled "P27" stay as they are (the owner chose not to squash).
-- Telegram requires an explicit user allow-list and refuses to start without one.
+- Telegram requires an explicit user allow-list and refuses to start without one. It serves an
+  allow-listed user only in their own private chat (never a group or channel, where members
+  would see the output); strangers get no reply and are logged locally (id and reason, never
+  content) at most once a minute.
 - Default tools that need approval: `run_command`, `write_file`, `edit_file`
   (`AGENT_STACK_APPROVAL_TOOLS`; empty runs everything unattended).
 - A launch opens a fresh draft conversation; old ones come from `ctrl+o`.

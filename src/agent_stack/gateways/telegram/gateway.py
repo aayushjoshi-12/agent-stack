@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import time
 from collections import OrderedDict
@@ -42,6 +43,10 @@ from agent_stack.gateways.telegram.render import (
 )
 
 __all__ = ["TelegramConfigError", "TelegramGateway", "TelegramSettings", "split_message"]
+
+_LOG = logging.getLogger("agent_stack.telegram")
+#: A stranger (or a group) is logged at most once per this many seconds, per sender and reason.
+_DENIED_LOG_SECONDS = 60.0
 
 #: Telegram rejects messages longer than this many characters.
 MESSAGE_LIMIT = 4096
@@ -202,6 +207,7 @@ class TelegramGateway:
         self._seen: OrderedDict[str, None] = OrderedDict()
         self._stopped = False
         self._saved = self._read_state()
+        self._denied_at: dict[tuple[int, str], float] = {}
 
     # ── persisted chat state ─────────────────────────────────────────────────
     def _read_state(self) -> dict[str, dict[str, Any]]:
@@ -269,7 +275,7 @@ class TelegramGateway:
         if not message:
             return
         sender = int(message.get("from", {}).get("id", 0))
-        if sender not in self._settings.allowed_users:
+        if not self._is_owner_chat(sender, message.get("chat"), "message"):
             return
         chat_id = int(message["chat"]["id"])
         if "text" not in message:
@@ -279,6 +285,32 @@ class TelegramGateway:
         if not self._first_time(key):
             return
         await self._on_text(self._chat(chat_id, sender), str(message["text"]).strip(), key)
+
+    def _is_owner_chat(self, sender: int, chat: Mapping[str, Any] | None, what: str) -> bool:
+        """Serve only an allow-listed user, and only in their own private chat.
+
+        A bot can be added to groups and channels. Replying there would show a conversation (tool
+        output, file contents) to everyone in them, so anything that is not the owner's private
+        chat is ignored. Refusals are silent to the sender and logged locally for the owner.
+        """
+        if sender not in self._settings.allowed_users:
+            self._note_denied(sender, f"{what} from a user who is not on the allow-list")
+            return False
+        chat = chat or {}
+        if chat.get("type") != "private" or int(chat.get("id", 0) or 0) != sender:
+            self._note_denied(sender, f"{what} outside the owner's private chat")
+            return False
+        return True
+
+    def _note_denied(self, sender: int, reason: str) -> None:
+        """Log a refusal (id and reason only, never content), at most once a minute per sender."""
+        now = self._clock()
+        key = (sender, reason)
+        last = self._denied_at.get(key)
+        if last is not None and now - last < _DENIED_LOG_SECONDS:
+            return
+        self._denied_at[key] = now
+        _LOG.warning("ignored a %s (telegram user id %s)", reason, sender)
 
     def _first_time(self, key: str) -> bool:
         """Idempotency: Telegram redelivers updates after a reconnect; act on each only once."""
@@ -511,7 +543,7 @@ class TelegramGateway:
     async def _on_callback(self, callback: Mapping[str, Any]) -> None:
         sender = int(callback.get("from", {}).get("id", 0))
         message = callback.get("message") or {}
-        if sender not in self._settings.allowed_users or "chat" not in message:
+        if not self._is_owner_chat(sender, message.get("chat"), "button"):
             return
         chat = self._chat(int(message["chat"]["id"]), sender)
         data = str(callback.get("data", ""))
