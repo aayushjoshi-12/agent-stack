@@ -55,12 +55,14 @@ class HistoryItem:
     """One row of a stored conversation, in a gateway-neutral shape.
 
     ``kind`` is ``user``, ``assistant`` or ``tool``; ``text`` is the message text or the
-    tool name, and ``args`` carries a tool call's arguments.
+    tool name, ``args`` carries a tool call's arguments and ``result`` its (already scrubbed)
+    output, when the call has been answered.
     """
 
     kind: str
     text: str
     args: Mapping[str, Any] | None = None
+    result: str | None = None
 
 
 @runtime_checkable

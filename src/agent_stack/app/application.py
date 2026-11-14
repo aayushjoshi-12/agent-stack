@@ -15,7 +15,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from uuid import uuid4
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
 from agent_stack.app.config import AppConfig
 from agent_stack.core.agent import Agent
@@ -139,7 +139,10 @@ class Application:
     async def session_history(self, session_id: str) -> list[HistoryItem]:
         """A stored conversation as display rows: user text, assistant text, tool calls."""
         messages = await self.session_store.get_messages(session_id)
-        return [item for message in messages for item in _history_items(message)]
+        results = {
+            m.tool_call_id: _text_of(m) for m in messages if isinstance(m, ToolMessage)
+        }
+        return [item for message in messages for item in _history_items(message, results)]
 
     def subscribe(self, run_id: str) -> AsyncIterator[AgentEvent]:
         """A live event stream for a run (single-consumption, no replay)."""
@@ -195,8 +198,9 @@ def _text_of(message: BaseMessage) -> str:
     return "".join(parts)
 
 
-def _history_items(message: BaseMessage) -> list[HistoryItem]:
-    """Map one stored message to display rows; system and tool results are not shown."""
+def _history_items(message: BaseMessage, results: dict[str, str] | None = None) -> list[HistoryItem]:
+    """Map one stored message to display rows; a tool row carries its call's result."""
+    results = results or {}
     if isinstance(message, HumanMessage):
         text = _text_of(message)
         return [HistoryItem("user", text)] if text.strip() else []
@@ -206,7 +210,12 @@ def _history_items(message: BaseMessage) -> list[HistoryItem]:
         if text.strip():
             items.append(HistoryItem("assistant", text))
         items.extend(
-            HistoryItem("tool", str(call["name"]), dict(call.get("args") or {}))
+            HistoryItem(
+                "tool",
+                str(call["name"]),
+                dict(call.get("args") or {}),
+                results.get(str(call.get("id"))),
+            )
             for call in message.tool_calls
         )
         return items
