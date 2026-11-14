@@ -69,6 +69,44 @@ body {
   height: 100%;
 }
 
+html {
+  color-scheme: light dark;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+button,
+a,
+input,
+textarea {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.skip-link {
+  position: fixed;
+  top: 0.5rem;
+  left: 0.5rem;
+  z-index: 50;
+  padding: 0.5rem 1rem;
+  background: var(--yellow);
+  color: var(--on-yellow);
+  border: 2px solid var(--line);
+  font-weight: 700;
+  transform: translateY(-200%);
+}
+.skip-link:focus {
+  transform: none;
+}
+
+.contain {
+  overscroll-behavior: contain;
+}
+
 body {
   background: var(--paper);
   color: var(--ink);

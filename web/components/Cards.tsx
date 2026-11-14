@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toolLabel, type Item } from "@/lib/events";
 import { Mark, type MarkKind } from "./Mark";
 import { Markdown } from "./Markdown";
@@ -25,6 +25,12 @@ export function ToolCard({
 }) {
   const waiting = tool.approval?.state === "pending";
   const [open, setOpen] = useState(false);
+  const bar = useRef<HTMLDivElement>(null);
+  // A decision is needed: take focus off the composer so the y / n shortcuts work instead of
+  // typing into it. The bar itself is focused (not a button), so a stray Enter cannot approve.
+  useEffect(() => {
+    if (waiting) bar.current?.focus();
+  }, [waiting]);
   const mark: MarkKind = waiting ? "approval" : tool.status === "ok" ? "ok" : tool.status === "failed" ? "failed" : "running";
   const showBody = open || waiting;
   return (
@@ -64,7 +70,13 @@ export function ToolCard({
           </div>
         )}
         {waiting && onDecide && (
-          <div className="flex items-center gap-3 border-t-2 border-line bg-yellow px-3 py-3 text-on-yellow" role="group" aria-label="Approval needed">
+          <div
+            ref={bar}
+            tabIndex={-1}
+            className="flex items-center gap-3 border-t-2 border-line bg-yellow px-3 py-3 text-on-yellow outline-none focus-visible:outline-3 focus-visible:outline-offset-[-6px] focus-visible:outline-blue"
+            role="group"
+            aria-label="Approval needed"
+          >
             <span className="mr-auto font-bold">The agent wants to run this. Approve?</span>
             <button type="button" className="btn btn-ghost" onClick={() => onDecide(tool, false)}>
               Reject <kbd className="code opacity-60">n</kbd>

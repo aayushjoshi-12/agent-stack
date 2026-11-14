@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 
 function inline(text: string, keyBase: string): ReactNode[] {
   const out: ReactNode[] = [];
-  const pattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*)/g;
+  const pattern = /(\*\*[^\n]+?\*\*|`[^`\n]+`)/g;
   let last = 0;
   let i = 0;
   for (const match of text.matchAll(pattern)) {
@@ -18,7 +18,8 @@ function inline(text: string, keyBase: string): ReactNode[] {
           {token.slice(1, -1)}
         </code>
       ) : (
-        <strong key={`${keyBase}-${i}`}>{token.slice(2, -2)}</strong>
+        // bold may wrap inline code (**`path`**): render the inside too, not as literal backticks
+        <strong key={`${keyBase}-${i}`}>{inline(token.slice(2, -2), `${keyBase}-${i}b`)}</strong>
       ),
     );
     last = at + token.length;
@@ -35,7 +36,7 @@ export function Markdown({ text }: { text: string }) {
       {parts.map((part, index) =>
         index % 2 === 1 ? (
           <pre key={index} className="code box-flat overflow-x-auto bg-sunk p-3 whitespace-pre">
-            {part.replace(/\n$/, "")}
+            {part.replace(/^\s*\n/, "").replace(/\s+$/, "")}
           </pre>
         ) : (
           part

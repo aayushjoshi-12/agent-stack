@@ -39,7 +39,7 @@ export function Sidebar({
           + New conversation
         </button>
       </div>
-      <ul className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 pb-3">
+      <ul className="contain min-h-0 flex-1 space-y-2 overflow-y-auto px-3 pb-3">
         {sessions.length === 0 && <li className="text-soft">No conversations yet.</li>}
         {sessions.map((s) => {
           const active = s.id === activeId;
@@ -82,7 +82,7 @@ export function Sidebar({
                   </div>
                 </div>
               ) : (
-                <div className={`group flex items-stretch border-2 border-line ${active ? "bg-blue text-on-accent shadow-[3px_3px_0_var(--line)]" : "bg-paper"}`}>
+                <div className={`group flex items-stretch border-2 border-line ${active ? "bg-blue text-on-accent shadow-[3px_3px_0_var(--line)]" : "bg-paper hover:bg-sunk"}`}>
                   <button
                     type="button"
                     onClick={() => onSelect(s.id)}

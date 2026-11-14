@@ -34,7 +34,7 @@ export function Composer({
 
   return (
     <form
-      className="box flex items-end gap-3 p-3"
+      className="box flex items-end gap-3 p-3 focus-within:outline-3 focus-within:outline-offset-2 focus-within:outline-blue"
       onSubmit={(e) => {
         e.preventDefault();
         send();
@@ -45,6 +45,8 @@ export function Composer({
       </label>
       <textarea
         id="composer"
+        name="message"
+        autoComplete="off"
         ref={area}
         value={text}
         rows={1}
@@ -58,7 +60,7 @@ export function Composer({
             onStop();
           }
         }}
-        placeholder={running ? "Working… press Esc or Stop to cancel" : "Ask the agent to do something"}
+        placeholder={running ? "Working… press Esc or Stop to cancel" : "Ask the agent to do something…"}
         className="min-h-10 flex-1 resize-none bg-transparent py-2 outline-none placeholder:text-soft"
       />
       {running ? (

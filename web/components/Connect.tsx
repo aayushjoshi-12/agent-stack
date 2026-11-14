@@ -41,14 +41,14 @@ export function Connect({ onConnected, initialError }: { onConnected: (c: Conn) 
           <span className="inline-block h-5 w-5 bg-blue [clip-path:polygon(50%_0,100%_100%,0_100%)]" aria-hidden />
         </div>
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">agent-stack</h1>
+          <h1 className="text-balance text-3xl font-bold tracking-tight">agent-stack</h1>
           <p className="mt-1 text-soft">Connect to your local agent. The token stays in this tab only.</p>
         </div>
         <div className="space-y-1">
           <label htmlFor="base" className="font-bold">
             Server
           </label>
-          <input id="base" value={base} onChange={(e) => setBase(e.target.value)} className="code box-flat w-full px-3 py-2" autoComplete="off" spellCheck={false} />
+          <input id="base" name="server" inputMode="url" value={base} onChange={(e) => setBase(e.target.value)} className="code box-flat w-full px-3 py-2" autoComplete="off" spellCheck={false} />
         </div>
         <div className="space-y-1">
           <label htmlFor="token" className="font-bold">
@@ -56,6 +56,7 @@ export function Connect({ onConnected, initialError }: { onConnected: (c: Conn) 
           </label>
           <input
             id="token"
+            name="token"
             type="password"
             value={token}
             onChange={(e) => setToken(e.target.value)}

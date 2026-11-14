@@ -16,12 +16,22 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   colorScheme: "light dark",
+  viewportFit: "cover",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f3efe4" },
+    { media: "(prefers-color-scheme: dark)", color: "#0e0e0d" },
+  ],
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" className={`${grotesk.variable} ${mono.variable}`}>
-      <body>{children}</body>
+      <body>
+        <a href="#conversation" className="skip-link">
+          Skip to the conversation
+        </a>
+        {children}
+      </body>
     </html>
   );
 }

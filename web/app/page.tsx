@@ -44,7 +44,8 @@ function historyTool(row: HistoryRow, index: number): Tool {
     args: row.args ?? {},
     output: row.result ?? "",
     truncated: false,
-    status: "ok",
+    // Stored rows carry no success flag; tools report failure as "Error: ..." text.
+    status: row.result?.startsWith("Error") ? "failed" : "ok",
     error: null,
     approval: null,
   };
@@ -68,10 +69,21 @@ export default function Page() {
   activeRef.current = activeId;
   const scroller = useRef<HTMLDivElement>(null);
 
+  const wanted = useRef<string | null>(null);
   useEffect(() => {
+    wanted.current = new URLSearchParams(window.location.search).get("s"); // read before any sync
     setConn(loadConn());
     setReady(true);
   }, []);
+
+  // The open conversation lives in the URL (?s=<id>), so a reload or a shared tab returns to it.
+  useEffect(() => {
+    if (!conn) return; // before connecting, leave the address alone
+    const url = new URL(window.location.href);
+    if (activeId) url.searchParams.set("s", activeId);
+    else url.searchParams.delete("s");
+    window.history.replaceState(null, "", url);
+  }, [conn, activeId]);
 
   const fail = useCallback((e: unknown) => {
     if (e instanceof ApiError && e.status === 401) {
@@ -137,9 +149,15 @@ export default function Page() {
     };
   }, [conn, activeId, usageTick, running]);
 
+  const restored = useRef(false);
   useEffect(() => {
-    if (conn) void refreshSessions().catch(fail);
-  }, [conn, refreshSessions, fail]);
+    if (!conn) return;
+    void refreshSessions().catch(fail);
+    if (restored.current) return;
+    restored.current = true;
+    if (wanted.current) void openSession(wanted.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conn]);
 
   const openSession = useCallback(
     async (id: string) => {
@@ -296,7 +314,7 @@ export default function Page() {
       </div>
       {drawer && <button className="fixed inset-0 z-10 bg-ink/40 md:hidden" aria-label="Close menu" onClick={() => setDrawer(false)} />}
 
-      <main className="flex h-full min-h-0 flex-col">
+      <main id="conversation" tabIndex={-1} className="flex h-full min-h-0 flex-col outline-none">
         <header className="flex items-center gap-3 border-b-2 border-line bg-surface px-4 py-3">
           <button type="button" className="btn md:hidden" onClick={() => setDrawer(true)} aria-label="Open conversations">
             ☰
@@ -310,6 +328,12 @@ export default function Page() {
           <ThemeToggle />
         </header>
 
+        {usage && usage.calls > 0 && (
+          <div className="border-b-2 border-line bg-sunk px-4 py-1 sm:hidden">
+            <CostChip usage={usage} always />
+          </div>
+        )}
+
         {error && (
           <div role="alert" className="flex items-center gap-3 border-b-2 border-line bg-red px-4 py-2 font-bold text-on-accent">
             <span className="flex-1">{error}</span>
@@ -319,7 +343,7 @@ export default function Page() {
           </div>
         )}
 
-        <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto px-4 py-6" role="log" aria-label="Conversation">
+        <div ref={scroller} className="contain min-h-0 flex-1 overflow-y-auto px-4 py-6" role="log" aria-label="Conversation">
           <div className="mx-auto max-w-3xl space-y-4">
             {history.length === 0 && !pendingUser && live.state.items.length === 0 && <EmptyState />}
             {history.map((row, i) =>
@@ -369,7 +393,7 @@ export default function Page() {
           </div>
         </div>
 
-        <div className="border-t-2 border-line bg-paper px-4 py-4">
+        <div className="border-t-2 border-line bg-paper px-4 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
           <div className="mx-auto max-w-3xl">
             <Composer running={running} stopping={stopping} disabled={false} onSend={(t) => void send(t)} onStop={() => void stop()} />
           </div>
@@ -379,7 +403,7 @@ export default function Page() {
   );
 }
 
-function CostChip({ usage }: { usage: UsageInfo }) {
+function CostChip({ usage, always = false }: { usage: UsageInfo; always?: boolean }) {
   const unpriced = usage.calls - usage.priced_calls;
   const cost = usage.priced_calls > 0 ? formatCost(usage.cost_usd) : "cost n/a";
   const over = usage.budget_usd !== null && usage.cost_usd >= usage.budget_usd;
@@ -391,7 +415,7 @@ function CostChip({ usage }: { usage: UsageInfo }) {
     (usage.budget_usd !== null ? ` · budget ${formatCost(usage.budget_usd)}` : "");
   return (
     <span
-      className={`code hidden border-2 border-line px-2 py-0.5 sm:inline ${over ? "bg-red text-on-accent" : "bg-sunk"}`}
+      className={`code border-2 border-line px-2 py-0.5 tabular-nums ${always ? "inline-block" : "hidden sm:inline"} ${over ? "bg-red text-on-accent" : "bg-sunk"}`}
       title={detail}
       aria-label={`Conversation cost: ${detail}`}
     >
@@ -405,7 +429,7 @@ function CostChip({ usage }: { usage: UsageInfo }) {
 function EmptyState() {
   return (
     <div className="box mx-auto mt-10 max-w-md space-y-3 p-6">
-      <h3 className="text-2xl font-bold tracking-tight">What should it do?</h3>
+      <h3 className="text-balance text-2xl font-bold tracking-tight">What should it do?</h3>
       <p className="text-soft">
         Every tool call shows up here as it happens. Risky ones (shell commands, file writes) wait for you to approve. The red{" "}
         <b>Stop</b> button cancels the run and any subagent it started, so nothing keeps spending.
