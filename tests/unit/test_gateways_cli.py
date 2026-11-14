@@ -104,3 +104,37 @@ async def test_cli_survives_a_refused_approval_decision() -> None:
     output = await _run_with_input(application, "go\ny\nexit\n")
 
     assert "approval not applied" in output and "bye" in output
+
+
+async def test_cli_prints_what_the_conversation_has_cost_after_each_answer_and_on_demand() -> None:
+    from agent_stack.gateways.base import SessionUsage
+
+    application = FakeApplication(
+        events=[
+            event(EventType.RUN_STARTED),
+            event(EventType.ASSISTANT_MESSAGE, content="done"),
+            event(EventType.RUN_COMPLETED, steps=1, tool_calls=0),
+        ]
+    )
+    cost = SessionUsage(
+        calls=2, priced_calls=2, input_tokens=4200, output_tokens=310, cost_usd=0.0042
+    )
+
+    async def fixed(session_id: str) -> SessionUsage:
+        return cost
+
+    application.session_usage = fixed  # type: ignore[method-assign]
+
+    output = await _run_with_input(application, "do it\n/cost\nexit\n")
+
+    assert output.count("spent so far: $0.0042 · 4.2k in · 310 out · 2 calls") == 2
+
+
+async def test_cli_prints_no_cost_line_before_anything_was_spent() -> None:
+    application = FakeApplication(
+        events=[event(EventType.RUN_STARTED), event(EventType.RUN_COMPLETED)]
+    )
+
+    output = await _run_with_input(application, "hello\nexit\n")
+
+    assert "spent so far" not in output

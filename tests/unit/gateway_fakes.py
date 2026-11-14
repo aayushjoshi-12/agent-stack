@@ -16,7 +16,7 @@ from typing import Any
 from langchain_core.messages import AIMessage
 
 from agent_stack.core.events import AgentEvent, EventType
-from agent_stack.gateways.base import HistoryItem, SessionSummary
+from agent_stack.gateways.base import HistoryItem, SessionSummary, SessionUsage
 
 _counter = itertools.count()
 
@@ -48,6 +48,7 @@ class FakeConfig:
     model: str = "test:model"
     theme: str = "agent-stack-dark"
     context_window: int = 200_000
+    budget_usd: float | None = None
 
 
 class FakeAgent:
@@ -117,6 +118,7 @@ class FakeApplication:
         self.deleted: list[str] = []
         self.decisions: list[tuple[str, str, str, str, bool]] = []
         self.histories: dict[str, list[HistoryItem]] = {}
+        self.usages: dict[str, list[SessionUsage]] = {}  # per session: successive answers
 
     async def send_message(self, envelope: Any, *, parent_run_id: str | None = None) -> FakeHandle:
         self._run_counter += 1
@@ -171,6 +173,13 @@ class FakeApplication:
         self.sessions = [
             SessionSummary(id=s.id, title=title) if s.id == session_id else s for s in self.sessions
         ]
+
+    async def session_usage(self, session_id: str) -> SessionUsage:
+        """The scripted totals for a session; successive calls walk through the list."""
+        queue = self.usages.get(session_id)
+        if not queue:
+            return SessionUsage()
+        return queue.pop(0) if len(queue) > 1 else queue[0]
 
     async def session_history(self, session_id: str) -> list[HistoryItem]:
         return list(self.histories.get(session_id, ()))

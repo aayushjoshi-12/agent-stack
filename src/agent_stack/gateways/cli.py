@@ -17,7 +17,7 @@ from rich.console import Console
 
 from agent_stack.app.application import Application, IdentityResolver, SessionResolver
 from agent_stack.core.events import AgentEvent, EventType
-from agent_stack.gateways.base import MessageEnvelope
+from agent_stack.gateways.base import MessageEnvelope, usage_summary
 from agent_stack.gateways.tui.render import (
     assistant_block,
     failure_block,
@@ -94,6 +94,16 @@ class LineGateway:
                 except Exception as exc:  # e.g. the run was cancelled while we asked
                     self._out.print(f"[yellow]approval not applied:[/] {exc}")
             yield event
+        await self.print_cost(application, envelope.session)
+
+    async def print_cost(self, application: Application, session_id: str) -> None:
+        """One dim line after each answer: what this conversation has cost so far."""
+        try:
+            usage = await application.session_usage(session_id)
+        except Exception:  # a cost line must never turn a finished answer into an error
+            return
+        if usage.calls:
+            self._out.print(f"[dim]spent so far: {usage_summary(usage)}[/dim]")
 
 
 async def run_cli(
@@ -138,6 +148,9 @@ async def run_cli(
             continue
         if text in _QUIT_WORDS:
             break
+        if text == "/cost":
+            await gateway.print_cost(application, session)
+            continue
 
         envelope = MessageEnvelope(principal=principal_id, session=session, text=text)
         try:

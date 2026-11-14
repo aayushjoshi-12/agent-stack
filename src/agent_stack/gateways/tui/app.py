@@ -15,6 +15,7 @@ Layout is responsive through Textual breakpoints (ADR 012): the screen gets
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from pathlib import Path
 from typing import Any, ClassVar, cast
@@ -27,7 +28,7 @@ from textual.widgets import Footer, Static
 
 from agent_stack.app.application import Application, IdentityResolver
 from agent_stack.core.events import AgentEvent, EventType
-from agent_stack.gateways.base import MessageEnvelope
+from agent_stack.gateways.base import MessageEnvelope, SessionUsage, usage_summary
 from agent_stack.gateways.tui.render import (
     tool_args_lines,
     tool_detail,
@@ -131,6 +132,7 @@ class TuiApp(App[None]):
         self._last_elapsed = 0.0
         self._task_title: str | None = None
         self._tokens = 0
+        self._usage = SessionUsage()  # what this conversation has cost so far (all runs)
         self._branch = ""
         self._sidebar_override: bool | None = None
         self._last_child_id: str | None = None
@@ -264,6 +266,11 @@ class TuiApp(App[None]):
         if len(self.query("#chat")) == 0:
             # The screen has been torn down (quit or test teardown) while a stream
             # was still live; drop the event rather than touching dead widgets.
+            return
+        if event.type is EventType.MODEL_USAGE:
+            # Every run counts, a subagent's included: they are all this conversation's spend.
+            self._usage = self._usage.plus(event.data)
+            self._refresh_all()
             return
         if event.type is EventType.APPROVAL_REQUIRED:
             self._on_approval_required(event)  # from any run: a child can be blocked too
@@ -420,6 +427,20 @@ class TuiApp(App[None]):
             elif card.status == "waiting":  # the run ended while it was asking
                 card.finish("failed")
         self._refresh_all()
+        self._spawn(self._sync_usage())
+
+    async def _sync_usage(self) -> None:
+        """Replace the running total with the durable one (it also holds subagent runs)."""
+        session_id = self._session_id
+        if session_id is None:
+            return
+        try:
+            usage = await self.application.session_usage(session_id)
+        except Exception:  # a cost display must never break the conversation
+            return
+        if self._session_id == session_id:
+            self._usage = usage
+            self._refresh_all()
 
     # ── conversation helpers ──────────────────────────────────────────────────
     def _chat(self) -> VerticalScroll:
@@ -504,6 +525,7 @@ class TuiApp(App[None]):
             workspace=_short_path(self.application.config.workspace, 28),
             branch=self._branch,
             state=word,
+            cost=usage_summary(self._usage) if self._usage.calls else "",
         )
 
     def _refresh_sidebar(self) -> None:
@@ -516,7 +538,8 @@ class TuiApp(App[None]):
             return
         model = self.application.config.model
         state = "esc to cancel" if self._run_active else "ctrl+j for a new line"
-        self.query_one("#hints", Static).update(f"{model}  ·  {state}")
+        spent = f"  ·  {usage_summary(self._usage)}" if self._usage.calls else ""
+        self.query_one("#hints", Static).update(f"{model}{spent}  ·  {state}")
         prompt = self.query_one("#prompt", PromptArea)
         prompt.placeholder = "Working…" if self._run_active else "Ask anything…"
 
@@ -558,6 +581,7 @@ class TuiApp(App[None]):
         self._tools_run = 0
         self._task_title = None
         self._tokens = 0
+        self._usage = SessionUsage()
         self._last_outcome = ""
         self._last_child_id = None
 
@@ -600,6 +624,8 @@ class TuiApp(App[None]):
         history = await self.application.session_history(session_id)
         self._session_id = session_id
         await self._reset_conversation()
+        with contextlib.suppress(Exception):  # the cost is informational; history matters more
+            self._usage = await self.application.session_usage(session_id)
         title = self._titles.get(session_id, "")
         self._task_title = None if title in ("", "Untitled") else title
         chat = self._chat()

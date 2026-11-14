@@ -21,13 +21,19 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from agent_stack.app.config import AppConfig
 from agent_stack.core.agent import Agent
 from agent_stack.core.approval import ApprovalBroker
-from agent_stack.core.errors import SessionVersionConflictError
+from agent_stack.core.errors import BudgetExceededError, SessionVersionConflictError
 from agent_stack.core.event_bus import EventBus
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.factory import AgentFactory
 from agent_stack.core.run import Run, RunHandle, RunManager, RunRequest
 from agent_stack.core.session import BranchingSessionStore, Session, SessionStore
-from agent_stack.gateways.base import HistoryItem, MessageEnvelope, SessionSummary
+from agent_stack.gateways.base import (
+    HistoryItem,
+    MessageEnvelope,
+    SessionSummary,
+    SessionUsage,
+    format_cost,
+)
 from agent_stack.observability.metrics import Metrics
 from agent_stack.persistence.event_log import EventLogStore
 
@@ -58,8 +64,11 @@ class Application:
         """Start a run for one inbound message and hand back its handle.
 
         Session creation stays lazy: the runtime creates the session on first
-        use. ``parent_run_id`` links subagent runs to their parent (Phase 20).
+        use. ``parent_run_id`` links subagent runs to their parent (Phase 20). Raises
+        ``BudgetExceededError`` when the conversation has already spent its budget.
         """
+        if parent_run_id is None:  # a subagent runs inside its parent's already-checked budget
+            await self._check_budget(envelope.session)
         request = RunRequest(
             session_id=envelope.session,
             user_id=envelope.principal,
@@ -153,6 +162,30 @@ class Application:
         messages = await self.session_store.get_messages(session_id)
         results = {m.tool_call_id: _text_of(m) for m in messages if isinstance(m, ToolMessage)}
         return [item for message in messages for item in _history_items(message, results)]
+
+    async def session_usage(self, session_id: str) -> SessionUsage:
+        """What the conversation has consumed: tokens and cost, subagents included.
+
+        Read from the durable event log, so it survives restarts. Without an event log (a bare
+        test wiring) nothing is recorded and the answer is an empty ``SessionUsage``.
+        """
+        if self.event_log is None:
+            return SessionUsage()
+        usage = SessionUsage()
+        for data in await self.event_log.usage_rows(session_id):
+            usage = usage.plus(data)
+        return usage
+
+    async def _check_budget(self, session_id: str) -> None:
+        limit = self.config.budget_usd
+        if limit is None:
+            return
+        spent = (await self.session_usage(session_id)).cost_usd
+        if spent >= limit:
+            raise BudgetExceededError(
+                f"this conversation has spent {format_cost(spent)} of its "
+                f"{format_cost(limit)} budget (AGENT_STACK_BUDGET_USD); start a new one or raise it"
+            )
 
     async def replay(
         self,

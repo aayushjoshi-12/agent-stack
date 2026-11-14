@@ -10,9 +10,9 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from agent_stack.core.event_bus import EventAuditSink, InMemoryEventBus
 from agent_stack.core.events import AgentEvent, EventType
@@ -45,6 +45,10 @@ class EventLogStore(Protocol):
         ...
 
     async def get(self, event_id: str) -> AgentEvent | None: ...
+
+    async def usage_rows(self, session_id: str) -> list[Mapping[str, Any]]:
+        """The data of every ``model.usage`` event of a session, subagent runs included."""
+        ...
 
 
 class SqliteEventLogStore:
@@ -101,6 +105,29 @@ class SqliteEventLogStore:
             f"SELECT {_COLUMNS} FROM event_log{where} ORDER BY rowid", params
         )
         return [_row_to_event(row) for row in rows]
+
+    async def usage_rows(self, session_id: str) -> list[Mapping[str, Any]]:
+        # A subagent runs in its own session but its events carry the parent's run id, so walk
+        # from the session's runs down through every descendant run.
+        rows = await self._db.query(
+            """
+            WITH RECURSIVE runs(run_id) AS (
+                SELECT DISTINCT run_id FROM event_log WHERE session_id = ?
+                UNION
+                SELECT DISTINCT e.run_id FROM event_log e JOIN runs r ON e.parent_run_id = r.run_id
+            )
+            SELECT data_json FROM event_log
+            WHERE type = ? AND run_id IN (SELECT run_id FROM runs)
+            ORDER BY rowid
+            """,
+            (session_id, EventType.MODEL_USAGE.value),
+        )
+        out: list[Mapping[str, Any]] = []
+        for row in rows:
+            data = json.loads(row["data_json"])
+            if isinstance(data, dict):
+                out.append(data)
+        return out
 
     async def get(self, event_id: str) -> AgentEvent | None:
         rows = await self._db.query(f"SELECT {_COLUMNS} FROM event_log WHERE id = ?", (event_id,))

@@ -462,6 +462,7 @@ class SidebarState:
     workspace: str = ""
     branch: str = ""
     state: str = "idle"
+    cost: str = ""
 
 
 class Sidebar(Vertical):
@@ -493,6 +494,7 @@ class Sidebar(Vertical):
         running = f"  [$accent]{s.tools_running} running[/]" if s.tools_running else ""
         self.query_one("#sb-activity", Static).update(
             f"[$foreground-muted]ACTIVITY[/]\n{s.tools_run} tool call{'' if s.tools_run == 1 else 's'}{running}\nstatus: {s.state}"
+            + (f"\n[$foreground-muted]spent[/] {escape(s.cost)}" if s.cost else "")
         )
         if s.subagents:
             rows = "\n".join(

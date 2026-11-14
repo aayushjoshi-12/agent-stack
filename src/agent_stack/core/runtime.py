@@ -56,6 +56,30 @@ def reasoning_text(message: AIMessage) -> str:
     return raw if isinstance(raw, str) else ""
 
 
+def usage_data(message: AIMessage) -> dict[str, Any] | None:
+    """What one model response consumed, or ``None`` when the provider reported nothing.
+
+    Tokens come from LangChain's normalised ``usage_metadata``; ``cost_usd`` is the provider's
+    own figure when it gives one (OpenRouter puts it in ``response_metadata["cost"]``), else
+    ``None`` -- an unpriced call (e.g. a local model) is counted but never guessed at.
+    """
+    meta: Mapping[str, Any] = message.usage_metadata or {}
+    raw_cost = message.response_metadata.get("cost")
+    cost = float(raw_cost) if isinstance(raw_cost, (int, float)) and raw_cost >= 0 else None
+    if not meta and cost is None:
+        return None
+    output_details = meta.get("output_token_details") or {}
+    input_details = meta.get("input_token_details") or {}
+    return {
+        "model": message.response_metadata.get("model_name"),
+        "input_tokens": int(meta.get("input_tokens", 0)),
+        "output_tokens": int(meta.get("output_tokens", 0)),
+        "reasoning_tokens": int(output_details.get("reasoning", 0) or 0),
+        "cache_read_tokens": int(input_details.get("cache_read", 0) or 0),
+        "cost_usd": cost,
+    }
+
+
 _T = TypeVar("_T")
 
 
@@ -226,6 +250,16 @@ class AgentRuntime:
                     )
                 new_messages.append(response)
                 step_count += 1
+
+                usage = usage_data(response)
+                if usage is not None:
+                    await self._emit(
+                        EventType.MODEL_USAGE,
+                        run_id=run_id,
+                        session_id=session_id,
+                        parent_run_id=parent_run_id,
+                        data=usage,
+                    )
 
                 reasoning = reasoning_text(response)
                 if reasoning:

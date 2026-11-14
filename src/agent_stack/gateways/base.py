@@ -23,7 +23,16 @@ from agent_stack.core.events import AgentEvent
 if TYPE_CHECKING:
     from agent_stack.app.application import Application
 
-__all__ = ["Gateway", "HistoryItem", "MessageEnvelope", "SessionSummary"]
+__all__ = [
+    "Gateway",
+    "HistoryItem",
+    "MessageEnvelope",
+    "SessionSummary",
+    "SessionUsage",
+    "format_cost",
+    "format_tokens",
+    "usage_summary",
+]
 
 
 @dataclass(frozen=True)
@@ -48,6 +57,66 @@ class SessionSummary:
 
     id: str
     title: str
+
+
+@dataclass(frozen=True)
+class SessionUsage:
+    """What a conversation (all its runs, subagents included) has consumed so far.
+
+    ``cost_usd`` sums only the calls the provider priced; ``priced_calls < calls`` means some
+    were unpriced (a local model, a provider that reports no cost) and the total is a lower bound.
+    """
+
+    calls: int = 0
+    priced_calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_tokens: int = 0
+    cost_usd: float = 0.0
+
+    def plus(self, data: Mapping[str, Any]) -> SessionUsage:
+        """This usage plus one ``model.usage`` event's data (for live running totals)."""
+        cost = data.get("cost_usd")
+        priced = isinstance(cost, (int, float))
+        return SessionUsage(
+            calls=self.calls + 1,
+            priced_calls=self.priced_calls + (1 if priced else 0),
+            input_tokens=self.input_tokens + int(data.get("input_tokens", 0) or 0),
+            output_tokens=self.output_tokens + int(data.get("output_tokens", 0) or 0),
+            reasoning_tokens=self.reasoning_tokens + int(data.get("reasoning_tokens", 0) or 0),
+            cost_usd=self.cost_usd + (float(cost) if isinstance(cost, (int, float)) else 0.0),
+        )
+
+
+def format_cost(usd: float) -> str:
+    """A dollar amount with enough precision for cheap models: ``$0.0042``, ``$1.23``."""
+    if usd == 0:
+        return "$0.00"
+    if usd < 0.01:
+        return f"${usd:.4f}"
+    return f"${usd:.2f}" if usd >= 1 else f"${usd:.3f}"
+
+
+def format_tokens(count: int) -> str:
+    """``950``, ``12.3k``, ``1.2M``."""
+    if count < 1000:
+        return str(count)
+    if count < 1_000_000:
+        return f"{count / 1000:.1f}k".replace(".0k", "k")
+    return f"{count / 1_000_000:.1f}M".replace(".0M", "M")
+
+
+def usage_summary(usage: SessionUsage) -> str:
+    """One line every gateway shows: cost, tokens, calls; flags unpriced calls honestly."""
+    if usage.calls == 0:
+        return "no model calls yet"
+    cost = format_cost(usage.cost_usd) if usage.priced_calls else "cost unknown"
+    if 0 < usage.priced_calls < usage.calls:
+        cost += f" (+{usage.calls - usage.priced_calls} unpriced)"
+    return (
+        f"{cost} · {format_tokens(usage.input_tokens)} in · "
+        f"{format_tokens(usage.output_tokens)} out · {usage.calls} calls"
+    )
 
 
 @dataclass(frozen=True)

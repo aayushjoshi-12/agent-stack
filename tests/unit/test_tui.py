@@ -962,3 +962,63 @@ async def test_default_theme_is_dark_and_ctrl_t_toggles_dark_and_light() -> None
         await pilot.press("ctrl+t")
         await pilot.pause()
         assert app.theme == "agent-stack-dark"
+
+
+# ── cost ─────────────────────────────────────────────────────────────────────
+from agent_stack.gateways.base import SessionUsage  # noqa: E402
+
+
+def _hints_text(app: TuiApp) -> str:
+    return str(app.query_one("#hints").render())
+
+
+async def test_tui_shows_the_conversation_cost_live_and_reconciles_it_after_the_run() -> None:
+    application = FakeApplication(
+        events=[
+            event(EventType.RUN_STARTED),
+            event(
+                EventType.MODEL_USAGE,
+                input_tokens=1200,
+                output_tokens=80,
+                cost_usd=0.002,
+                model="m",
+            ),
+            event(EventType.ASSISTANT_MESSAGE, content="hi there"),
+            event(EventType.RUN_COMPLETED, steps=1, tool_calls=0),
+        ]
+    )
+    # the durable total also holds a subagent's calls that never reached this stream
+    application.usages["s1"] = [
+        SessionUsage(calls=3, priced_calls=3, input_tokens=5000, output_tokens=300, cost_usd=0.0071)
+    ]
+    app = _app(application)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        assert "calls" not in _hints_text(app)  # nothing spent yet: no cost shown
+        await _submit(pilot, "hello")
+        await pilot.pause(0.3)
+        hints = _hints_text(app)
+        sidebar = " ".join(str(w.render()) for w in app.query("#sb-activity"))
+
+    assert "$0.0071 · 5k in · 300 out · 3 calls" in hints  # reconciled from the durable log
+    assert "spent" in sidebar and "$0.0071" in sidebar
+
+
+async def test_tui_a_live_usage_event_updates_the_total_before_the_run_ends() -> None:
+    gate = asyncio.Event()
+    application = FakeApplication(
+        events=[
+            event(EventType.RUN_STARTED),
+            event(EventType.MODEL_USAGE, input_tokens=1000, output_tokens=100, cost_usd=0.004),
+        ],
+        gate=gate,
+    )
+    app = _app(application)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await _submit(pilot, "go")
+        await pilot.pause(0.2)
+        live = _hints_text(app)
+        gate.set()
+
+    assert "$0.0040 · 1k in · 100 out · 1 calls" in live

@@ -231,6 +231,25 @@ async def test_another_principals_session_and_run_look_nonexistent(
     assert (await client.get("/sessions", headers=HEADERS)).json() == []
 
 
+async def test_the_first_message_titles_the_conversation_and_later_ones_do_not(
+    web: tuple[httpx.AsyncClient, Application],
+) -> None:
+    client, _ = web
+    session, run_id = await _start(client, "  fix the retry bug  ")
+    await client.get(f"/runs/{run_id}/events", headers=HEADERS)
+    again = await client.post(
+        f"/sessions/{session}/messages", headers=HEADERS, json={"text": "other"}
+    )
+    assert again.status_code in (
+        202,
+        500,
+    )  # the scripted model has one reply; only the title matters
+
+    listed = (await client.get("/sessions", headers=HEADERS)).json()
+
+    assert [s["title"] for s in listed] == ["fix the retry bug"]
+
+
 async def test_message_validation(web: tuple[httpx.AsyncClient, Application]) -> None:
     client, _ = web
     session = (await client.post("/sessions", headers=HEADERS)).json()["id"]
@@ -391,3 +410,53 @@ async def test_cancel_is_idempotent_and_safe_on_a_finished_run(
 
     assert first.status_code == second.status_code == 200
     assert first.json() == {"runs": {run_id: "completed"}}  # a finished run is not rewritten
+
+
+async def test_usage_endpoint_reports_tokens_and_dollars_and_respects_ownership(
+    tmp_path: Path,
+) -> None:
+    from langchain_core.messages import AIMessage
+
+    reply = AIMessage(
+        content="priced",
+        usage_metadata={"input_tokens": 900, "output_tokens": 40, "total_tokens": 940},
+        response_metadata={"cost": 0.0031},
+    )
+    application = _application(tmp_path, FakeChatModel([reply]))
+    async for client in _client(application):
+        session, run_id = await _start(client)
+        await client.get(f"/runs/{run_id}/events", headers=HEADERS)
+
+        body = (await client.get(f"/sessions/{session}/usage", headers=HEADERS)).json()
+        assert body["cost_usd"] == pytest.approx(0.0031)
+        assert (body["calls"], body["input_tokens"], body["output_tokens"]) == (1, 900, 40)
+        assert body["budget_usd"] is None
+        assert body["summary"].startswith("$0.0031")
+        assert (await client.get("/sessions/nope/usage", headers=HEADERS)).status_code == 404
+        assert (await client.get(f"/sessions/{session}/usage")).status_code == 401
+
+
+async def test_a_conversation_over_budget_gets_402_and_starts_no_run(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    from langchain_core.messages import AIMessage
+
+    from agent_stack.app.config import AppConfig
+
+    reply = AIMessage(
+        content="pricey",
+        usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        response_metadata={"cost": 0.5},
+    )
+    model = FakeChatModel([reply, reply])
+    application = replace(_application(tmp_path, model), config=AppConfig(budget_usd=0.25))
+    async for client in _client(application):
+        session, run_id = await _start(client)
+        await client.get(f"/runs/{run_id}/events", headers=HEADERS)
+
+        refused = await client.post(
+            f"/sessions/{session}/messages", headers=HEADERS, json={"text": "again"}
+        )
+
+        assert refused.status_code == 402 and "budget" in refused.json()["detail"]
+        assert len(model.calls) == 1  # the second message never reached the model

@@ -1053,3 +1053,100 @@ def test_state_path_comes_from_the_environment() -> None:
         }
     )
     assert str(settings.state_path) == "/tmp/x/state.json"
+
+
+# ── cost ─────────────────────────────────────────────────────────────────────
+from agent_stack.gateways.base import SessionUsage  # noqa: E402
+
+_SESSION = f"telegram:{OWNER}-new1"
+
+
+def _usage(cost: float, calls: int = 2, priced: int | None = None) -> SessionUsage:
+    return SessionUsage(
+        calls=calls,
+        priced_calls=calls if priced is None else priced,
+        input_tokens=12_300,
+        output_tokens=450,
+        cost_usd=cost,
+    )
+
+
+async def test_cost_before_any_conversation_says_nothing_was_spent() -> None:
+    gateway, api = _gateway(FakeApplication())
+
+    await _say(gateway, "/cost")
+
+    assert "nothing has been spent" in api.texts()[-1]
+
+
+async def test_cost_command_shows_tokens_dollars_and_the_budget() -> None:
+    application = FakeApplication(events=_reply_events())
+    application.usages[_SESSION] = [_usage(0.0123)]
+    gateway, api = _gateway(application)
+    await _say(gateway, "hello")
+
+    await _say(gateway, "/cost")
+
+    text = api.texts()[-1]
+    assert "$0.012 · 12.3k in · 450 out · 2 calls" in text
+    assert "Budget" not in text
+
+
+async def test_the_finished_status_shows_what_that_run_cost_including_subagents() -> None:
+    application = FakeApplication(events=_reply_events())
+    # before the run the conversation had cost $0.010; after it, $0.0142 (subagent calls
+    # never reach this chat's event stream, so the durable totals are the truth)
+    application.usages[_SESSION] = [_usage(0.010, 2), _usage(0.0142, 5)]
+    gateway, api = _gateway(application)
+
+    await _say(gateway, "go")
+
+    assert api.edits[-1][2].startswith("✓ done · $0.0042")
+
+
+async def test_an_unpriced_run_shows_no_dollar_figure() -> None:
+    application = FakeApplication(events=_reply_events())
+    application.usages[_SESSION] = [_usage(0.0, 0), _usage(0.0, 1, priced=0)]
+    gateway, api = _gateway(application)
+
+    await _say(gateway, "go")
+
+    assert api.edits[-1][2].split("\n")[0] == "✓ done"
+
+
+async def test_status_includes_the_spend_and_the_menu_lists_cost() -> None:
+    application = FakeApplication(events=_reply_events())
+    application.usages[_SESSION] = [_usage(0.5)]
+    gateway, api = _gateway(application)
+    await _say(gateway, "hi")
+    await _say(gateway, "/status")
+
+    assert "Spent: $0.500" in api.texts()[-1]
+    await _say(gateway, "/help")
+    assert "/cost" in api.texts()[-1]
+
+
+async def test_a_failing_cost_lookup_never_breaks_a_run() -> None:
+    application = FakeApplication(events=_reply_events("fine"))
+
+    async def broken(session_id: str) -> SessionUsage:
+        raise RuntimeError("db is down")
+
+    application.session_usage = broken  # type: ignore[method-assign]
+    gateway, api = _gateway(application)
+
+    await _say(gateway, "go")
+
+    assert "fine" in api.texts() and api.edits[-1][2] == "✓ done"
+
+
+async def test_cost_shows_the_budget_when_one_is_set() -> None:
+    application = FakeApplication(events=_reply_events())
+    application.config.budget_usd = 2.0
+    application.usages[_SESSION] = [_usage(0.5)]
+    gateway, api = _gateway(application)
+    await _say(gateway, "hello")
+
+    await _say(gateway, "/cost")
+
+    assert "Budget: $0.500 of $2.00" in api.texts()[-1]

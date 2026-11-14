@@ -23,6 +23,10 @@ class LimitExceededError(AgentStackError):
     """Base class for limits that terminate a run."""
 
 
+class BudgetExceededError(LimitExceededError):
+    """A conversation has spent its configured budget; no further run is started for it."""
+
+
 class StepLimitExceeded(LimitExceededError):
     """Raised when the loop exceeds its maximum number of steps."""
 

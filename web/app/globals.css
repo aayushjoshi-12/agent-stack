@@ -1,0 +1,173 @@
+@import "tailwindcss";
+
+/* Design tokens (ADR 013: neo-brutalism with Bauhaus discipline). Components never hard-code a
+   colour: they use these variables, so dark and light stay in step. */
+:root {
+  --paper: #f3efe4;
+  --surface: #fffdf6;
+  --sunk: #e8e3d4;
+  --ink: #121212;
+  --ink-soft: #4a4740;
+  --line: #121212;
+  --red: #d92d20;
+  --yellow: #f2b705;
+  --blue: #1f48e0;
+  --on-accent: #ffffff;
+  --on-yellow: #121212;
+  --shadow: 4px 4px 0 var(--line);
+  --shadow-sm: 2px 2px 0 var(--line);
+  --font-ui: var(--font-grotesk), ui-sans-serif, system-ui, sans-serif;
+  --font-code: var(--font-mono), ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0e0e0d;
+    --surface: #181816;
+    --sunk: #232320;
+    --ink: #f1ede1;
+    --ink-soft: #b4b0a4;
+    --line: #f1ede1;
+    --red: #ff5a4d;
+    --yellow: #ffc933;
+    --blue: #6f8dff;
+    --on-accent: #0e0e0d;
+  }
+}
+
+:root[data-theme="dark"] {
+  --paper: #0e0e0d;
+  --surface: #181816;
+  --sunk: #232320;
+  --ink: #f1ede1;
+  --ink-soft: #b4b0a4;
+  --line: #f1ede1;
+  --red: #ff5a4d;
+  --yellow: #ffc933;
+  --blue: #6f8dff;
+  --on-accent: #0e0e0d;
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-surface: var(--surface);
+  --color-sunk: var(--sunk);
+  --color-ink: var(--ink);
+  --color-soft: var(--ink-soft);
+  --color-line: var(--line);
+  --color-red: var(--red);
+  --color-yellow: var(--yellow);
+  --color-blue: var(--blue);
+  --color-on-yellow: var(--on-yellow);
+  --color-on-accent: var(--on-accent);
+  --font-sans: var(--font-ui);
+  --font-mono: var(--font-code);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Hard edges and offset shadows: the whole look. */
+.box {
+  background: var(--surface);
+  border: 2px solid var(--line);
+  box-shadow: var(--shadow);
+}
+.box-flat {
+  background: var(--surface);
+  border: 2px solid var(--line);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 2.5rem;
+  padding: 0 1rem;
+  border: 2px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 700;
+  box-shadow: var(--shadow-sm);
+  transition: transform 80ms, box-shadow 80ms;
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) {
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 var(--line);
+}
+.btn:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: 0 0 0 var(--line);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn-red {
+  background: var(--red);
+  color: var(--on-accent);
+}
+.btn-blue {
+  background: var(--blue);
+  color: var(--on-accent);
+}
+.btn-yellow {
+  background: var(--yellow);
+  color: var(--on-yellow);
+}
+.btn-ghost {
+  box-shadow: none;
+  background: transparent;
+}
+
+:focus-visible {
+  outline: 3px solid var(--blue);
+  outline-offset: 2px;
+}
+
+.code {
+  font-family: var(--font-code);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+::selection {
+  background: var(--yellow);
+  color: var(--on-yellow);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .pulse {
+    animation: pulse 1.2s steps(2, jump-none) infinite;
+  }
+  @keyframes pulse {
+    50% {
+      opacity: 0.25;
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn {
+    transition: none;
+  }
+}
+
+/* Scrollbars that match the hard-edge look. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ink-soft) transparent;
+}

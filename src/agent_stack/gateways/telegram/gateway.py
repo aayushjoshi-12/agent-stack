@@ -25,7 +25,14 @@ from typing import Any
 
 from agent_stack.app.application import Application
 from agent_stack.core.events import AgentEvent, EventType
-from agent_stack.gateways.base import HistoryItem, MessageEnvelope, SessionSummary
+from agent_stack.gateways.base import (
+    HistoryItem,
+    MessageEnvelope,
+    SessionSummary,
+    SessionUsage,
+    format_cost,
+    usage_summary,
+)
 from agent_stack.gateways.telegram.api import TelegramApi, TelegramError
 from agent_stack.gateways.telegram.render import (
     escape_fit,
@@ -52,6 +59,7 @@ _COMMANDS = [
     ("verbose", "How much tool activity to show: off, compact, full"),
     ("rename", "Rename this conversation"),
     ("delete", "Delete this conversation"),
+    ("cost", "What this conversation has cost so far"),
     ("status", "Where you are and what is running"),
     ("cancel", "Stop the current run"),
     ("help", "Show this list"),
@@ -65,6 +73,7 @@ _HELP = (
     "/verbose [off|compact|full]  how much tool activity to show while it works\n"
     "/rename <title>  rename this conversation\n"
     "/delete  delete this conversation (asks first)\n"
+    "/cost  what this conversation has cost (tokens and dollars)\n"
     "/status  where you are and what is running\n"
     "/cancel  stop the current run"
 )
@@ -143,6 +152,8 @@ class _Chat:
     status_id: int | None = None
     status_lines: list[str] = field(default_factory=list)
     tool_count: int = 0
+    run_usage: SessionUsage = field(default_factory=SessionUsage)  # this run's spend (live)
+    usage_before: SessionUsage | None = None  # the conversation's total when the run began
     full_ids: dict[str, int] = field(default_factory=dict)  # tool_call_id -> message (full mode)
     last_edit: float = 0.0
     listing: list[SessionSummary] = field(default_factory=list)
@@ -325,6 +336,8 @@ class TelegramGateway:
             await self._cmd_rename(chat, argument)
         elif command == "/delete":
             await self._cmd_delete(chat)
+        elif command == "/cost":
+            await self._cmd_cost(chat)
         elif command == "/status":
             await self._cmd_status(chat)
         elif chat.busy:
@@ -443,13 +456,55 @@ class TelegramGateway:
         }
         await self._say(chat, f"Delete “{chat.title or 'Untitled'}” for good?", keyboard)
 
+    async def _usage(self, chat: _Chat) -> SessionUsage | None:
+        if chat.session is None:
+            return None
+        try:
+            return await self._app.session_usage(chat.session)
+        except Exception:  # cost is informational; never break a command over it
+            return None
+
+    async def _run_spend(self, chat: _Chat) -> SessionUsage:
+        """This run's spend: the durable total now minus before (it includes subagents' calls,
+        whose events never reach this chat), else what the live events added up to."""
+        after = await self._usage(chat)
+        before = chat.usage_before
+        if after is None or before is None:
+            return chat.run_usage
+        return SessionUsage(
+            calls=after.calls - before.calls,
+            priced_calls=after.priced_calls - before.priced_calls,
+            input_tokens=after.input_tokens - before.input_tokens,
+            output_tokens=after.output_tokens - before.output_tokens,
+            reasoning_tokens=after.reasoning_tokens - before.reasoning_tokens,
+            cost_usd=after.cost_usd - before.cost_usd,
+        )
+
+    async def _cmd_cost(self, chat: _Chat) -> None:
+        usage = await self._usage(chat)
+        if usage is None:
+            await self._say(chat, "No conversation is open yet, so nothing has been spent.")
+            return
+        lines = [
+            f"Conversation: {usage_summary(usage)}",
+            f"Reasoning tokens: {usage.reasoning_tokens:,}" if usage.reasoning_tokens else "",
+        ]
+        budget = self._app.config.budget_usd
+        if budget is not None:
+            lines.append(f"Budget: {format_cost(usage.cost_usd)} of {format_cost(budget)}")
+        if chat.busy:
+            lines.append(f"This run so far: {usage_summary(await self._run_spend(chat))}")
+        await self._say(chat, "\n".join(line for line in lines if line))
+
     async def _cmd_status(self, chat: _Chat) -> None:
         state = "running" if chat.busy else "idle"
         where = f"“{chat.title or 'Untitled'}”" if chat.session else "a new draft"
+        usage = await self._usage(chat)
+        spent = f"\nSpent: {usage_summary(usage)}" if usage and usage.calls else ""
         await self._say(
             chat,
             f"Conversation: {where}\nRun: {state}\nTool activity: {chat.mode}\n"
-            f"Identity: {chat.principal}",
+            f"Identity: {chat.principal}{spent}",
         )
 
     # ── callbacks: switching, paging, tools, approvals ───────────────────────
@@ -620,6 +675,8 @@ class TelegramGateway:
             self._save_state()
             with_typing = asyncio.create_task(self._api.send_chat_action(chat.chat_id))
             chat.status_lines, chat.tool_count, chat.full_ids = [], 0, {}
+            chat.run_usage = SessionUsage()
+            chat.usage_before = await self._usage(chat)
             chat.status_id = await self._api.send_message(chat.chat_id, "⏳ working…")
             chat.last_edit = self._clock()
             await with_typing
@@ -650,6 +707,8 @@ class TelegramGateway:
             if content:
                 for part in split_message(content, 3500):
                     await self._say_html(chat, to_html(part), raw=part)
+        elif kind is EventType.MODEL_USAGE:
+            chat.run_usage = chat.run_usage.plus(event.data)  # a subagent's calls count too
         elif kind is EventType.TOOL_STARTED:
             chat.tool_count += 1
             await self._tool_started(chat, event)
@@ -742,6 +801,9 @@ class TelegramGateway:
     async def _finish_status(self, chat: _Chat, header: str) -> None:
         if chat.status_id is None:
             return
+        spent = await self._run_spend(chat)
+        if spent.priced_calls:
+            header = f"{header} · {format_cost(spent.cost_usd)}"
         keyboard = None
         if chat.tool_count:
             keyboard = {"inline_keyboard": [[_button(f"🔧 Tool calls ({chat.tool_count})", "tl:")]]}

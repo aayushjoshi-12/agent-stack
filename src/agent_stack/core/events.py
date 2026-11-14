@@ -24,6 +24,9 @@ class EventType(StrEnum):
     RUN_COMPLETED = "run.completed"
     RUN_FAILED = "run.failed"
     ASSISTANT_MESSAGE = "assistant.message"
+    # What one model call consumed: tokens and, when the provider reports it, the exact cost in
+    # USD. Emitted after every model response (including subagents'); never terminal.
+    MODEL_USAGE = "model.usage"
     # The model's thinking/reasoning for a step, when the provider returns any. Emitted
     # just before the ASSISTANT_MESSAGE it belongs to; not terminal for any stream.
     MODEL_REASONING = "model.reasoning"

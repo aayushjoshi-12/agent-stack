@@ -29,8 +29,14 @@ def audit_log_path(workspace: Path) -> Path:
     return workspace / ".agent" / "logs" / "audit.jsonl"
 
 
-def _is_secret(key: str) -> bool:
+def _is_secret(key: str, value: Any = None) -> bool:
     lowered = key.lower()
+    if (
+        lowered.endswith("_tokens")
+        and isinstance(value, (int, float))
+        and not isinstance(value, bool)
+    ):
+        return False  # a token *count* (model usage) is a plain number and cannot hold a secret
     return any(marker in lowered for marker in _SECRET_MARKERS)
 
 
@@ -48,7 +54,7 @@ def _sanitize(value: Any, known: list[str]) -> Any:
         return _cap(redact(value, known))
     if isinstance(value, Mapping):
         return {
-            str(key): _REDACTED if _is_secret(str(key)) else _sanitize(item, known)
+            str(key): _REDACTED if _is_secret(str(key), item) else _sanitize(item, known)
             for key, item in value.items()
         }
     if isinstance(value, (list, tuple)):

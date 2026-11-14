@@ -28,10 +28,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from agent_stack.app.application import Application
-from agent_stack.core.errors import PersistenceError
+from agent_stack.core.errors import BudgetExceededError, PersistenceError
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.run import Run
-from agent_stack.gateways.base import HistoryItem, MessageEnvelope
+from agent_stack.gateways.base import HistoryItem, MessageEnvelope, usage_summary
 
 __all__ = ["WebConfigError", "WebSettings", "create_app", "run_web"]
 
@@ -204,6 +204,22 @@ def create_app(application: Application, settings: WebSettings) -> FastAPI:
         await owned_session(session_id)
         return [_event_json(e) for e in await application.replay(session_id=session_id)]
 
+    @api.get("/sessions/{session_id}/usage", dependencies=auth)
+    async def usage(session_id: str) -> dict[str, Any]:
+        """Tokens and dollars this conversation has consumed, subagents included."""
+        await owned_session(session_id)
+        u = await application.session_usage(session_id)
+        return {
+            "calls": u.calls,
+            "priced_calls": u.priced_calls,
+            "input_tokens": u.input_tokens,
+            "output_tokens": u.output_tokens,
+            "reasoning_tokens": u.reasoning_tokens,
+            "cost_usd": u.cost_usd,
+            "budget_usd": application.config.budget_usd,
+            "summary": usage_summary(u),
+        }
+
     @api.post("/sessions/{session_id}/branch", dependencies=auth, status_code=201)
     async def branch(session_id: str, body: BranchBody) -> dict[str, str]:
         await owned_session(session_id)
@@ -217,9 +233,15 @@ def create_app(application: Application, settings: WebSettings) -> FastAPI:
     @api.post("/sessions/{session_id}/messages", dependencies=auth, status_code=202)
     async def send(session_id: str, body: MessageBody) -> dict[str, str]:
         await owned_session(session_id)
-        handle = await application.send_message(
-            MessageEnvelope(principal=principal, session=session_id, text=body.text)
-        )
+        await application.set_session_title(
+            session_id, body.text.strip()[:80]
+        )  # first message only
+        try:
+            handle = await application.send_message(
+                MessageEnvelope(principal=principal, session=session_id, text=body.text)
+            )
+        except BudgetExceededError as exc:
+            raise HTTPException(status.HTTP_402_PAYMENT_REQUIRED, str(exc)) from None
         return {"run_id": handle.run_id}
 
     # ── runs ─────────────────────────────────────────────────────────────────
