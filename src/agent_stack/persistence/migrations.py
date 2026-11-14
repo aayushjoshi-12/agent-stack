@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -21,7 +21,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     version       INTEGER NOT NULL DEFAULT 0,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL,
-    metadata_json TEXT NOT NULL DEFAULT '{}'
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    branch_of     TEXT,
+    branch_point_event_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS runs (
@@ -101,6 +103,19 @@ CREATE TABLE IF NOT EXISTS todos (
     PRIMARY KEY (session_id, id)
 );
 
+CREATE TABLE IF NOT EXISTS event_log (
+    id            TEXT PRIMARY KEY,
+    run_id        TEXT NOT NULL,
+    session_id    TEXT NOT NULL,
+    parent_run_id TEXT,
+    sequence      INTEGER NOT NULL,
+    type          TEXT NOT NULL,
+    timestamp     TEXT NOT NULL,
+    data_json     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_event_log_run ON event_log(run_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_event_log_session ON event_log(session_id);
 CREATE INDEX IF NOT EXISTS idx_checkpoints_run ON checkpoints(run_id);
 CREATE INDEX IF NOT EXISTS idx_tool_executions_run ON tool_executions(run_id);
 """
@@ -109,4 +124,9 @@ CREATE INDEX IF NOT EXISTS idx_tool_executions_run ON tool_executions(run_id);
 def create_schema(conn: sqlite3.Connection) -> None:
     """Create every table/index if it does not already exist and commit."""
     conn.executescript(_SCHEMA)
+    # Databases created before P30 lack the branch columns on `sessions`.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
+    for name in ("branch_of", "branch_point_event_id"):
+        if name not in columns:
+            conn.execute(f"ALTER TABLE sessions ADD COLUMN {name} TEXT")
     conn.commit()

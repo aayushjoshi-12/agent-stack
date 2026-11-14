@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from typing import cast
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -22,12 +23,13 @@ from agent_stack.core.agent import Agent
 from agent_stack.core.approval import ApprovalBroker
 from agent_stack.core.errors import SessionVersionConflictError
 from agent_stack.core.event_bus import EventBus
-from agent_stack.core.events import AgentEvent
+from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.factory import AgentFactory
 from agent_stack.core.run import Run, RunHandle, RunManager, RunRequest
-from agent_stack.core.session import Session, SessionStore
+from agent_stack.core.session import BranchingSessionStore, Session, SessionStore
 from agent_stack.gateways.base import HistoryItem, MessageEnvelope, SessionSummary
 from agent_stack.observability.metrics import Metrics
+from agent_stack.persistence.event_log import EventLogStore
 
 
 @dataclass
@@ -45,6 +47,7 @@ class Application:
     event_bus: EventBus
     approvals: ApprovalBroker
     metrics: Metrics
+    event_log: EventLogStore | None = None
 
     async def send_message(
         self,
@@ -143,6 +146,54 @@ class Application:
             m.tool_call_id: _text_of(m) for m in messages if isinstance(m, ToolMessage)
         }
         return [item for message in messages for item in _history_items(message, results)]
+
+    async def replay(
+        self,
+        *,
+        run_id: str | None = None,
+        session_id: str | None = None,
+        up_to_sequence: int | None = None,
+    ) -> list[AgentEvent]:
+        """Past events from the durable log, in publish order (survives restarts).
+
+        Filter by run and/or session; ``up_to_sequence`` keeps events whose per-run
+        sequence is at most that value. Data is redacted and capped (P29). Raises
+        ``RuntimeError`` when this application has no event log.
+        """
+        if self.event_log is None:
+            raise RuntimeError("this application has no durable event log")
+        return await self.event_log.read(
+            run_id=run_id, session_id=session_id, up_to_sequence=up_to_sequence
+        )
+
+    async def branch_session(self, session_id: str, branch_point_event_id: str) -> str:
+        """Fork a conversation at a logged event and return the new session id (P30).
+
+        Continue it with an ordinary ``send_message`` on the returned id. Publishes a
+        ``session.branched`` event on the parent session. Raises ``PersistenceError`` for an
+        unknown session or an event that is not in that session's log, and ``RuntimeError``
+        when the session store cannot branch.
+        """
+        store = self.session_store
+        if not hasattr(store, "branch"):
+            raise RuntimeError("this session store cannot branch conversations")
+        branch = await cast(BranchingSessionStore, store).branch(
+            session_id, branch_point_event_id
+        )
+        await self.event_bus.publish(
+            AgentEvent.create(
+                EventType.SESSION_BRANCHED,
+                run_id=branch.id,
+                session_id=session_id,
+                sequence=0,
+                data={
+                    "parent_session_id": session_id,
+                    "branch_point_event_id": branch_point_event_id,
+                    "branch_session_id": branch.id,
+                },
+            )
+        )
+        return branch.id
 
     def subscribe(self, run_id: str) -> AsyncIterator[AgentEvent]:
         """A live event stream for a run (single-consumption, no replay)."""

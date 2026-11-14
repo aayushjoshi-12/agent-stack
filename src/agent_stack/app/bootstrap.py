@@ -12,7 +12,6 @@ from agent_stack.context.instructions import InstructionsLoader
 from agent_stack.core.agent import Agent, SubAgentSpec
 from agent_stack.core.approval import ApprovalBroker, ToolPolicy
 from agent_stack.core.context import ContextBuilder
-from agent_stack.core.event_bus import InMemoryEventBus
 from agent_stack.core.factory import AgentFactory
 from agent_stack.core.locks import SessionLockManager
 from agent_stack.core.run import RunManager
@@ -24,6 +23,7 @@ from agent_stack.observability.logging import EventLogger, configure_logging
 from agent_stack.observability.metrics import Metrics
 from agent_stack.observability.sinks import FanoutSink
 from agent_stack.persistence.conversation import FileConversationStore
+from agent_stack.persistence.event_log import EventStoreBus, SqliteEventLogStore
 from agent_stack.persistence.sqlite import (
     SqliteCheckpointStore,
     SqliteDatabase,
@@ -99,13 +99,14 @@ def build_application(config: AppConfig | None = None) -> Application:
 
     db = SqliteDatabase(resolved.database)
     conversation = FileConversationStore(sessions_root)
-    session_store = SqliteSessionStore(db, conversation)
+    event_log = SqliteEventLogStore(db)
+    session_store = SqliteSessionStore(db, conversation, event_log)
     run_store = SqliteRunStore(db)
     checkpoint_store = SqliteCheckpointStore(db)
     audit = AuditLogger(audit_log_path(workspace))
     metrics = Metrics()
     configure_logging(workspace / ".agent" / "logs" / "agent.jsonl")
-    event_bus = InMemoryEventBus(audit=FanoutSink(audit, EventLogger(), metrics))
+    event_bus = EventStoreBus(event_log, audit=FanoutSink(audit, EventLogger(), metrics))
     locks = SessionLockManager()
 
     policy = WorkspacePolicy(root=workspace)
@@ -194,4 +195,5 @@ def build_application(config: AppConfig | None = None) -> Application:
         event_bus=event_bus,
         approvals=approvals,
         metrics=metrics,
+        event_log=event_log,
     )

@@ -5,7 +5,7 @@ cold. Everything below was true at commit `2be1c43`; `git log` has the later tru
 
 ## State
 
-- 429 tests, `make check` (ruff + strict mypy + pytest) green. Private repo, `master`, in sync.
+- 438 tests, `make check` (ruff + strict mypy + pytest) green. Private repo, `master`, in sync.
 - Run it: `agent-stack` (TUI), `agent-stack chat` (line REPL), `agent-stack telegram`
   (bot), `agent-stack audit tail`. Default model `openrouter:deepseek/deepseek-v4-pro`
   (`AGENT_STACK_MODEL`); see `.env.example` for every variable.
@@ -16,13 +16,22 @@ cold. Everything below was true at commit `2be1c43`; `git log` has the later tru
 | Memory and tasks | 21, 22 | `remember`/`recall`/`forget` (SQLite, per user); `todo_*` tools (per session) |
 | Gateways | 23, 25 | TUI (themes, cards, conversations picker, approvals), Telegram (allow-listed) |
 | Trust | 26, 27, 28 | approval flow; redaction, JSON logs, metrics, eight invariants; hardening matrix |
+| Event log, branching | 29, 30 | durable redacted `event_log` table + `Application.replay`; `Application.branch_session` forks a conversation at a logged event |
 | Large output | 15 | results over 20 KB become artifacts; `read_artifact` pages through them |
 
 ## Not done
 
 - **P24 Web gateway.** Blocked on the owner's design inspiration for the Next.js UI (the plan
   says so) and on adding FastAPI/uvicorn. Do not start the UI without that input.
-- **P29 durable event log and replay, P30 conversation branching.** Documented "later" phases.
+- **P29/P30 gaps (the phases themselves are done).** Not built, by choice: payload
+  `offset` pointers into `transcript.jsonl` and a `branch_id` column (a branch is its own
+  session, so `session_id` is the key; the log keeps redacted, capped event data instead of
+  offsets); the `Last-Event-ID` SSE resume (needs P24); a TUI/Web "fork here" affordance
+  (gateways call `Application.branch_session`); branch merge/diff and dead-branch GC.
+  Branch granularity: messages are saved when a run ends, so forking at an event inside a run
+  gives the conversation as it stood *before* that run; fork at `run.completed` to keep it.
+  Branches do not copy `artifacts/` (workspace-scoped) and show up in the picker as
+  "<title> (branch)". The tests that build the app need `OPENROUTER_API_KEY` set (any value).
 - **Public release** (the repo is private on purpose): README with an architecture diagram and
   a demo recording, LICENSE, an ADR "why not just LangGraph", and a fresh scan of the whole
   history for employer or customer names before the visibility changes.

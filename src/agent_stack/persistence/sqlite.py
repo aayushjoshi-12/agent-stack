@@ -17,14 +17,16 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
+from uuid import uuid4
 
 from langchain_core.messages import BaseMessage
 
-from agent_stack.core.errors import SessionVersionConflictError
+from agent_stack.core.errors import PersistenceError, SessionVersionConflictError
 from agent_stack.core.run import LIVE_RUN_STATUSES, Run, RunStatus
 from agent_stack.core.session import Session, SessionStore
 from agent_stack.core.state import Checkpoint, CheckpointStatus
 from agent_stack.persistence.conversation import ConversationStore
+from agent_stack.persistence.event_log import EventLogStore
 from agent_stack.persistence.migrations import create_schema
 from agent_stack.tools.executor import ToolExecutionResult
 
@@ -359,9 +361,54 @@ class SqliteSessionStore:
     pass straight through to the injected conversation store.
     """
 
-    def __init__(self, db: SqliteDatabase, conversation: ConversationBackend) -> None:
+    def __init__(
+        self,
+        db: SqliteDatabase,
+        conversation: ConversationBackend,
+        event_log: EventLogStore | None = None,
+    ) -> None:
         self._db = db
         self._conversation = conversation
+        self._event_log = event_log
+
+    async def branch(
+        self,
+        session_id: str,
+        branch_point_event_id: str,
+        *,
+        agent_name: str | None = None,
+    ) -> Session:
+        """Fork ``session_id`` at a logged event (P30).
+
+        The branch gets a copy of every transcript record written at or before the event's
+        timestamp. Messages are persisted when a run ends, so an event inside a run forks
+        the conversation as it stood *before* that run's turn; ``run.completed`` and later
+        events include it. The copy is a new session directory: neither side writes into
+        the other afterwards.
+        """
+        parent = await self.get(session_id)
+        if parent is None:
+            raise PersistenceError(f"cannot branch unknown session {session_id}")
+        event = None if self._event_log is None else await self._event_log.get(branch_point_event_id)
+        if event is None or event.session_id != session_id:
+            raise PersistenceError(
+                f"event {branch_point_event_id} is not in the log of session {session_id}"
+            )
+        records = [
+            r for r in await self._conversation.read(session_id) if r.ts <= event.timestamp
+        ]
+        branch = Session(
+            id=f"{session_id}-b{uuid4().hex[:6]}",
+            owner_id=parent.owner_id,
+            agent_name=agent_name or parent.agent_name,
+            title=f"{parent.title or 'Untitled'} (branch)",
+            metadata=dict(parent.metadata),
+            branch_of=session_id,
+            branch_point_event_id=branch_point_event_id,
+        )
+        await self._conversation.append(branch.id, records)
+        await self.save(branch)
+        return branch
 
     async def get(self, session_id: str) -> Session | None:
         rows = await self._db.query("SELECT * FROM sessions WHERE id = ?", (session_id,))
@@ -382,8 +429,8 @@ class SqliteSessionStore:
                 """
                 INSERT INTO sessions
                     (id, owner_id, agent_name, title, status, version,
-                     created_at, updated_at, metadata_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     created_at, updated_at, metadata_json, branch_of, branch_point_event_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     owner_id=excluded.owner_id,
                     agent_name=excluded.agent_name,
@@ -391,7 +438,9 @@ class SqliteSessionStore:
                     status=excluded.status,
                     version=excluded.version,
                     updated_at=excluded.updated_at,
-                    metadata_json=excluded.metadata_json
+                    metadata_json=excluded.metadata_json,
+                    branch_of=excluded.branch_of,
+                    branch_point_event_id=excluded.branch_point_event_id
                 """,
                 (
                     session.id,
@@ -403,6 +452,8 @@ class SqliteSessionStore:
                     now,
                     now,
                     json.dumps(dict(session.metadata), ensure_ascii=False),
+                    session.branch_of,
+                    session.branch_point_event_id,
                 ),
             )
             return
@@ -413,7 +464,7 @@ class SqliteSessionStore:
             """
             UPDATE sessions SET
                 owner_id=?, agent_name=?, title=?, status=?, version=?,
-                updated_at=?, metadata_json=?
+                updated_at=?, metadata_json=?, branch_of=?, branch_point_event_id=?
             WHERE id = ? AND version = ?
             """,
             (
@@ -424,6 +475,8 @@ class SqliteSessionStore:
                 session.version,
                 now,
                 json.dumps(dict(session.metadata), ensure_ascii=False),
+                session.branch_of,
+                session.branch_point_event_id,
                 session.id,
                 expected_version,
             ),
@@ -442,8 +495,9 @@ class SqliteSessionStore:
                     """
                     INSERT INTO sessions
                         (id, owner_id, agent_name, title, status, version,
-                         created_at, updated_at, metadata_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         created_at, updated_at, metadata_json,
+                         branch_of, branch_point_event_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         session.id,
@@ -455,6 +509,8 @@ class SqliteSessionStore:
                         now,
                         now,
                         json.dumps(dict(session.metadata), ensure_ascii=False),
+                        session.branch_of,
+                        session.branch_point_event_id,
                     ),
                 )
                 return
@@ -472,7 +528,14 @@ class SqliteSessionStore:
     async def delete(self, session_id: str) -> None:
         await self._conversation.delete(session_id)
         await self._db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-        for table in ("runs", "message_index", "artifacts_index", "checkpoints", "todos"):
+        for table in (
+            "runs",
+            "message_index",
+            "artifacts_index",
+            "checkpoints",
+            "todos",
+            "event_log",
+        ):
             await self._db.execute(f"DELETE FROM {table} WHERE session_id = ?", (session_id,))
         # tool_executions rows belong to runs (no session column): drop the orphans above.
         await self._db.execute(
@@ -490,6 +553,8 @@ def _row_to_session(row: sqlite3.Row) -> Session:
         status=str(row["status"]),
         version=int(row["version"]),
         metadata=dict(metadata) if isinstance(metadata, dict) else {},
+        branch_of=row["branch_of"],
+        branch_point_event_id=row["branch_point_event_id"],
     )
 
 

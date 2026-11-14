@@ -1374,7 +1374,7 @@ large conversation     gateway reconnect       approval race
 
 ---
 
-## Phase 29 — Durable event log & replay ⬜
+## Phase 29 — Durable event log & replay ✅
 
 **Goal.** The event bus captures **all** events durably so any past moment can be
 revisited. Extends P08 (in-memory only today) — this is the "back to the past" layer.
@@ -1401,7 +1401,7 @@ revisited. Extends P08 (in-memory only today) — this is the "back to the past"
 
 ---
 
-## Phase 30 — Conversation branching ⬜
+## Phase 30 — Conversation branching ✅
 
 **Goal.** Fork a conversation at any event and run the branch — "go back in the past and
 branch" — like a versioned timeline, not a linear chat.

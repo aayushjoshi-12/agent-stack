@@ -40,6 +40,10 @@ class EventType(StrEnum):
     # terminal for any stream — a child finishing must never end its parent's stream.
     SUBAGENT_STARTED = "subagent.started"
     SUBAGENT_COMPLETED = "subagent.completed"
+    # A conversation was forked (P30). Published on the *parent* session; ``run_id`` is the
+    # new branch's session id. Data: parent_session_id, branch_point_event_id,
+    # branch_session_id. Not terminal for any stream.
+    SESSION_BRANCHED = "session.branched"
 
 
 @dataclass(frozen=True)

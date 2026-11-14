@@ -151,6 +151,8 @@ class FileConversationStore:
             status=str(payload.get("status", "active")),
             version=int(payload.get("version", 0)),
             metadata=dict(metadata) if isinstance(metadata, dict) else {},
+            branch_of=payload.get("branch_of"),
+            branch_point_event_id=payload.get("branch_point_event_id"),
         )
 
     def _save_session_sync(self, session: Session, expected_version: int | None) -> None:
@@ -177,6 +179,8 @@ class FileConversationStore:
             "status": session.status,
             "version": session.version,
             "metadata": dict(session.metadata),
+            "branch_of": session.branch_of,
+            "branch_point_event_id": session.branch_point_event_id,
         }
         target = directory / "session.json"
         tmp = target.with_suffix(".json.tmp")

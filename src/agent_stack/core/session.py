@@ -24,6 +24,9 @@ class Session:
     status: str = "active"
     version: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Set on a branch (P30): the session it was forked from and the event it was forked at.
+    branch_of: str | None = None
+    branch_point_event_id: str | None = None
 
 
 class SessionStore(Protocol):
@@ -48,6 +51,23 @@ class SessionStore(Protocol):
     async def append_messages(self, session_id: str, messages: Sequence[BaseMessage]) -> None: ...
 
     async def delete(self, session_id: str) -> None: ...
+
+
+class BranchingSessionStore(SessionStore, Protocol):
+    """A store that can fork a conversation at a past event (P30)."""
+
+    async def branch(
+        self,
+        session_id: str,
+        branch_point_event_id: str,
+        *,
+        agent_name: str | None = None,
+    ) -> Session:
+        """Create a new session holding ``session_id``'s messages as of that event.
+
+        The branch is independent from then on: neither side writes into the other.
+        """
+        ...
 
 
 class InMemorySessionStore:
