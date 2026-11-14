@@ -4,9 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import dotenv
 import pytest
 
 from tests.fakes import FailingTool, FakeChatModel, SleepTool, ai
+
+# `agent_stack.app.bootstrap` loads the developer's real `.env` when imported. Tests must never
+# see real keys or tokens (a test could reach a live API), so loading is switched off here,
+# before any test imports it.
+dotenv.load_dotenv = lambda *args, **kwargs: False  # type: ignore[assignment]
 
 
 @pytest.fixture

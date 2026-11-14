@@ -209,7 +209,10 @@ async def test_session_lock_serializes_concurrent_runs(tmp_path: Path) -> None:
 
 
 @pytest.mark.integration
-async def test_bootstrap_creates_full_object_graph(tmp_path: Path) -> None:
+async def test_bootstrap_creates_full_object_graph(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key-not-real")  # building a model needs one
     config = AppConfig(workspace=tmp_path / "ws", db_path=tmp_path / "ws" / "index.db")
     app = build_application(config)
 
