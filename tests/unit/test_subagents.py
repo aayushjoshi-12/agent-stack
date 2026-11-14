@@ -427,3 +427,66 @@ async def test_application_send_input() -> None:
     await handle.result()
     humans = [message.content for message in model.calls[1] if isinstance(message, HumanMessage)]
     assert "hurry up" in humans
+
+
+class _BlockingModel:
+    """A model call that never returns by itself; records whether it was interrupted."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.interrupted = 0
+        self.started = asyncio.Event()
+
+    def bind_tools(self, tools: Sequence[Any]) -> _BlockingModel:
+        return self
+
+    async def ainvoke(self, messages: Any, **kwargs: Any) -> Any:
+        self.calls += 1
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.interrupted += 1
+            raise
+
+
+async def test_cancelling_a_parent_stops_its_running_subagent_and_never_resumes_the_parent() -> (
+    None
+):
+    """Stop must stop spending: a child model call is abandoned and the parent asks no more."""
+    session_store = InMemorySessionStore()
+    run_store = InMemoryRunStore()
+    bus = RecordingEventBus()
+
+    explorer = Agent(name="explorer", model="test:model")
+    child_model = _BlockingModel()
+    child_runtime = _runtime(explorer, child_model, [], session_store, bus)
+    parent_model = FakeChatModel(
+        [
+            ai(tool_calls=[call("delegate", {"agent_name": "explorer", "task": "look"})]),
+            ai("would cost another call"),
+        ]
+    )
+    parent = Agent(
+        name="assistant",
+        model="test:model",
+        tools=(delegate,),
+        subagents=(SubAgentSpec("explorer", "Read-only exploration.", explorer),),
+    )
+    parent_runtime = _runtime(parent, parent_model, [delegate], session_store, bus)
+    manager = RunManager(
+        runtime=parent_runtime,
+        run_store=run_store,
+        event_bus=bus,
+        agent_factory=FakeFactory({"explorer": child_runtime}),
+    )
+    handle = await manager.start(RunRequest(session_id="s1", user_id="u1", message="go"))
+    await asyncio.wait_for(child_model.started.wait(), 2)
+
+    await manager.cancel(handle.run_id)
+    await asyncio.sleep(0.2)
+
+    (child,) = await run_store.list_runs(handle.run_id)
+    assert child.status is RunStatus.CANCELLED
+    assert child_model.interrupted == 1 and child_model.calls == 1
+    assert len(parent_model.calls) == 1  # the parent never went back to the model

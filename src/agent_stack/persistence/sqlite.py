@@ -389,14 +389,14 @@ class SqliteSessionStore:
         parent = await self.get(session_id)
         if parent is None:
             raise PersistenceError(f"cannot branch unknown session {session_id}")
-        event = None if self._event_log is None else await self._event_log.get(branch_point_event_id)
+        event = (
+            None if self._event_log is None else await self._event_log.get(branch_point_event_id)
+        )
         if event is None or event.session_id != session_id:
             raise PersistenceError(
                 f"event {branch_point_event_id} is not in the log of session {session_id}"
             )
-        records = [
-            r for r in await self._conversation.read(session_id) if r.ts <= event.timestamp
-        ]
+        records = [r for r in await self._conversation.read(session_id) if r.ts <= event.timestamp]
         branch = Session(
             id=f"{session_id}-b{uuid4().hex[:6]}",
             owner_id=parent.owner_id,

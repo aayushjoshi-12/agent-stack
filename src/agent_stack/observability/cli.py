@@ -34,6 +34,7 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("tui", help="run the Textual terminal UI gateway")
     sub.add_parser("chat", help="run the line REPL gateway")
     sub.add_parser("telegram", help="run the Telegram bot gateway (needs TELEGRAM_BOT_TOKEN)")
+    sub.add_parser("web", help="run the web API gateway (needs AGENT_STACK_WEB_TOKEN)")
     return parser
 
 
@@ -96,6 +97,21 @@ def _run_telegram() -> int:
     return 0
 
 
+def _run_web() -> int:
+    import os
+
+    from agent_stack.app.bootstrap import build_application
+    from agent_stack.gateways.web import WebConfigError, WebSettings, run_web
+
+    try:
+        settings = WebSettings.from_env(os.environ)
+    except WebConfigError as exc:
+        print(f"web: {exc}", file=sys.stderr)
+        return 2
+    run_web(build_application(), settings)
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Dispatch the CLI; with no arguments, launch the TUI."""
     args = list(sys.argv[1:] if argv is None else argv)
@@ -113,6 +129,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_chat()
     if parsed.command == "telegram":
         return _run_telegram()
+    if parsed.command == "web":
+        return _run_web()
 
     _parser().print_help()
     return 1

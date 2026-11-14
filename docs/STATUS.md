@@ -5,7 +5,7 @@ cold. Everything below was true at commit `2be1c43`; `git log` has the later tru
 
 ## State
 
-- 464 tests, `make check` (ruff + strict mypy + pytest) green. Private repo, `master`, in sync.
+- 479 tests, `make check` (ruff + strict mypy + pytest) green. Private repo, `master`, in sync.
 - Run it: `agent-stack` (TUI), `agent-stack chat` (line REPL), `agent-stack telegram`
   (bot), `agent-stack audit tail`. Default model `openrouter:deepseek/deepseek-v4-pro`
   (`AGENT_STACK_MODEL`); see `.env.example` for every variable.
@@ -21,12 +21,15 @@ cold. Everything below was true at commit `2be1c43`; `git log` has the later tru
 
 ## Not done
 
-- **P24 Web gateway.** Blocked on the owner's design inspiration for the Next.js UI (the plan
-  says so) and on adding FastAPI/uvicorn. Do not start the UI without that input.
+- **P24 Web gateway: backend done, UI not started.** `agent-stack web` serves the API
+  (`gateways/web/`): sessions, messages, a resumable SSE stream (`Last-Event-ID`), cancel (also
+  stops subagents), approvals, branching. It needs `AGENT_STACK_WEB_TOKEN`, binds to loopback,
+  and treats other principals' sessions as nonexistent. The Next.js app (`web/`) is still to
+  build, in the style decided in ADR 013.
 - **P29/P30 gaps (the phases themselves are done).** Not built, by choice: payload
   `offset` pointers into `transcript.jsonl` and a `branch_id` column (a branch is its own
   session, so `session_id` is the key; the log keeps redacted, capped event data instead of
-  offsets); the `Last-Event-ID` SSE resume (needs P24); a TUI/Web "fork here" affordance
+  offsets); a TUI/Web "fork here" affordance
   (gateways call `Application.branch_session`); branch merge/diff and dead-branch GC.
   Branch granularity: messages are saved when a run ends, so forking at an event inside a run
   gives the conversation as it stood *before* that run; fork at `run.completed` to keep it.

@@ -38,9 +38,10 @@ class EventLogStore(Protocol):
         run_id: str | None = None,
         session_id: str | None = None,
         up_to_sequence: int | None = None,
+        after_sequence: int | None = None,
     ) -> list[AgentEvent]:
         """Events in publish order. ``up_to_sequence`` keeps events whose (per-run)
-        sequence is at most that value."""
+        sequence is at most that value, ``after_sequence`` those strictly greater."""
         ...
 
     async def get(self, event_id: str) -> AgentEvent | None: ...
@@ -81,6 +82,7 @@ class SqliteEventLogStore:
         run_id: str | None = None,
         session_id: str | None = None,
         up_to_sequence: int | None = None,
+        after_sequence: int | None = None,
     ) -> list[AgentEvent]:
         clauses: list[str] = []
         params: list[object] = []
@@ -91,6 +93,9 @@ class SqliteEventLogStore:
         if up_to_sequence is not None:
             clauses.append("sequence <= ?")
             params.append(up_to_sequence)
+        if after_sequence is not None:
+            clauses.append("sequence > ?")
+            params.append(after_sequence)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = await self._db.query(
             f"SELECT {_COLUMNS} FROM event_log{where} ORDER BY rowid", params

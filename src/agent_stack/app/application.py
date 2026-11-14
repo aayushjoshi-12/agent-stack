@@ -160,17 +160,22 @@ class Application:
         run_id: str | None = None,
         session_id: str | None = None,
         up_to_sequence: int | None = None,
+        after_sequence: int | None = None,
     ) -> list[AgentEvent]:
         """Past events from the durable log, in publish order (survives restarts).
 
         Filter by run and/or session; ``up_to_sequence`` keeps events whose per-run
-        sequence is at most that value. Data is redacted and capped (P29). Raises
+        sequence is at most that value, ``after_sequence`` those strictly greater (a resumable
+        stream reads only what is new). Data is redacted and capped (P29). Raises
         ``RuntimeError`` when this application has no event log.
         """
         if self.event_log is None:
             raise RuntimeError("this application has no durable event log")
         return await self.event_log.read(
-            run_id=run_id, session_id=session_id, up_to_sequence=up_to_sequence
+            run_id=run_id,
+            session_id=session_id,
+            up_to_sequence=up_to_sequence,
+            after_sequence=after_sequence,
         )
 
     async def branch_session(self, session_id: str, branch_point_event_id: str) -> str:
@@ -184,9 +189,7 @@ class Application:
         store = self.session_store
         if not hasattr(store, "branch"):
             raise RuntimeError("this session store cannot branch conversations")
-        branch = await cast(BranchingSessionStore, store).branch(
-            session_id, branch_point_event_id
-        )
+        branch = await cast(BranchingSessionStore, store).branch(session_id, branch_point_event_id)
         await self.event_bus.publish(
             AgentEvent.create(
                 EventType.SESSION_BRANCHED,
