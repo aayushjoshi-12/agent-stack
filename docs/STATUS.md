@@ -5,7 +5,7 @@ cold. Everything below was true at commit `2be1c43`; `git log` has the later tru
 
 ## State
 
-- 479 tests, `make check` (ruff + strict mypy + pytest) green. Private repo, `master`, in sync.
+- 503 tests, `make check` (ruff + strict mypy + pytest) green. Private repo, `master`, in sync.
 - Run it: `agent-stack` (TUI), `agent-stack chat` (line REPL), `agent-stack telegram`
   (bot), `agent-stack audit tail`. Default model `openrouter:deepseek/deepseek-v4-pro`
   (`AGENT_STACK_MODEL`); see `.env.example` for every variable.
@@ -19,13 +19,28 @@ cold. Everything below was true at commit `2be1c43`; `git log` has the later tru
 | Event log, branching | 29, 30 | durable redacted `event_log` table + `Application.replay`; `Application.branch_session` forks a conversation at a logged event |
 | Large output | 15 | results over 20 KB become artifacts; `read_artifact` pages through them |
 
+## Cost (every gateway)
+
+- A `model.usage` event follows each model call (tokens, and the provider's own cost when it
+  reports one, as OpenRouter does). `Application.session_usage` sums the durable event log, so a
+  conversation's total survives restarts and includes subagent runs. TUI (hints + sidebar), line
+  REPL (`/cost`), Telegram (`/cost`, per-run cost on the finished status) and the web API/UI
+  (`/sessions/{id}/usage`, header chip) show it.
+- `AGENT_STACK_BUDGET_USD` caps a conversation: at or over it, no further run starts (HTTP 402 on
+  the web API). It is checked when a run starts, not mid-run.
+- Honest limits: an unpriced call (a local model) is counted but never guessed at; a call that is
+  cancelled mid-flight records no usage, so any partial charge for it is not counted.
+
 ## Not done
 
-- **P24 Web gateway: backend done, UI not started.** `agent-stack web` serves the API
+- **P24 Web gateway: backend and UI built (`web/`, Next.js).** `agent-stack web` serves the API
   (`gateways/web/`): sessions, messages, a resumable SSE stream (`Last-Event-ID`), cancel (also
   stops subagents), approvals, branching. It needs `AGENT_STACK_WEB_TOKEN`, binds to loopback,
-  and treats other principals' sessions as nonexistent. The Next.js app (`web/`) is still to
-  build, in the style decided in ADR 013.
+  and treats other principals' sessions as nonexistent. The Next.js app (`web/`, style per ADR 013)
+  has live tool cards, approvals, subagent nesting, a resumable stream, fork and a stop button;
+  `cd web && npm run dev` (needs `AGENT_STACK_WEB_TOKEN` entered on the connect screen). Checked in
+  a real browser at 360/768/1280/1600 px, light and dark, against the real model. No visual
+  regression suite yet.
 - **P29/P30 gaps (the phases themselves are done).** Not built, by choice: payload
   `offset` pointers into `transcript.jsonl` and a `branch_id` column (a branch is its own
   session, so `session_id` is the key; the log keeps redacted, capped event data instead of
