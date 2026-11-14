@@ -142,8 +142,9 @@ class FakeApplication:
     async def child_runs(self, parent_run_id: str) -> list[Any]:
         return []
 
-    async def get_session(self, session_id: str) -> None:
-        return None
+    async def get_session(self, session_id: str) -> Any:
+        known = {s.id for s in self.sessions}
+        return object() if session_id in known else None
 
     # -- conversations (new / list / title / history) ----------------------
     async def new_session(self, principal: str) -> str:
@@ -158,6 +159,12 @@ class FakeApplication:
     async def delete_session(self, session_id: str) -> None:
         self.deleted.append(session_id)
         self.sessions = [s for s in self.sessions if s.id != session_id]
+
+    async def rename_session(self, session_id: str, title: str) -> None:
+        self.titles[session_id] = title
+        self.sessions = [
+            SessionSummary(id=s.id, title=title) if s.id == session_id else s for s in self.sessions
+        ]
 
     async def set_session_title(self, session_id: str, title: str) -> None:
         self.titles[session_id] = title

@@ -14,16 +14,25 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
+import os
 import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from agent_stack.app.application import Application
 from agent_stack.core.events import AgentEvent, EventType
-from agent_stack.gateways.base import MessageEnvelope, SessionSummary
+from agent_stack.gateways.base import HistoryItem, MessageEnvelope, SessionSummary
 from agent_stack.gateways.telegram.api import TelegramApi, TelegramError
+from agent_stack.gateways.telegram.render import (
+    escape_fit,
+    format_tool_detail,
+    to_html,
+    tool_label,
+)
 
 __all__ = ["TelegramConfigError", "TelegramGateway", "TelegramSettings", "split_message"]
 
@@ -31,10 +40,32 @@ __all__ = ["TelegramConfigError", "TelegramGateway", "TelegramSettings", "split_
 MESSAGE_LIMIT = 4096
 _STATUS_LINES = 6
 _SEEN_LIMIT = 2000
+_PAGE = 6  # conversations per page of /sessions
+_LISTING = 60  # how many recent conversations /sessions can page through
+_RECAP = 4  # messages replayed when a conversation is opened
+_MODES = ("off", "compact", "full")
+_COMMANDS = [
+    ("new", "Start a fresh conversation"),
+    ("sessions", "Browse and open conversations"),
+    ("history", "Show the latest messages of this conversation"),
+    ("tools", "Inspect the tool calls of the last turn"),
+    ("verbose", "How much tool activity to show: off, compact, full"),
+    ("rename", "Rename this conversation"),
+    ("delete", "Delete this conversation"),
+    ("status", "Where you are and what is running"),
+    ("cancel", "Stop the current run"),
+    ("help", "Show this list"),
+]
 _HELP = (
-    "Send a message to talk to the agent.\n"
+    "Send a message to talk to the agent.\n\n"
     "/new  start a fresh conversation\n"
-    "/sessions  list conversations and switch\n"
+    "/sessions  browse and open any conversation (also the ones from the terminal)\n"
+    "/history [n]  the latest messages of this conversation\n"
+    "/tools  inspect the tool calls of the last turn: arguments and results\n"
+    "/verbose [off|compact|full]  how much tool activity to show while it works\n"
+    "/rename <title>  rename this conversation\n"
+    "/delete  delete this conversation (asks first)\n"
+    "/status  where you are and what is running\n"
     "/cancel  stop the current run"
 )
 
@@ -54,6 +85,8 @@ class TelegramSettings:
     token: str = field(repr=False)
     allowed_users: frozenset[int]
     principal: str | None = None
+    #: Where each chat's open conversation and tool-detail mode survive a restart (optional).
+    state_path: Path | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> TelegramSettings:
@@ -73,7 +106,13 @@ class TelegramSettings:
                 "AGENT_STACK_TELEGRAM_USERS is empty: the bot runs tools on this machine, "
                 "so it needs an explicit allow-list of Telegram user ids"
             )
-        return cls(token, users, env.get("AGENT_STACK_TELEGRAM_PRINCIPAL") or None)
+        state = env.get("AGENT_STACK_TELEGRAM_STATE")
+        return cls(
+            token,
+            users,
+            env.get("AGENT_STACK_TELEGRAM_PRINCIPAL") or None,
+            Path(state).expanduser() if state else None,
+        )
 
 
 def split_message(text: str, limit: int = MESSAGE_LIMIT) -> list[str]:
@@ -97,12 +136,17 @@ class _Chat:
     principal: str
     session: str | None = None  # None: a draft, stored on the first message
     title: str | None = None
+    mode: str = "compact"  # how much tool activity a run shows: off, compact, full
+    restored: bool = False  # session came from the state file and is not yet checked
     run_id: str | None = None
     task: asyncio.Task[None] | None = None
     status_id: int | None = None
     status_lines: list[str] = field(default_factory=list)
+    tool_count: int = 0
+    full_ids: dict[str, int] = field(default_factory=dict)  # tool_call_id -> message (full mode)
     last_edit: float = 0.0
     listing: list[SessionSummary] = field(default_factory=list)
+    tools: list[HistoryItem] = field(default_factory=list)  # snapshot behind the /tools buttons
     approvals: dict[str, tuple[str, str, int, str]] = field(default_factory=dict)
 
     @property
@@ -112,14 +156,16 @@ class _Chat:
 
 def _summary(event: AgentEvent) -> str:
     """One status line for a tool call: its command, else its first short argument."""
-    tool = str(event.data.get("tool", "tool"))
+    return tool_label(str(event.data.get("tool", "tool")), _args(event), 120)
+
+
+def _args(event: AgentEvent) -> Mapping[str, Any] | None:
     args = event.data.get("args")
-    detail = ""
-    if isinstance(args, Mapping):
-        command = args.get("command")
-        short = [v for v in args.values() if isinstance(v, str) and len(v) < 60]
-        detail = str(command) if command else (short[0] if short else "")
-    return f"{tool} {detail}".strip()[:120]
+    return args if isinstance(args, Mapping) else None
+
+
+def _button(text: str, data: str) -> dict[str, str]:
+    return {"text": text, "callback_data": data}
 
 
 class TelegramGateway:
@@ -144,10 +190,43 @@ class TelegramGateway:
         self._chats: dict[int, _Chat] = {}
         self._seen: OrderedDict[str, None] = OrderedDict()
         self._stopped = False
+        self._saved = self._read_state()
+
+    # ── persisted chat state ─────────────────────────────────────────────────
+    def _read_state(self) -> dict[str, dict[str, Any]]:
+        path = self._settings.state_path
+        if path is None:
+            return {}
+        try:
+            data = json.loads(path.read_text("utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _save_state(self) -> None:
+        """Remember each chat's open conversation across restarts (best effort, atomic)."""
+        path = self._settings.state_path
+        if path is None:
+            return
+        for chat in self._chats.values():
+            self._saved[str(chat.chat_id)] = {
+                "session": chat.session,
+                "title": chat.title,
+                "mode": chat.mode,
+            }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp = path.with_suffix(".tmp")
+            temp.write_text(json.dumps(self._saved), "utf-8")
+            os.replace(temp, path)
+        except OSError:
+            pass  # remembering is a convenience; never fail a chat over it
 
     # ── polling loop ─────────────────────────────────────────────────────────
     async def run(self) -> None:
         """Poll until :meth:`stop`; transient network errors back off instead of ending it."""
+        with contextlib.suppress(TelegramError):
+            await self._api.set_my_commands(_COMMANDS)
         offset, delay = 0, 1.0
         while not self._stopped:
             try:
@@ -176,12 +255,15 @@ class TelegramGateway:
             await self._on_callback(callback)
             return
         message = update.get("message")
-        if not message or "text" not in message:
+        if not message:
             return
         sender = int(message.get("from", {}).get("id", 0))
         if sender not in self._settings.allowed_users:
             return
         chat_id = int(message["chat"]["id"])
+        if "text" not in message:
+            await self._say(self._chat(chat_id, sender), "I only understand text messages for now.")
+            return
         key = f"message:{chat_id}:{message.get('message_id')}"
         if not self._first_time(key):
             return
@@ -201,13 +283,30 @@ class TelegramGateway:
         if chat is None:
             principal = self._settings.principal or f"telegram:{user_id}"
             chat = self._chats[chat_id] = _Chat(chat_id=chat_id, principal=principal)
+            saved = self._saved.get(str(chat_id))
+            if saved:
+                mode = saved.get("mode")
+                chat.mode = mode if mode in _MODES else chat.mode
+                if isinstance(saved.get("session"), str):
+                    chat.session, chat.restored = saved["session"], True
+                    chat.title = saved.get("title") if isinstance(saved.get("title"), str) else None
         return chat
+
+    async def _check_restored(self, chat: _Chat) -> None:
+        """A conversation remembered from the state file may have been deleted meanwhile."""
+        if chat.restored and chat.session is not None:
+            chat.restored = False
+            if await self._app.get_session(chat.session) is None:
+                chat.session, chat.title = None, None
+                self._save_state()
 
     # ── text and commands ────────────────────────────────────────────────────
     async def _on_text(self, chat: _Chat, text: str, key: str) -> None:
         if not text:
             return
-        command = text.split(maxsplit=1)[0].split("@", 1)[0].lower()  # "/new@mybot" in group chats
+        command, _, argument = text.partition(" ")
+        command = command.split("@", 1)[0].lower()  # "/new@mybot" in group chats
+        argument = argument.strip()
         if command in ("/start", "/help"):
             await self._say(chat, _HELP)
         elif command == "/new":
@@ -216,16 +315,33 @@ class TelegramGateway:
             await self._cmd_sessions(chat)
         elif command == "/cancel":
             await self._cmd_cancel(chat)
+        elif command == "/history":
+            await self._cmd_history(chat, argument)
+        elif command == "/tools":
+            await self._cmd_tools(chat)
+        elif command == "/verbose":
+            await self._cmd_verbose(chat, argument)
+        elif command == "/rename":
+            await self._cmd_rename(chat, argument)
+        elif command == "/delete":
+            await self._cmd_delete(chat)
+        elif command == "/status":
+            await self._cmd_status(chat)
         elif chat.busy:
             await self._say(chat, "A run is in progress. Send /cancel to stop it first.")
         else:
             chat.task = asyncio.create_task(self._run_message(chat, text, key))
 
-    async def _cmd_new(self, chat: _Chat) -> None:
+    async def _refuse_if_busy(self, chat: _Chat) -> bool:
         if chat.busy:
             await self._say(chat, "A run is in progress. Send /cancel to stop it first.")
+        return chat.busy
+
+    async def _cmd_new(self, chat: _Chat) -> None:
+        if await self._refuse_if_busy(chat):
             return
         chat.session, chat.title = None, None  # a draft, stored on the first message
+        self._save_state()
         await self._say(chat, "New conversation. What would you like to do?")
 
     async def _cmd_cancel(self, chat: _Chat) -> None:
@@ -235,25 +351,108 @@ class TelegramGateway:
         await self._app.cancel_run(chat.run_id)
 
     async def _cmd_sessions(self, chat: _Chat) -> None:
-        if chat.busy:
-            await self._say(chat, "A run is in progress. Send /cancel to stop it first.")
+        if await self._refuse_if_busy(chat):
             return
-        chat.listing = await self._app.list_sessions(chat.principal, limit=8)
+        chat.listing = await self._app.list_sessions(chat.principal, limit=_LISTING)
         if not chat.listing:
             await self._say(chat, "No conversations yet.")
             return
-        rows = [
-            [
-                {
-                    "text": ("● " if s.id == chat.session else "") + s.title[:40],
-                    "callback_data": f"sw:{i}",
-                }
-            ]
-            for i, s in enumerate(chat.listing)
-        ]
-        await self._say(chat, "Conversations (tap to switch):", {"inline_keyboard": rows})
+        text, keyboard = self._sessions_page(chat, 0)
+        await self._say(chat, text, keyboard)
 
-    # ── callbacks: switching and approvals ───────────────────────────────────
+    def _sessions_page(self, chat: _Chat, page: int) -> tuple[str, dict[str, Any]]:
+        pages = max((len(chat.listing) + _PAGE - 1) // _PAGE, 1)
+        page = min(max(page, 0), pages - 1)
+        start = page * _PAGE
+        rows = [
+            [_button(("● " if s.id == chat.session else "") + s.title[:40], f"sw:{start + i}")]
+            for i, s in enumerate(chat.listing[start : start + _PAGE])
+        ]
+        if pages > 1:
+            nav = []
+            if page > 0:
+                nav.append(_button("◀ Newer", f"sp:{page - 1}"))
+            nav.append(_button(f"{page + 1}/{pages}", "noop"))
+            if page < pages - 1:
+                nav.append(_button("Older ▶", f"sp:{page + 1}"))
+            rows.append(nav)
+        return "Conversations (tap to switch):", {"inline_keyboard": rows}
+
+    async def _cmd_history(self, chat: _Chat, argument: str) -> None:
+        if chat.session is None:
+            await self._say(chat, "No conversation is open. Send a message or use /sessions.")
+            return
+        count = min(max(int(argument), 1), 20) if argument.isdigit() else 6
+        history = await self._app.session_history(chat.session)
+        shown = [h for h in history if h.kind != "tool"][-count:]
+        if not shown:
+            await self._say(chat, "This conversation has no messages yet.")
+            return
+        await self._say_html(chat, self._recap_html(shown, 700))
+
+    @staticmethod
+    def _recap_html(items: list[HistoryItem], limit: int) -> str:
+        out = []
+        for h in items:
+            who = "<b>You</b>" if h.kind == "user" else "<b>Agent</b>"
+            text = h.text if len(h.text) <= limit else h.text[: limit - 1] + "…"
+            out.append(f"{who}\n{to_html(text)}")
+        return "\n\n".join(out)
+
+    async def _cmd_tools(self, chat: _Chat) -> None:
+        if chat.session is None:
+            await self._say(chat, "No conversation is open. Send a message or use /sessions.")
+            return
+        await self._show_tools(chat, None)
+
+    async def _cmd_verbose(self, chat: _Chat, argument: str) -> None:
+        wanted = argument.lower()
+        if wanted in _MODES:
+            chat.mode = wanted
+            self._save_state()
+            await self._say(chat, f"Tool activity: {wanted}.")
+            return
+        rows = [[_button(("● " if m == chat.mode else "") + m, f"vb:{m}") for m in _MODES]]
+        await self._say(
+            chat,
+            "How much tool activity should a run show?\n"
+            "off: only the answer. compact: one live status message. "
+            "full: every call with its arguments, as its own message.",
+            {"inline_keyboard": rows},
+        )
+
+    async def _cmd_rename(self, chat: _Chat, argument: str) -> None:
+        if chat.session is None:
+            await self._say(chat, "No conversation is open yet.")
+        elif not argument:
+            await self._say(chat, "Usage: /rename <new title>")
+        else:
+            await self._app.rename_session(chat.session, argument[:80])
+            chat.title = argument[:80]
+            self._save_state()
+            await self._say(chat, f"Renamed to “{chat.title}”.")
+
+    async def _cmd_delete(self, chat: _Chat) -> None:
+        if await self._refuse_if_busy(chat):
+            return
+        if chat.session is None:
+            await self._say(chat, "No conversation is open.")
+            return
+        keyboard = {
+            "inline_keyboard": [[_button("🗑 Delete it", "dl:y"), _button("Keep it", "dl:n")]]
+        }
+        await self._say(chat, f"Delete “{chat.title or 'Untitled'}” for good?", keyboard)
+
+    async def _cmd_status(self, chat: _Chat) -> None:
+        state = "running" if chat.busy else "idle"
+        where = f"“{chat.title or 'Untitled'}”" if chat.session else "a new draft"
+        await self._say(
+            chat,
+            f"Conversation: {where}\nRun: {state}\nTool activity: {chat.mode}\n"
+            f"Identity: {chat.principal}",
+        )
+
+    # ── callbacks: switching, paging, tools, approvals ───────────────────────
     async def _on_callback(self, callback: Mapping[str, Any]) -> None:
         sender = int(callback.get("from", {}).get("id", 0))
         message = callback.get("message") or {}
@@ -262,10 +461,20 @@ class TelegramGateway:
         chat = self._chat(int(message["chat"]["id"]), sender)
         data = str(callback.get("data", ""))
         callback_id = str(callback.get("id", ""))
-        if data.startswith("ap:"):
+        message_id = int(message.get("message_id", 0))
+        prefix = data.split(":", 1)[0]
+        if prefix == "ap":
             await self._on_approval(chat, callback_id, data)
-        elif data.startswith("sw:"):
+        elif prefix == "sw":
             await self._on_switch(chat, callback_id, data)
+        elif prefix == "sp":
+            await self._on_page(chat, callback_id, message_id, data)
+        elif prefix in ("tl", "td"):
+            await self._on_tools(chat, callback_id, message_id, data)
+        elif prefix == "dl":
+            await self._on_delete(chat, callback_id, message_id, data)
+        elif prefix == "vb":
+            await self._on_verbose(chat, callback_id, message_id, data)
         else:
             await self._api.answer_callback_query(callback_id)
 
@@ -305,26 +514,112 @@ class TelegramGateway:
                 callback_id, "That list is out of date. Send /sessions."
             )
             return
-        chat.session, chat.title = target.id, target.title
+        chat.session, chat.title, chat.restored = target.id, target.title, False
+        self._save_state()
         await self._api.answer_callback_query(callback_id, "Switched")
         history = await self._app.session_history(target.id)
+        conversation = [h for h in history if h.kind != "tool"]
+        calls = sum(1 for h in history if h.kind == "tool")
         recap = [
-            f"{'You' if h.kind == 'user' else 'Agent'}: {h.text[:300]}"
-            for h in history
-            if h.kind != "tool"
+            f"{'You' if h.kind == 'user' else 'Agent'}: {h.text[:300]}" for h in conversation[-2:]
         ]
-        await self._say(chat, f"Switched to “{target.title}”.\n\n" + "\n\n".join(recap[-2:]))
+        actions = [_button("📜 History", "hs")]
+        if calls:
+            actions.insert(0, _button(f"🔧 Tool calls ({calls})", "tl:"))
+        actions.append(_button("🗑 Delete", "dl:ask"))
+        await self._say(
+            chat,
+            f"Switched to “{target.title}”.\n\n" + "\n\n".join(recap),
+            {"inline_keyboard": [actions]},
+        )
+
+    async def _on_page(self, chat: _Chat, callback_id: str, message_id: int, data: str) -> None:
+        await self._api.answer_callback_query(callback_id)
+        if not chat.listing:
+            return
+        try:
+            page = int(data.split(":", 1)[1])
+        except ValueError:
+            return
+        text, keyboard = self._sessions_page(chat, page)
+        await self._edit(chat.chat_id, message_id, text, keyboard)
+
+    async def _on_verbose(self, chat: _Chat, callback_id: str, message_id: int, data: str) -> None:
+        mode = data.split(":", 1)[1]
+        if mode not in _MODES:
+            await self._api.answer_callback_query(callback_id)
+            return
+        chat.mode = mode
+        self._save_state()
+        await self._api.answer_callback_query(callback_id, f"Tool activity: {mode}")
+        await self._edit(chat.chat_id, message_id, f"Tool activity: {mode}.")
+
+    async def _on_delete(self, chat: _Chat, callback_id: str, message_id: int, data: str) -> None:
+        verdict = data.split(":", 1)[1]
+        if verdict == "ask":
+            await self._api.answer_callback_query(callback_id)
+            await self._cmd_delete(chat)
+            return
+        if chat.busy or chat.session is None:
+            await self._api.answer_callback_query(callback_id, "Nothing to delete right now.")
+            return
+        if verdict != "y":
+            await self._api.answer_callback_query(callback_id, "Kept")
+            await self._edit(chat.chat_id, message_id, "Kept.")
+            return
+        title = chat.title or "Untitled"
+        await self._app.delete_session(chat.session)
+        chat.session, chat.title, chat.tools = None, None, []
+        self._save_state()
+        await self._api.answer_callback_query(callback_id, "Deleted")
+        await self._edit(chat.chat_id, message_id, f"🗑 Deleted “{title}”.")
+
+    async def _show_tools(self, chat: _Chat, message_id: int | None) -> None:
+        """List the last turn's tool calls as buttons (new message, or edit the one tapped)."""
+        history = await self._app.session_history(chat.session or "")
+        last_user = max((i for i, h in enumerate(history) if h.kind == "user"), default=-1)
+        chat.tools = [h for h in history[last_user + 1 :] if h.kind == "tool"]
+        if not chat.tools:
+            text, keyboard = "The last turn made no tool calls.", None
+        else:
+            rows = [
+                [_button(tool_label(t.text, t.args, 40), f"td:{i}")]
+                for i, t in enumerate(chat.tools[:30])
+            ]
+            text = f"{len(chat.tools)} tool call(s) in the last turn. Tap one for details:"
+            keyboard = {"inline_keyboard": rows}
+        if message_id is None:
+            await self._say(chat, text, keyboard)
+        else:
+            await self._edit(chat.chat_id, message_id, text, keyboard)
+
+    async def _on_tools(self, chat: _Chat, callback_id: str, message_id: int, data: str) -> None:
+        await self._api.answer_callback_query(callback_id)
+        if chat.session is None:
+            return
+        if data == "tl:":
+            await self._show_tools(chat, None)  # a new message: the run's status stays put
+            return
+        try:
+            item = chat.tools[int(data.split(":", 1)[1])]
+        except (ValueError, IndexError):
+            await self._say(chat, "That list is out of date. Send /tools.")
+            return
+        back = {"inline_keyboard": [[_button("◀ All tool calls", "tl:")]]}
+        await self._say_html(chat, format_tool_detail(item), back)
 
     # ── one run ──────────────────────────────────────────────────────────────
     async def _run_message(self, chat: _Chat, text: str, key: str) -> None:
         try:
+            await self._check_restored(chat)
             if chat.session is None:
                 chat.session = await self._app.new_session(chat.principal)
             if chat.title is None:
                 chat.title = text[:80]
                 await self._app.set_session_title(chat.session, chat.title)
+            self._save_state()
             with_typing = asyncio.create_task(self._api.send_chat_action(chat.chat_id))
-            chat.status_lines = []
+            chat.status_lines, chat.tool_count, chat.full_ids = [], 0, {}
             chat.status_id = await self._api.send_message(chat.chat_id, "⏳ working…")
             chat.last_edit = self._clock()
             await with_typing
@@ -353,14 +648,13 @@ class TelegramGateway:
         if kind is EventType.ASSISTANT_MESSAGE:
             content = str(event.data.get("content", "")).strip()
             if content:
-                for part in split_message(content):
-                    await self._say(chat, part)
+                for part in split_message(content, 3500):
+                    await self._say_html(chat, to_html(part), raw=part)
         elif kind is EventType.TOOL_STARTED:
-            chat.status_lines.append(f"→ {_summary(event)}")
-            await self._flush_status(chat)
-        elif kind is EventType.TOOL_COMPLETED and event.data.get("ok") is False:
-            chat.status_lines.append(f"✗ {event.data.get('tool')} failed")
-            await self._flush_status(chat)
+            chat.tool_count += 1
+            await self._tool_started(chat, event)
+        elif kind is EventType.TOOL_COMPLETED:
+            await self._tool_completed(chat, event)
         elif kind is EventType.APPROVAL_REQUIRED:
             await self._ask_approval(chat, event)
         elif kind is EventType.RUN_COMPLETED:
@@ -376,18 +670,61 @@ class TelegramGateway:
             return True
         return False
 
+    async def _tool_started(self, chat: _Chat, event: AgentEvent) -> None:
+        if chat.mode == "full":
+            call_id = str(event.data.get("tool_call_id", ""))
+            args = json.dumps(dict(_args(event) or {}), ensure_ascii=False, default=str)
+            with contextlib.suppress(TelegramError):
+                chat.full_ids[call_id] = await self._api.send_message(
+                    chat.chat_id,
+                    f"🔧 <b>{escape_fit(str(event.data.get('tool', 'tool')), 80)}</b>\n"
+                    f"<pre>{escape_fit(args, 1500)}</pre>",
+                    None,
+                    "HTML",
+                )
+        if chat.mode != "off":
+            chat.status_lines.append(f"→ {_summary(event)}")
+            await self._flush_status(chat)
+
+    async def _tool_completed(self, chat: _Chat, event: AgentEvent) -> None:
+        ok = event.data.get("ok") is not False
+        if chat.mode == "full":
+            message_id = chat.full_ids.get(str(event.data.get("tool_call_id", "")))
+            if message_id is not None:
+                error = str(event.data.get("error") or "")[:300]
+                mark = "✓ ok" if ok else f"✗ failed{': ' + error if error else ''}"
+                await self._edit(
+                    chat.chat_id,
+                    message_id,
+                    f"🔧 <b>{escape_fit(str(event.data.get('tool', 'tool')), 80)}</b>  "
+                    f"{escape_fit(mark, 400)}",
+                    None,
+                    "HTML",
+                )
+        if not ok and chat.mode != "off":
+            chat.status_lines.append(f"✗ {event.data.get('tool')} failed")
+            await self._flush_status(chat)
+
     async def _ask_approval(self, chat: _Chat, event: AgentEvent) -> None:
         approval_id = str(event.data["approval_id"])
         label = _summary(event)
+        args = json.dumps(dict(_args(event) or {}), ensure_ascii=False, indent=2, default=str)
+        detail = args if len(args) <= 1500 else args[:1499] + "…"
+        shown = escape_fit(detail, 2500)
         keyboard = {
             "inline_keyboard": [
                 [
-                    {"text": "✓ Approve", "callback_data": f"ap:{approval_id}:y"},
-                    {"text": "✗ Reject", "callback_data": f"ap:{approval_id}:n"},
+                    _button("✓ Approve", f"ap:{approval_id}:y"),
+                    _button("✗ Reject", f"ap:{approval_id}:n"),
                 ]
             ]
         }
-        message_id = await self._api.send_message(chat.chat_id, f"Approve?\n{label}", keyboard)
+        message_id = await self._send_html(
+            chat.chat_id,
+            f"<b>Approve?</b>\n{escape_fit(label, 300)}\n<pre>{shown}</pre>",
+            keyboard,
+            fallback=f"Approve?\n{label}\n{detail}",
+        )
         chat.approvals[approval_id] = (event.run_id, event.session_id, message_id, label)
 
     # ── status message (debounced) and sending ───────────────────────────────
@@ -403,15 +740,52 @@ class TelegramGateway:
         await self._edit(chat.chat_id, chat.status_id, self._status_text(chat, "⏳ working…"))
 
     async def _finish_status(self, chat: _Chat, header: str) -> None:
-        if chat.status_id is not None:
-            await self._edit(chat.chat_id, chat.status_id, self._status_text(chat, header))
+        if chat.status_id is None:
+            return
+        keyboard = None
+        if chat.tool_count:
+            keyboard = {"inline_keyboard": [[_button(f"🔧 Tool calls ({chat.tool_count})", "tl:")]]}
+        await self._edit(chat.chat_id, chat.status_id, self._status_text(chat, header), keyboard)
 
-    async def _edit(self, chat_id: int, message_id: int, text: str) -> None:
+    async def _edit(
+        self,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        markup: dict[str, Any] | None = None,
+        parse_mode: str | None = None,
+    ) -> None:
         # "message is not modified", a deleted message, a rate limit: cosmetic only.
         with contextlib.suppress(TelegramError):
-            await self._api.edit_message_text(chat_id, message_id, text)
+            await self._api.edit_message_text(chat_id, message_id, text, markup, parse_mode)
 
     async def _say(self, chat: _Chat, text: str, markup: dict[str, Any] | None = None) -> None:
         # The user may have blocked the bot; that must never stop the gateway.
         with contextlib.suppress(TelegramError):
             await self._api.send_message(chat.chat_id, text, markup)
+
+    async def _say_html(
+        self,
+        chat: _Chat,
+        text: str,
+        markup: dict[str, Any] | None = None,
+        *,
+        raw: str | None = None,
+    ) -> None:
+        """Send HTML; if Telegram rejects it, send the plain ``raw`` text instead."""
+        plain = raw if raw is not None else text
+        with contextlib.suppress(TelegramError):
+            if len(text) > MESSAGE_LIMIT:  # escaping can grow a message past Telegram's limit
+                await self._api.send_message(chat.chat_id, plain[:MESSAGE_LIMIT], markup)
+            else:
+                await self._send_html(chat.chat_id, text, markup, fallback=plain)
+
+    async def _send_html(
+        self, chat_id: int, text: str, markup: dict[str, Any] | None, *, fallback: str
+    ) -> int:
+        try:
+            return await self._api.send_message(chat_id, text, markup, "HTML")
+        except TelegramError as exc:
+            if exc.code != 400:  # only a parse error is worth a plain retry
+                raise
+            return await self._api.send_message(chat_id, fallback, markup)

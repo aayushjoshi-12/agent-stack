@@ -57,23 +57,44 @@ class TelegramApi:
         return result
 
     async def send_message(
-        self, chat_id: int, text: str, reply_markup: dict[str, Any] | None = None
+        self,
+        chat_id: int,
+        text: str,
+        reply_markup: dict[str, Any] | None = None,
+        parse_mode: str | None = None,
     ) -> int:
-        """Send plain text; returns the new message's id."""
+        """Send text (plain, or ``parse_mode="HTML"``); returns the new message's id."""
         result = await self.call(
-            "sendMessage", chat_id=chat_id, text=text, reply_markup=reply_markup
+            "sendMessage",
+            chat_id=chat_id,
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
         )
         return int(result["message_id"])
 
     async def edit_message_text(
-        self, chat_id: int, message_id: int, text: str, reply_markup: dict[str, Any] | None = None
+        self,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        reply_markup: dict[str, Any] | None = None,
+        parse_mode: str | None = None,
     ) -> None:
         await self.call(
             "editMessageText",
             chat_id=chat_id,
             message_id=message_id,
             text=text,
+            parse_mode=parse_mode,
             reply_markup=reply_markup if reply_markup is not None else {"inline_keyboard": []},
+        )
+
+    async def set_my_commands(self, commands: list[tuple[str, str]]) -> None:
+        """Publish the slash-command menu shown next to the message box."""
+        await self.call(
+            "setMyCommands",
+            commands=[{"command": name, "description": text} for name, text in commands],
         )
 
     async def answer_callback_query(self, callback_id: str, text: str = "") -> None:

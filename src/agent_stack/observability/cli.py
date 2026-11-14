@@ -77,6 +77,7 @@ def _run_chat() -> int:
 
 def _run_telegram() -> int:
     import os
+    from dataclasses import replace
 
     from agent_stack.app.bootstrap import build_application
     from agent_stack.gateways.telegram import TelegramConfigError, TelegramSettings, run_telegram
@@ -86,7 +87,12 @@ def _run_telegram() -> int:
     except TelegramConfigError as exc:
         print(f"telegram: {exc}", file=sys.stderr)
         return 2
-    run_telegram(build_application(), settings)
+    application = build_application()
+    if settings.state_path is None:  # remember each chat's open conversation across restarts
+        settings = replace(
+            settings, state_path=application.config.workspace / ".agent" / "telegram_state.json"
+        )
+    run_telegram(application, settings)
     return 0
 
 

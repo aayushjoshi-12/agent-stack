@@ -136,12 +136,19 @@ class Application:
         with contextlib.suppress(SessionVersionConflictError):
             await self.session_store.save(session, expected_version=session.version)
 
+    async def rename_session(self, session_id: str, title: str) -> None:
+        """Give a session a new title (unlike ``set_session_title``, replaces an existing one)."""
+        session = await self.session_store.get(session_id)
+        if session is None:
+            return
+        session.title = title
+        with contextlib.suppress(SessionVersionConflictError):
+            await self.session_store.save(session, expected_version=session.version)
+
     async def session_history(self, session_id: str) -> list[HistoryItem]:
         """A stored conversation as display rows: user text, assistant text, tool calls."""
         messages = await self.session_store.get_messages(session_id)
-        results = {
-            m.tool_call_id: _text_of(m) for m in messages if isinstance(m, ToolMessage)
-        }
+        results = {m.tool_call_id: _text_of(m) for m in messages if isinstance(m, ToolMessage)}
         return [item for message in messages for item in _history_items(message, results)]
 
     def subscribe(self, run_id: str) -> AsyncIterator[AgentEvent]:
@@ -198,7 +205,9 @@ def _text_of(message: BaseMessage) -> str:
     return "".join(parts)
 
 
-def _history_items(message: BaseMessage, results: dict[str, str] | None = None) -> list[HistoryItem]:
+def _history_items(
+    message: BaseMessage, results: dict[str, str] | None = None
+) -> list[HistoryItem]:
     """Map one stored message to display rows; a tool row carries its call's result."""
     results = results or {}
     if isinstance(message, HumanMessage):

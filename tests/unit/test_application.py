@@ -260,6 +260,35 @@ async def test_session_history_maps_messages_to_display_rows() -> None:
         ("assistant", "It prints 1."),
     ]
     assert history[1].args == {"path": "a.py"}
+    assert history[1].result == "print(1)"  # the tool's answer travels with the call
+    assert history[0].result is None
+
+
+async def test_a_tool_call_without_an_answer_has_no_result() -> None:
+    application, _, store = _build_application(FakeChatModel([ai("hi")]))
+    session_id = await application.new_session("tui:me")
+    await store.append_messages(
+        session_id,
+        [
+            HumanMessage(content="go"),
+            AIMessage(content="", tool_calls=[{"name": "t", "args": {}, "id": "lost"}]),
+        ],
+    )
+
+    (_, call) = await application.session_history(session_id)
+
+    assert call.kind == "tool" and call.result is None
+
+
+async def test_rename_session_replaces_the_title_unlike_set_session_title() -> None:
+    application, _, _ = _build_application(FakeChatModel([ai("hi")]))
+    session_id = await application.new_session("tui:me")
+    await application.set_session_title(session_id, "First")
+
+    await application.rename_session(session_id, "Renamed")
+    await application.rename_session("no-such-session", "ignored")  # no error
+
+    assert [s.title for s in await application.list_sessions("tui:me")] == ["Renamed"]
 
 
 async def test_history_replays_what_a_real_run_persisted() -> None:
