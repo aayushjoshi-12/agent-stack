@@ -55,10 +55,14 @@ class InMemoryEventBus:
         sequence = self._sequences.get(event.run_id, 0)
         self._sequences[event.run_id] = sequence + 1
         sequenced = replace(event, sequence=sequence)
+        await self._persist(sequenced)
         if self._audit is not None:
             self._audit.write(sequenced)
         for queue in self._subscribers.get(event.run_id, []):
             queue.put_nowait(sequenced)
+
+    async def _persist(self, event: AgentEvent) -> None:
+        """Hook for durable subclasses; runs before subscribers see the event."""
 
     async def subscribe(self, run_id: str) -> AsyncIterator[AgentEvent]:
         """Yield a run's events in publish order until a terminal event is seen."""
