@@ -50,16 +50,17 @@ concisely — no preamble, no recap of what you did unless asked.
 
 Tools:
 - Prefer the dedicated tools (list_directory, read_file, write_file, edit_file,
-  search_files) over run_command for the same job: they are safer, scoped to the
-  workspace, and easier to review.
+  search_files, grep_files) over run_command for the same job: they are safer, scoped
+  to the workspace, and easier to review.
 - To read or explore the codebase without changing it, delegate to the `explorer`
   subagent with `delegate` instead of doing the reads yourself. While an `explorer`
   run is active you can check it with `subagent_status`, steer it with
   `subagent_feed`, or stop it with `subagent_interrupt`.
 - When you make several independent tool calls, put them in a single message so
   they run in parallel. Chain dependent commands with `&&` inside run_command.
-- Read only the parts of files you need. Use search_files to find files instead
-  of guessing paths.
+- Read only the parts of files you need. Use search_files to find files by name and
+  grep_files to find text inside files (TODOs, symbols, error messages) instead of
+  guessing paths. search_files never looks inside files.
 - edit_file replaces the single unique occurrence of `old` with `new`. If the
   text appears more than once, widen `old` with surrounding context; if it
   appears zero times, re-read the file and retry exactly.
@@ -74,12 +75,12 @@ Code style:
 
 EXPLORER_SYSTEM_PROMPT = """\
 You are a read-only codebase explorer. Investigate exactly what was asked using
-list_directory, read_file, and search_files, then report concise findings with the
+list_directory, read_file, search_files (names) and grep_files (contents), then report concise findings with the
 file paths that justify them. You cannot modify anything.
 """
 
 #: The read-only slice of the filesystem toolset handed to the explorer subagent.
-_READ_ONLY_TOOLS = frozenset({"list_directory", "read_file", "search_files"})
+_READ_ONLY_TOOLS = frozenset({"list_directory", "read_file", "search_files", "grep_files"})
 
 
 def build_application(config: AppConfig | None = None) -> Application:

@@ -9,18 +9,49 @@ up the model's context by accident.
 
 from __future__ import annotations
 
+import asyncio
+import fnmatch
+import os
+import re
+import time
+from pathlib import Path
+
 from langchain_core.tools import BaseTool, tool
 
 from agent_stack.core.errors import ToolError
 from agent_stack.core.workspace import WorkspacePolicy
 
-__all__ = ["MAX_FILE_BYTES", "MAX_SEARCH_RESULTS", "filesystem_tools"]
+__all__ = ["MAX_FILE_BYTES", "MAX_GREP_SECONDS", "MAX_SEARCH_RESULTS", "filesystem_tools"]
 
 #: Largest single file read into or written out of context.
 MAX_FILE_BYTES = 1024 * 1024  # 1 MiB
 
 #: Most matches ``search_files`` will return before stopping.
 MAX_SEARCH_RESULTS = 200
+
+#: Wall-clock budget for one ``grep_files`` call; a slow pattern on a big tree stops here.
+MAX_GREP_SECONDS = 10.0
+
+#: Longest line text a grep match shows (minified files have megabyte lines).
+_MAX_LINE_CHARS = 200
+
+#: Directories grep never enters: VCS data, dependencies, caches and the agent's own state.
+_SKIP_DIRS = frozenset(
+    {
+        ".git",
+        ".hg",
+        ".svn",
+        "node_modules",
+        ".venv",
+        "venv",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".next",
+        ".agent",
+    }
+)
 
 
 def _render_size(num_bytes: int) -> str:
@@ -122,6 +153,72 @@ def _search_files(policy: WorkspacePolicy, pattern: str, path: str) -> str:
     return "\n".join(matches)
 
 
+def _is_secret_file(name: str) -> bool:
+    """``.env`` and ``.env.local`` hold secrets; ``.env.example`` is the safe template."""
+    return name.startswith(".env") and name != ".env.example"
+
+
+def _grep_files(
+    policy: WorkspacePolicy, pattern: str, path: str, glob: str, ignore_case: bool
+) -> str:
+    if not pattern:
+        raise ToolError("The search pattern is empty.")
+    try:
+        regex = re.compile(pattern, re.IGNORECASE if ignore_case else 0)
+    except re.error as exc:
+        raise ToolError(f"Invalid regular expression {pattern!r}: {exc}") from exc
+
+    base = policy.resolve(path)
+    if not base.exists():
+        raise ToolError(f"No such file or directory: {path}")
+
+    def candidates() -> list[Path]:
+        if base.is_file():
+            return [base]
+        found: list[Path] = []
+        for dirpath, dirnames, filenames in os.walk(base):  # symlinked dirs are not followed
+            dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS)
+            for name in sorted(filenames):
+                if fnmatch.fnmatch(name, glob) and not _is_secret_file(name):
+                    found.append(Path(dirpath) / name)
+        return found
+
+    deadline = time.monotonic() + MAX_GREP_SECONDS
+    results: list[str] = []
+    note = ""
+    for file in candidates():
+        try:
+            name = policy.relative(file)  # a symlink resolving outside the workspace raises
+            size = file.stat().st_size
+            if size > MAX_FILE_BYTES:
+                continue
+            raw = file.read_bytes()
+        except (ValueError, OSError):
+            continue
+        if b"\x00" in raw[:4096]:
+            continue  # binary
+        for number, line in enumerate(raw.decode("utf-8", errors="replace").splitlines(), 1):
+            if regex.search(line[:2000]):
+                text = line.strip("\r")
+                if len(text) > _MAX_LINE_CHARS:
+                    text = text[: _MAX_LINE_CHARS - 1] + "…"
+                results.append(f"{name}:{number}: {text}")
+                if len(results) >= MAX_SEARCH_RESULTS:
+                    note = (
+                        f"(truncated at {MAX_SEARCH_RESULTS} matches: narrow the pattern or path)"
+                    )
+                    break
+        if note:
+            break
+        if time.monotonic() > deadline:
+            note = f"(stopped after {MAX_GREP_SECONDS:.0f}s: narrow the pattern or path)"
+            break
+
+    if not results:
+        return f"(no matches for {pattern!r} under {path})"
+    return "\n".join([*results, note] if note else results)
+
+
 def filesystem_tools(policy: WorkspacePolicy) -> tuple[BaseTool, ...]:
     """Build the workspace-scoped filesystem tool set for ``policy``."""
 
@@ -171,8 +268,23 @@ def filesystem_tools(policy: WorkspacePolicy) -> tuple[BaseTool, ...]:
         """Find files by glob name pattern under a directory, e.g. ``pattern="*.py"``.
 
         Returns up to 200 matches, resolved relative to the workspace root. Use this
-        instead of ``find``; it matches file names, not contents.
+        instead of ``find``; it matches file NAMES only. To search what is inside files
+        (a TODO, a function name, an error message) use ``grep_files``.
         """
         return _search_files(policy, pattern, path)
 
-    return (list_directory, read_file, write_file, edit_file, search_files)
+    @tool
+    async def grep_files(
+        pattern: str, path: str = ".", glob: str = "*", ignore_case: bool = False
+    ) -> str:
+        """Search file CONTENTS for a regular expression. Use this instead of ``grep``/``rg``.
+
+        Returns ``path:line: text`` for each matching line (up to 200). ``path`` is a
+        directory or one file, relative to the workspace root; ``glob`` limits which file
+        names are searched (e.g. ``"*.py"``). Skips .git, dependencies, caches, binary and
+        very large files, and ``.env`` secrets. Examples: ``pattern="TODO|FIXME"``,
+        ``pattern="def handle_", glob="*.py"``.
+        """
+        return await asyncio.to_thread(_grep_files, policy, pattern, path, glob, ignore_case)
+
+    return (list_directory, read_file, write_file, edit_file, search_files, grep_files)

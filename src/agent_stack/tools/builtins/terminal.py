@@ -243,7 +243,7 @@ def run_command_tool(policy: WorkspacePolicy) -> BaseTool:
         No implicit shell: the command is executed directly unless ``shell=True`` is
         passed explicitly. Prefer the dedicated tools for filesystem work — ``read_file``
         (not cat/head/tail), ``edit_file`` (not sed/awk), ``write_file`` (not echo),
-        ``search_files``/``list_directory`` (not find/ls); they are scoped, capped, and
+        ``search_files``/``grep_files``/``list_directory`` (not find/grep/ls); they are scoped, capped, and
         easier to review. The working directory resets each call to the workspace root
         unless ``cwd`` is given. Output is capped and a non-zero exit code is reported in
         the result, not raised; the whole process group is killed if the command exceeds

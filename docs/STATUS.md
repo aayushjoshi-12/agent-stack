@@ -5,7 +5,7 @@ cold. Everything below was true at commit `2be1c43`; `git log` has the later tru
 
 ## State
 
-- 508 tests, `make check` (ruff + strict mypy + pytest) green. Private repo, `master`, in sync.
+- 517 tests, `make check` (ruff + strict mypy + pytest) green. Private repo, `master`, in sync.
 - Run it: `agent-stack` (TUI), `agent-stack chat` (line REPL), `agent-stack telegram`
   (bot), `agent-stack audit tail`. Default model `openrouter:deepseek/deepseek-v4-pro`
   (`AGENT_STACK_MODEL`); see `.env.example` for every variable.
@@ -54,16 +54,21 @@ cold. Everything below was true at commit `2be1c43`; `git log` has the later tru
   a demo recording, LICENSE, an ADR "why not just LangGraph", and a fresh scan of the whole
   history for employer or customer names before the visibility changes.
 
-## Never verified (do these first)
+## Verification status
 
-- **A real-model run.** Every test uses a fake model. Nobody has run the app against
-  OpenRouter/DeepSeek since the TUI, approval, memory and artifact work landed. Smoke it:
-  launch `agent-stack`, ask it to read a file, run a command (expect the approval dialog), then
-  cancel a run and reopen the conversation with `ctrl+o`.
-- **Telegram against the real Bot API.** Tests use a scripted fake. Needs a bot token and the
-  owner's numeric user id (`AGENT_STACK_TELEGRAM_USERS`).
-- **The approval dialog in a real terminal.** It is tested headlessly and in the screenshot
-  harness only.
+Verified for real on 2026-11-14 (cheap models via OpenRouter, small spend):
+
+- **Real-model runs:** the line REPL, the web API and the web UI each ran real tasks (a file
+  read, an approved shell command, a subagent, a stop mid-generation, cost accounting).
+- **Telegram against the real Bot API:** the bot registered its command menu and the owner
+  confirmed `/start`, replies, the tool-call viewer and per-run cost in a real chat.
+
+Still unverified (do these next):
+
+- **The TUI against a real model in a real terminal**, including reopening a conversation with
+  `ctrl+o`. It is tested headlessly and in the screenshot harness only.
+- **The approval dialog in a real terminal**, and the Telegram inline Approve/Reject buttons in a
+  real chat (the web UI's approval was exercised for real).
 
 ## Known limits (written down, not hidden)
 
