@@ -21,6 +21,8 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from agent_stack.app.config import AppConfig
 from agent_stack.core.agent import Agent
 from agent_stack.core.approval import ApprovalBroker
+from agent_stack.core.changes import ChangeStore
+from agent_stack.core.changes import FileDiff as FileDiff  # re-exported for gateways
 from agent_stack.core.errors import BudgetExceededError, SessionVersionConflictError
 from agent_stack.core.event_bus import EventBus
 from agent_stack.core.events import AgentEvent, EventType
@@ -54,6 +56,7 @@ class Application:
     approvals: ApprovalBroker
     metrics: Metrics
     event_log: EventLogStore | None = None
+    change_store: ChangeStore | None = None
 
     async def send_message(
         self,
@@ -137,6 +140,8 @@ class Application:
     async def delete_session(self, session_id: str) -> None:
         """Permanently delete a session and its stored conversation (idempotent)."""
         await self.session_store.delete(session_id)
+        if self.change_store is not None:
+            await self.change_store.delete_session(session_id)  # its file snapshots go with it
 
     async def set_session_title(self, session_id: str, title: str) -> None:
         """Name a session once (the first message); an existing title is kept."""
@@ -162,6 +167,38 @@ class Application:
         messages = await self.session_store.get_messages(session_id)
         results = {m.tool_call_id: _text_of(m) for m in messages if isinstance(m, ToolMessage)}
         return [item for message in messages for item in _history_items(message, results)]
+
+    async def changed_files(self, session_id: str, run_id: str | None = None) -> list[FileDiff]:
+        """The files the agent created or edited in a conversation (or one run), net of every edit.
+
+        Only ``write_file``/``edit_file`` are seen; a file a shell command changed is not listed.
+        Without a change store (a bare test wiring) the answer is empty.
+        """
+        if self.change_store is None:
+            return []
+        files: list[FileDiff] = []
+        for path in await self.change_store.paths(session_id, run_id):
+            diff = await self.change_store.file_diff(session_id, path, run_id)
+            if diff is not None:
+                files.append(diff)
+        return files
+
+    async def changed_file(
+        self,
+        session_id: str,
+        path: str,
+        run_id: str | None = None,
+        *,
+        latest_only: bool = False,
+    ) -> FileDiff | None:
+        """One changed file with its full diff and before/after text, or ``None``.
+
+        ``latest_only`` is just the most recent edit (what a single tool call did) rather than
+        the net change across every edit.
+        """
+        if self.change_store is None:
+            return None
+        return await self.change_store.file_diff(session_id, path, run_id, last_only=latest_only)
 
     async def session_usage(self, session_id: str) -> SessionUsage:
         """What the conversation has consumed: tokens and cost, subagents included.

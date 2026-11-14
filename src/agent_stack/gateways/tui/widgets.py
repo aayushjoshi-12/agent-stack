@@ -18,7 +18,7 @@ from typing import Any, ClassVar
 
 from textual import events
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.markup import escape
 from textual.message import Message
@@ -26,12 +26,14 @@ from textual.screen import ModalScreen
 from textual.widgets import Markdown, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
+from agent_stack.app.application import FileDiff
 from agent_stack.gateways.base import SessionSummary
 from agent_stack.gateways.tui.render import diff_kind
 
 __all__ = [
     "AgentMessage",
     "ApprovalScreen",
+    "ChangesScreen",
     "Disclosure",
     "HeaderBar",
     "HelpScreen",
@@ -195,6 +197,7 @@ class Disclosure(Vertical):
         self._is_open = opened
         self._ready = False
         self._output_seen = False  # streamed output, as opposed to the static body
+        self._pin_open = False  # a diff stays open when the card settles
         if body:
             self._ingest(body, final=True)
 
@@ -241,10 +244,29 @@ class Disclosure(Vertical):
         if not self._user_toggled:
             # Short streamed output and failures stay visible; long output folds away,
             # and a card that only carries its arguments stays closed.
-            self._is_open = status == "failed" or (
-                self._output_seen and self.line_count <= SHORT_OUTPUT
+            self._is_open = (
+                status == "failed"
+                or self._pin_open
+                or (self._output_seen and self.line_count <= SHORT_OUTPUT)
             )
         self._stale = True
+        self._sync()
+
+    def show_diff(self, diff: str) -> None:
+        """Replace the card's body (its arguments) with the unified diff of what the call did.
+
+        The card opens so the change is visible; if the reader already toggled it, their choice
+        wins. Called for ``write_file``/``edit_file`` once the change has been recorded.
+        """
+        self._lines.clear()
+        self._partial = ""
+        self._dropped = 0
+        self.diff = False
+        self._output_seen = True
+        self._pin_open = True
+        self._ingest(diff, final=True)
+        if not self._user_toggled:
+            self._is_open = True
         self._sync()
 
     def await_approval(self) -> None:
@@ -547,6 +569,7 @@ HELP = (
             ("ctrl+p", "command palette (themes, new conversation, …)"),
             ("ctrl+n", "new conversation (the current one is kept)"),
             ("ctrl+o", "switch to an earlier conversation"),
+            ("ctrl+g", "files the agent changed, with their diffs"),
             ("ctrl+b", "show or hide the context sidebar"),
             ("ctrl+t", "switch dark / light theme"),
             ("ctrl+c", "cancel the run; press again to quit"),
@@ -574,6 +597,78 @@ class HelpScreen(ModalScreen[None]):
             yield Static("[$foreground-muted]esc to close[/]", id="help-foot")
 
     def action_dismiss_help(self) -> None:
+        self.dismiss(None)
+
+
+class ChangesScreen(ModalScreen[None]):
+    """The files the agent created or edited: pick one to read its diff.
+
+    Shows the *net* change per file (first state to last), as the web UI does. Only
+    ``write_file``/``edit_file`` are tracked, which the footer says.
+    """
+
+    BINDINGS: ClassVar[list[Any]] = [Binding("escape,q,ctrl+g", "close", "close")]
+    FOOT = (
+        "[$foreground-muted]↑↓ choose · esc close · only files the agent wrote or edited "
+        "with its file tools are listed, not files changed by shell commands[/]"
+    )
+
+    def __init__(self, files: list[FileDiff]) -> None:
+        super().__init__()
+        self._files = files
+
+    def compose(self):  # type: ignore[no-untyped-def]
+        with Vertical(id="changes-card"):
+            count = len(self._files)
+            yield Static(
+                f"[bold $primary]Files changed[/]  [$foreground-muted]{count} "
+                f"file{'' if count == 1 else 's'}[/]",
+                id="changes-title",
+            )
+            if not self._files:
+                yield Static("[$foreground-muted]The agent has not changed any files yet.[/]")
+            else:
+                yield OptionList(*(self._option(f) for f in self._files), id="changes-list")
+                with VerticalScroll(id="changes-scroll"):
+                    yield Static("", id="changes-diff")
+            yield Static(self.FOOT, id="changes-foot")
+
+    @staticmethod
+    def _option(file: FileDiff) -> Option:
+        kind = "[$success]new[/]" if file.kind == "created" else "[$accent]edit[/]"
+        edits = f" x{file.edits}" if file.edits > 1 else ""
+        stats = f"[$success]+{file.added}[/] [$error]-{file.removed}[/]"
+        return Option(
+            f"{kind} {escape(file.path)}  {stats}[$foreground-muted]{edits}[/]", id=file.path
+        )
+
+    def on_mount(self) -> None:
+        if self._files:
+            listing = self.query_one(OptionList)
+            listing.focus()
+            listing.highlighted = 0
+            self._show(self._files[0])
+
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        for file in self._files:
+            if file.path == event.option.id:
+                self._show(file)
+                return
+
+    def _show(self, file: FileDiff) -> None:
+        if not file.diff:
+            body = "[$foreground-muted]No net difference: the edits cancelled each other out.[/]"
+        else:
+            body = "\n".join(
+                f"[{_DIFF_MARKUP[diff_kind(line)]}]{escape(line) or ' '}[/]"
+                for line in file.diff.splitlines()
+            )
+            if file.diff_truncated:
+                body += "\n[$foreground-muted italic]… diff cut at 4000 lines[/]"
+        self.query_one("#changes-diff", Static).update(body)
+        self.query_one("#changes-scroll", VerticalScroll).scroll_home(animate=False)
+
+    def action_close(self) -> None:
         self.dismiss(None)
 
 

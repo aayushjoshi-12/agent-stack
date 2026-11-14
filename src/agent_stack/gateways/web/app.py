@@ -220,6 +220,59 @@ def create_app(application: Application, settings: WebSettings) -> FastAPI:
             "summary": usage_summary(u),
         }
 
+    @api.get("/sessions/{session_id}/changes", dependencies=auth)
+    async def changes(
+        session_id: str, run_id: Annotated[str | None, Query(max_length=100)] = None
+    ) -> dict[str, Any]:
+        """Files the agent created or edited (net of every edit), for a conversation or one run.
+
+        Only ``write_file``/``edit_file`` are tracked: a file a shell command changed is not
+        listed, which the response says so the UI can too.
+        """
+        await owned_session(session_id)
+        if run_id is not None:
+            await owned_run(run_id)
+        files = await application.changed_files(session_id, run_id)
+        return {
+            "files": [
+                {
+                    "path": f.path,
+                    "kind": f.kind,
+                    "edits": f.edits,
+                    "added": f.added,
+                    "removed": f.removed,
+                }
+                for f in files
+            ],
+            "note": "Only files written or edited by the agent's file tools are listed, "
+            "not files changed by shell commands.",
+        }
+
+    @api.get("/sessions/{session_id}/changes/file", dependencies=auth)
+    async def changed_file(
+        session_id: str,
+        path: Annotated[str, Query(min_length=1, max_length=1000)],
+        run_id: Annotated[str | None, Query(max_length=100)] = None,
+    ) -> dict[str, Any]:
+        """One changed file: its unified diff and the text before and after."""
+        await owned_session(session_id)
+        if run_id is not None:
+            await owned_run(run_id)
+        diff = await application.changed_file(session_id, path, run_id)
+        if diff is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "the agent did not change that file")
+        return {
+            "path": diff.path,
+            "kind": diff.kind,
+            "edits": diff.edits,
+            "added": diff.added,
+            "removed": diff.removed,
+            "diff": diff.diff,
+            "diff_truncated": diff.diff_truncated,
+            "before": diff.before,
+            "after": diff.after,
+        }
+
     @api.post("/sessions/{session_id}/branch", dependencies=auth, status_code=201)
     async def branch(session_id: str, body: BranchBody) -> dict[str, str]:
         await owned_session(session_id)

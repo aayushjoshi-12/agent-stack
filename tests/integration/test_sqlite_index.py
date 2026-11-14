@@ -22,6 +22,7 @@ from agent_stack.persistence.sqlite import (
 )
 
 EXPECTED_COLUMNS: dict[str, set[str]] = {
+    "file_changes": {"id", "session_id", "run_id", "path", "before_ref", "after_ref", "created_at"},
     "sessions": {
         "id",
         "owner_id",

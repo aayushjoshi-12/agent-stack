@@ -132,7 +132,7 @@ HelpScreen, ApprovalScreen, SessionPicker {
     align: center middle;
     background: $background 70%;
 }
-#help-card, #approval-card, #picker-card {
+#help-card, #approval-card, #picker-card, #changes-card {
     width: 80;
     max-width: 96%;
     height: auto;
@@ -142,6 +142,7 @@ HelpScreen, ApprovalScreen, SessionPicker {
     border-left: thick $primary;
 }
 #picker-card { width: 72; }
+#changes-card { width: 110; max-height: 94%; }
 #approval-card { border-left: thick $warning; }
 #approval-what { margin-top: 1; }
 #approval-detail { margin: 1 0; padding: 0 1; background: $panel; }
@@ -155,6 +156,17 @@ HelpScreen, ApprovalScreen, SessionPicker {
     background: transparent;
 }
 #picker-list > .option-list--option-highlighted { background: $panel; color: $text; text-style: bold; }
+#changes-title { margin-bottom: 1; }
+#changes-foot { margin-top: 1; }
+#changes-list {
+    height: auto;
+    max-height: 8;
+    padding: 0;
+    border: none;
+    background: transparent;
+}
+#changes-list > .option-list--option-highlighted { background: $panel; color: $text; text-style: bold; }
+#changes-scroll { height: auto; max-height: 24; margin-top: 1; padding: 0 1; background: $panel; }
 #help-title { margin-bottom: 1; }
 .help-group { margin-bottom: 1; }
 

@@ -22,6 +22,7 @@ from agent_stack.observability.audit import AuditLogger, audit_log_path
 from agent_stack.observability.logging import EventLogger, configure_logging
 from agent_stack.observability.metrics import Metrics
 from agent_stack.observability.sinks import FanoutSink
+from agent_stack.persistence.changes import LocalChangeStore
 from agent_stack.persistence.conversation import FileConversationStore
 from agent_stack.persistence.event_log import EventStoreBus, SqliteEventLogStore
 from agent_stack.persistence.sqlite import (
@@ -112,7 +113,8 @@ def build_application(config: AppConfig | None = None) -> Application:
 
     policy = WorkspacePolicy(root=workspace)
     artifacts = LocalArtifactStore(workspace / ".agent" / "artifacts")
-    fs_tools = filesystem_tools(policy)
+    change_store = LocalChangeStore(db, workspace / ".agent" / "changes")
+    fs_tools = filesystem_tools(policy, change_store)
 
     # Context wiring (P16e): instructions + skill metadata + the memory index become
     # resident system parts, and a ContextBuilder bounds the message window. Discovery is
@@ -197,4 +199,5 @@ def build_application(config: AppConfig | None = None) -> Application:
         approvals=approvals,
         metrics=metrics,
         event_log=event_log,
+        change_store=change_store,
     )

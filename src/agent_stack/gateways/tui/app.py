@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, ClassVar, cast
 
@@ -37,6 +38,7 @@ from agent_stack.gateways.tui.theme import DARK, DEFAULT_THEME, LIGHT, THEMES
 from agent_stack.gateways.tui.widgets import (
     AgentMessage,
     ApprovalScreen,
+    ChangesScreen,
     Disclosure,
     HeaderBar,
     HelpScreen,
@@ -55,6 +57,10 @@ from agent_stack.gateways.tui.widgets import (
 __all__ = ["TuiApp", "TuiCommands"]
 
 _QUIT_WORDS = frozenset({"exit", "quit"})
+
+
+#: Tools whose calls change files; their cards show a diff once they finish.
+_FILE_TOOLS = frozenset({"write_file", "edit_file"})
 
 
 class TuiCommands(Provider):
@@ -101,6 +107,7 @@ class TuiApp(App[None]):
         Binding("escape", "escape_or_focus", "cancel", key_display="esc"),
         Binding("ctrl+n", "new_session", "new"),
         Binding("ctrl+o", "switch_session", "chats"),
+        Binding("ctrl+g", "show_changes", "files"),
         Binding("ctrl+b", "toggle_sidebar", "sidebar"),
         Binding("ctrl+t", "toggle_theme", "theme", show=False),
         Binding("f1", "help", "help"),
@@ -133,6 +140,7 @@ class TuiApp(App[None]):
         self._task_title: str | None = None
         self._tokens = 0
         self._usage = SessionUsage()  # what this conversation has cost so far (all runs)
+        self._file_paths: dict[str, str] = {}  # write/edit call id -> the path it touches
         self._branch = ""
         self._sidebar_override: bool | None = None
         self._last_child_id: str | None = None
@@ -303,10 +311,15 @@ class TuiApp(App[None]):
             if card is not None:
                 card.append(str(event.data.get("chunk", "")))
         elif etype is EventType.TOOL_COMPLETED:
-            card = self.cards.get(str(event.data.get("tool_call_id")))
+            call_id = str(event.data.get("tool_call_id"))
+            card = self.cards.get(call_id)
             if card is not None:
                 ok = event.data.get("ok", True)  # older events carry no flag
-                card.finish("done" if ok else "failed")
+                if ok and call_id in self._file_paths:
+                    # settle after the diff arrives, so the card opens on what changed
+                    self._spawn(self._finish_with_diff(card, call_id, event))
+                else:
+                    card.finish("done" if ok else "failed")
         elif etype is EventType.RUN_FAILED:
             self._on_failed(event)
         elif etype is EventType.RUN_COMPLETED:
@@ -388,6 +401,9 @@ class TuiApp(App[None]):
         call_id = str(event.data.get("tool_call_id", ""))
         if call_id:
             self.cards[call_id] = card
+            path = args.get("path") if isinstance(args, Mapping) else None
+            if name in _FILE_TOOLS and isinstance(path, str):
+                self._file_paths[call_id] = path
 
     def _on_failed(self, event: AgentEvent) -> None:
         self._chat().mount(Notice(f"error: {event.data.get('error', 'run failed')}"))
@@ -428,6 +444,32 @@ class TuiApp(App[None]):
                 card.finish("failed")
         self._refresh_all()
         self._spawn(self._sync_usage())
+
+    async def _finish_with_diff(self, card: Disclosure, call_id: str, event: AgentEvent) -> None:
+        """Fill a write/edit card with the diff of what that call changed, then settle it."""
+        path = self._file_paths.pop(call_id, "")
+        try:
+            change = await self.application.changed_file(
+                event.session_id, path, event.run_id, latest_only=True
+            )
+        except Exception:  # a diff is a nicety: the card must settle either way
+            change = None
+        if change is not None:
+            card.show_diff(change.diff or "(no net change)")
+        card.finish("done")
+        self._refresh_all()
+
+    async def action_show_changes(self) -> None:
+        """Open the list of files the agent created or edited in this conversation."""
+        if self._session_id is None:
+            self.notify("Nothing has been changed yet.", severity="information")
+            return
+        try:
+            files = await self.application.changed_files(self._session_id)
+        except Exception as exc:
+            self.notify(f"Could not read the changes: {exc}", severity="error")
+            return
+        self.push_screen(ChangesScreen(files))
 
     async def _sync_usage(self) -> None:
         """Replace the running total with the durable one (it also holds subagent runs)."""

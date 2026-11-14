@@ -460,3 +460,68 @@ async def test_a_conversation_over_budget_gets_402_and_starts_no_run(tmp_path: P
 
         assert refused.status_code == 402 and "budget" in refused.json()["detail"]
         assert len(model.calls) == 1  # the second message never reached the model
+
+
+async def test_changed_files_list_and_per_file_diff(tmp_path: Path) -> None:
+    from tests.integration.test_changes import _edit, _world, _write
+
+    model = FakeChatModel(
+        [
+            ai(tool_calls=[_write("docs/new.md", "# New\nbody\n", "c1")]),
+            ai(tool_calls=[_edit("docs/new.md", "body", "better body", "c2")]),
+            ai("done"),
+        ]
+    )
+    world = _world(tmp_path, model)
+    async for client in _client(world.app):
+        session, run_id = await _start(client)
+        await client.get(f"/runs/{run_id}/events", headers=HEADERS)
+
+        listed = (await client.get(f"/sessions/{session}/changes", headers=HEADERS)).json()
+        assert listed["files"] == [
+            {"path": "docs/new.md", "kind": "created", "edits": 2, "added": 2, "removed": 0}
+        ]
+        assert "shell commands" in listed["note"]
+
+        detail = (
+            await client.get(
+                f"/sessions/{session}/changes/file", params={"path": "docs/new.md"}, headers=HEADERS
+            )
+        ).json()
+        assert detail["after"] == "# New\nbetter body\n" and detail["before"] is None
+        assert "+better body" in detail["diff"] and detail["diff"].startswith("--- /dev/null")
+
+        by_run = await client.get(
+            f"/sessions/{session}/changes", params={"run_id": run_id}, headers=HEADERS
+        )
+        assert [f["path"] for f in by_run.json()["files"]] == ["docs/new.md"]
+
+        # nothing changed there, a made-up path, another conversation, no token
+        missing = await client.get(
+            f"/sessions/{session}/changes/file",
+            params={"path": "../../etc/passwd"},
+            headers=HEADERS,
+        )
+        assert missing.status_code == 404
+        assert (await client.get("/sessions/nope/changes", headers=HEADERS)).status_code == 404
+        assert (await client.get(f"/sessions/{session}/changes")).status_code == 401
+
+
+async def test_another_principals_changes_look_nonexistent(tmp_path: Path) -> None:
+    from agent_stack.gateways.base import MessageEnvelope
+    from tests.integration.test_changes import _world, _write
+
+    world = _world(
+        tmp_path, FakeChatModel([ai(tool_calls=[_write("secret.txt", "private\n")]), ai("ok")])
+    )
+    handle = await world.app.send_message(
+        MessageEnvelope(principal="telegram:999", session="foreign", text="go")
+    )
+    await handle.result()
+    assert [f.path for f in await world.app.changed_files("foreign")] == ["secret.txt"]
+    async for client in _client(world.app):
+        assert (await client.get("/sessions/foreign/changes", headers=HEADERS)).status_code == 404
+        file_response = await client.get(
+            "/sessions/foreign/changes/file", params={"path": "secret.txt"}, headers=HEADERS
+        )
+        assert file_response.status_code == 404

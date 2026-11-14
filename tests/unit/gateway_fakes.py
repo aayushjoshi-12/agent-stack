@@ -15,6 +15,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage
 
+from agent_stack.app.application import FileDiff
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.gateways.base import HistoryItem, SessionSummary, SessionUsage
 
@@ -119,6 +120,9 @@ class FakeApplication:
         self.decisions: list[tuple[str, str, str, str, bool]] = []
         self.histories: dict[str, list[HistoryItem]] = {}
         self.usages: dict[str, list[SessionUsage]] = {}  # per session: successive answers
+        self.file_diffs: dict[str, list[FileDiff]] = {}  # session -> net diff per changed file
+        self.latest_diffs: dict[tuple[str, str], FileDiff] = {}  # (session, path) -> last edit
+        self.diff_lookups: list[tuple[str, str, bool]] = []
 
     async def send_message(self, envelope: Any, *, parent_run_id: str | None = None) -> FakeHandle:
         self._run_counter += 1
@@ -173,6 +177,17 @@ class FakeApplication:
         self.sessions = [
             SessionSummary(id=s.id, title=title) if s.id == session_id else s for s in self.sessions
         ]
+
+    async def changed_files(self, session_id: str, run_id: str | None = None) -> list[FileDiff]:
+        return list(self.file_diffs.get(session_id, ()))
+
+    async def changed_file(
+        self, session_id: str, path: str, run_id: str | None = None, *, latest_only: bool = False
+    ) -> FileDiff | None:
+        self.diff_lookups.append((session_id, path, latest_only))
+        if latest_only:
+            return self.latest_diffs.get((session_id, path))
+        return next((f for f in self.file_diffs.get(session_id, ()) if f.path == path), None)
 
     async def session_usage(self, session_id: str) -> SessionUsage:
         """The scripted totals for a session; successive calls walk through the list."""

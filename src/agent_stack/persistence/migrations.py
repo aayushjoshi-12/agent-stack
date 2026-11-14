@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -114,6 +114,20 @@ CREATE TABLE IF NOT EXISTS event_log (
     data_json     TEXT NOT NULL
 );
 
+-- Index of files the agent wrote or edited. The text before/after lives in files under
+-- `.agent/changes/` (ADR-008: SQLite is an index, never the content store).
+CREATE TABLE IF NOT EXISTS file_changes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    run_id     TEXT NOT NULL,
+    path       TEXT NOT NULL,
+    before_ref TEXT,
+    after_ref  TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_changes_session ON file_changes(session_id, id);
+CREATE INDEX IF NOT EXISTS idx_file_changes_run ON file_changes(run_id);
 CREATE INDEX IF NOT EXISTS idx_event_log_run ON event_log(run_id, sequence);
 CREATE INDEX IF NOT EXISTS idx_event_log_session ON event_log(session_id);
 CREATE INDEX IF NOT EXISTS idx_checkpoints_run ON checkpoints(run_id);

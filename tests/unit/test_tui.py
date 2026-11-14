@@ -1022,3 +1022,137 @@ async def test_tui_a_live_usage_event_updates_the_total_before_the_run_ends() ->
         gate.set()
 
     assert "$0.0040 · 1k in · 100 out · 1 calls" in live
+
+
+# ── diffs of what the agent wrote or edited ──────────────────────────────────
+from agent_stack.app.application import FileDiff  # noqa: E402
+from agent_stack.gateways.tui.widgets import ChangesScreen  # noqa: E402
+
+_EDIT_DIFF = "--- a/a.py\n+++ b/a.py\n@@ -1,2 +1,2 @@\n x = 1\n-y = 2\n+y = 3"
+
+
+def _file_diff(
+    path: str = "a.py", diff: str = _EDIT_DIFF, kind: str = "modified", edits: int = 1
+) -> FileDiff:
+    return FileDiff(
+        path=path,
+        kind=kind,  # type: ignore[arg-type]
+        edits=edits,
+        added=diff.count("\n+") - diff.count("\n+++"),
+        removed=diff.count("\n-") - diff.count("\n---"),
+        diff=diff,
+        before="x = 1\ny = 2\n",
+        after="x = 1\ny = 3\n",
+    )
+
+
+def _file_tool_events(tool: str = "edit_file", ok: bool = True) -> list[Any]:
+    args = {"path": "a.py", "old": "y = 2", "new": "y = 3"}
+    return [
+        event(EventType.RUN_STARTED),
+        event(EventType.TOOL_STARTED, tool=tool, tool_call_id="c1", args=args),
+        event(EventType.TOOL_COMPLETED, tool=tool, tool_call_id="c1", ok=ok),
+        event(EventType.RUN_COMPLETED, steps=1, tool_calls=1),
+    ]
+
+
+def _card_text(card: Disclosure) -> str:
+    return "\n".join(card._lines)
+
+
+async def test_an_edit_card_opens_on_the_diff_of_what_that_call_changed() -> None:
+    application = FakeApplication(events=_file_tool_events())
+    application.latest_diffs[("s1", "a.py")] = _file_diff()
+    app = _app(application)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await _submit(pilot, "fix y")
+        await pilot.pause(0.3)
+        (card,) = app.query(Disclosure)
+        assert card.status == "done" and card.diff is True
+        assert card._is_open and card.has_body
+        text = _card_text(card)
+
+    assert "-y = 2" in text and "+y = 3" in text
+    assert "old:" not in text and "new:" not in text  # the arguments gave way to the diff
+    assert ("s1", "a.py", True) in application.diff_lookups  # asked for just this call's edit
+
+
+async def test_a_failed_edit_shows_no_diff_and_a_read_never_asks_for_one() -> None:
+    application = FakeApplication(events=_file_tool_events(ok=False))
+    application.latest_diffs[("s1", "a.py")] = _file_diff()
+    app = _app(application)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await _submit(pilot, "try")
+        await pilot.pause(0.3)
+        (card,) = app.query(Disclosure)
+        assert card.status == "failed" and "+y = 3" not in _card_text(card)
+    assert application.diff_lookups == []
+
+    reading = FakeApplication(events=_file_tool_events("read_file"))
+    app = _app(reading)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await _submit(pilot, "read")
+        await pilot.pause(0.3)
+        (card,) = app.query(Disclosure)
+        assert card.status == "done"
+    assert reading.diff_lookups == []
+
+
+async def test_a_diff_that_cannot_be_fetched_never_leaves_the_card_spinning() -> None:
+    application = FakeApplication(events=_file_tool_events())
+
+    async def broken(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("db is down")
+
+    application.changed_file = broken  # type: ignore[method-assign]
+    app = _app(application)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await _submit(pilot, "go")
+        await pilot.pause(0.3)
+        (card,) = app.query(Disclosure)
+        assert card.status == "done"
+
+
+async def test_ctrl_g_lists_the_changed_files_and_shows_each_diff() -> None:
+    application = FakeApplication()
+    new_diff = "--- /dev/null\n+++ b/n.md\n@@ -0,0 +1,2 @@\n+# Title\n+body"
+    application.file_diffs["s1"] = [_file_diff(), _file_diff("n.md", new_diff, "created", 2)]
+    app = _app(application)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.press("ctrl+g")
+        await pilot.pause(0.2)
+        screen = app.screen
+        assert isinstance(screen, ChangesScreen)
+        listing = screen.query_one("#changes-list")
+        assert listing.option_count == 2  # type: ignore[attr-defined]
+        first = str(screen.query_one("#changes-diff").render())
+        await pilot.press("down")
+        await pilot.pause(0.2)
+        second = str(screen.query_one("#changes-diff").render())
+        await pilot.press("escape")
+        await pilot.pause(0.2)
+        closed = not isinstance(app.screen, ChangesScreen)
+
+    assert "-y = 2" in first and "+y = 3" in first
+    assert "+# Title" in second and "--- /dev/null" in second
+    assert closed
+
+
+async def test_ctrl_g_with_nothing_changed_says_so_and_without_a_session_does_not_open() -> None:
+    app = _app(FakeApplication())
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.press("ctrl+g")
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, ChangesScreen)
+        assert "has not changed any files" in " ".join(
+            str(w.render()) for w in app.screen.query("Static")
+        )
+
+    fresh = TuiApp(FakeApplication())  # type: ignore[arg-type]  # a draft: no session yet
+    async with fresh.run_test(size=(140, 40)) as pilot:
+        await pilot.press("ctrl+g")
+        await pilot.pause(0.2)
+        assert not isinstance(fresh.screen, ChangesScreen)

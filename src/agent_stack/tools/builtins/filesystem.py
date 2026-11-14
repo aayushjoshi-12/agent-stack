@@ -10,6 +10,7 @@ up the model's context by accident.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import fnmatch
 import os
 import re
@@ -18,7 +19,9 @@ from pathlib import Path
 
 from langchain_core.tools import BaseTool, tool
 
+from agent_stack.core.changes import ChangeRecorder
 from agent_stack.core.errors import ToolError
+from agent_stack.core.run_context import current_run_context
 from agent_stack.core.workspace import WorkspacePolicy
 
 __all__ = ["MAX_FILE_BYTES", "MAX_GREP_SECONDS", "MAX_SEARCH_RESULTS", "filesystem_tools"]
@@ -219,8 +222,55 @@ def _grep_files(
     return "\n".join([*results, note] if note else results)
 
 
-def filesystem_tools(policy: WorkspacePolicy) -> tuple[BaseTool, ...]:
-    """Build the workspace-scoped filesystem tool set for ``policy``."""
+def _text_before(policy: WorkspacePolicy, path: str) -> tuple[bool, str | None]:
+    """The file's current text for a change record, as ``(recordable, text)``.
+
+    ``text`` is ``None`` for a file that does not exist yet. Binary, oversized and non-file
+    targets are not recordable: a diff of them would be noise (or would call an existing file new).
+    """
+    try:
+        target = policy.resolve(path)
+        if not target.exists():
+            return True, None
+        if not target.is_file() or target.stat().st_size > MAX_FILE_BYTES:
+            return False, None
+        raw = target.read_bytes()
+    except (OSError, ValueError):
+        return False, None
+    if b"\x00" in raw[:4096]:
+        return False, None
+    return True, raw.decode("utf-8", errors="replace")
+
+
+async def _record_change(
+    recorder: ChangeRecorder | None,
+    policy: WorkspacePolicy,
+    path: str,
+    before: str | None,
+    after: str,
+) -> None:
+    """Tell the recorder about a finished write/edit; recording must never fail the tool."""
+    context = current_run_context()
+    if recorder is None or context is None:
+        return
+    with contextlib.suppress(Exception):
+        await recorder.record(
+            session_id=context.session_id,
+            run_id=context.run_id,
+            path=policy.relative(policy.resolve(path)),
+            before=before,
+            after=after,
+        )
+
+
+def filesystem_tools(
+    policy: WorkspacePolicy, recorder: ChangeRecorder | None = None
+) -> tuple[BaseTool, ...]:
+    """Build the workspace-scoped filesystem tool set for ``policy``.
+
+    With a ``recorder``, every successful ``write_file``/``edit_file`` is reported to it (inside a
+    run) so a gateway can show what changed. Changes made by shell commands are not seen.
+    """
 
     @tool
     async def list_directory(path: str = ".") -> str:
@@ -250,7 +300,11 @@ def filesystem_tools(policy: WorkspacePolicy) -> tuple[BaseTool, ...]:
         part of an existing file, prefer ``edit_file``. ``path`` is relative to the
         workspace root and must stay inside it.
         """
-        return _write_file(policy, path, content)
+        recordable, before = _text_before(policy, path)
+        result = _write_file(policy, path, content)
+        if recordable:
+            await _record_change(recorder, policy, path, before, content)
+        return result
 
     @tool
     async def edit_file(path: str, old: str, new: str) -> str:
@@ -261,7 +315,13 @@ def filesystem_tools(policy: WorkspacePolicy) -> tuple[BaseTool, ...]:
         context until it is unique). Prefer this over rewriting a whole file — it sends
         only the diff.
         """
-        return _edit_file(policy, path, old, new)
+        recordable, before = _text_before(policy, path)
+        result = _edit_file(policy, path, old, new)
+        if recordable and before is not None:
+            _, after = _text_before(policy, path)
+            if after is not None:
+                await _record_change(recorder, policy, path, before, after)
+        return result
 
     @tool
     async def search_files(pattern: str, path: str = ".") -> str:
