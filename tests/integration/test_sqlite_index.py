@@ -32,6 +32,18 @@ EXPECTED_COLUMNS: dict[str, set[str]] = {
         "created_at",
         "updated_at",
         "metadata_json",
+        "branch_of",
+        "branch_point_event_id",
+    },
+    "event_log": {
+        "id",
+        "run_id",
+        "session_id",
+        "parent_run_id",
+        "sequence",
+        "type",
+        "timestamp",
+        "data_json",
     },
     "runs": {
         "id",
