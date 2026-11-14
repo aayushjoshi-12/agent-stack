@@ -31,7 +31,7 @@ from agent_stack.app.application import Application
 from agent_stack.core.errors import BudgetExceededError, PersistenceError
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.run import Run
-from agent_stack.gateways.base import HistoryItem, MessageEnvelope, usage_summary
+from agent_stack.gateways.base import HistoryItem, MessageEnvelope, model_breakdown, usage_summary
 
 __all__ = ["WebConfigError", "WebSettings", "create_app", "run_web"]
 
@@ -217,6 +217,8 @@ def create_app(application: Application, settings: WebSettings) -> FastAPI:
             "reasoning_tokens": u.reasoning_tokens,
             "cost_usd": u.cost_usd,
             "budget_usd": application.config.budget_usd,
+            "by_model": dict(u.by_model),
+            "models_summary": model_breakdown(u),
             "summary": usage_summary(u),
         }
 

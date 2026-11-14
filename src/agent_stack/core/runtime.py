@@ -425,7 +425,7 @@ class AgentRuntime:
             # in the store. Re-appending the full list here was the old duplication bug.
             await self._session_store.append_messages(session_id, new_messages)
             session.version += 1
-            await self._session_store.save(session, expected_version=stored_version)
+            await self._save_session(session, stored_version)
 
             await self._checkpoint(
                 checkpoint_store,
@@ -488,6 +488,18 @@ class AgentRuntime:
         ctx = self._context_builder.build(system_parts=resident, history=[*history, *new_messages])
         return [SystemMessage(content="\n\n".join(ctx.system)), *ctx.messages]
 
+    async def _save_session(self, session: Session, stored_version: int) -> None:
+        """Save the session at the end of a run without undoing a rename made during it.
+
+        The run holds the session in memory from its start and writes every column back, so a
+        title changed meanwhile (a user rename, the small model's title) would be overwritten by
+        the stale copy. The stored title is therefore re-read and kept.
+        """
+        latest = await self._session_store.get(session.id)
+        if latest is not None and latest.title != session.title:
+            session.title = latest.title
+        await self._session_store.save(session, expected_version=stored_version)
+
     async def _persist_partial(
         self,
         session: Session,
@@ -509,7 +521,7 @@ class AgentRuntime:
         with contextlib.suppress(Exception):
             await self._session_store.append_messages(session_id, keep)
             session.version += 1
-            await self._session_store.save(session, expected_version=stored_version)
+            await self._save_session(session, stored_version)
 
     async def _await_approval(
         self,

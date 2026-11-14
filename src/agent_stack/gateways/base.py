@@ -31,6 +31,7 @@ __all__ = [
     "SessionUsage",
     "format_cost",
     "format_tokens",
+    "model_breakdown",
     "usage_summary",
 ]
 
@@ -73,6 +74,8 @@ class SessionUsage:
     output_tokens: int = 0
     reasoning_tokens: int = 0
     cost_usd: float = 0.0
+    #: Priced spend per model name, so a split between a main and a small model is visible.
+    by_model: Mapping[str, float] = field(default_factory=dict)
 
     def plus(self, data: Mapping[str, Any]) -> SessionUsage:
         """This usage plus one ``model.usage`` event's data (for live running totals)."""
@@ -85,7 +88,25 @@ class SessionUsage:
             output_tokens=self.output_tokens + int(data.get("output_tokens", 0) or 0),
             reasoning_tokens=self.reasoning_tokens + int(data.get("reasoning_tokens", 0) or 0),
             cost_usd=self.cost_usd + (float(cost) if isinstance(cost, (int, float)) else 0.0),
+            by_model=_add_model_cost(self.by_model, data.get("model"), cost),
         )
+
+
+def _add_model_cost(
+    so_far: Mapping[str, float], model: object, cost: object
+) -> Mapping[str, float]:
+    if not isinstance(cost, (int, float)):
+        return so_far
+    name = model if isinstance(model, str) and model else "unknown"
+    return {**so_far, name: so_far.get(name, 0.0) + float(cost)}
+
+
+def model_breakdown(usage: SessionUsage) -> str:
+    """``glm-5.3-flash $0.0004 · deepseek-v4-pro $0.012``, biggest first; ``""`` for one model."""
+    if len(usage.by_model) < 2:
+        return ""
+    ranked = sorted(usage.by_model.items(), key=lambda item: -item[1])
+    return " · ".join(f"{name.rsplit('/', 1)[-1]} {format_cost(cost)}" for name, cost in ranked)
 
 
 def format_cost(usd: float) -> str:

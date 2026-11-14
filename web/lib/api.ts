@@ -14,6 +14,8 @@ export type UsageInfo = {
   reasoning_tokens: number;
   cost_usd: number;
   budget_usd: number | null;
+  by_model: Record<string, number>;
+  models_summary: string;
   summary: string;
 };
 

@@ -8,7 +8,12 @@ from agent_stack.app.config import AppConfig
 
 
 def test_from_env_empty_matches_defaults() -> None:
-    assert AppConfig.from_env({}) == AppConfig()
+    # The one resolved default: with the default (OpenRouter) main model, the environment-built
+    # config also gets the known-good small model. A hand-built AppConfig() never picks a provider.
+    from agent_stack.app.config import DEFAULT_SMALL_MODEL
+
+    assert AppConfig.from_env({}) == AppConfig(small_model=DEFAULT_SMALL_MODEL)
+    assert AppConfig().small_model is None
 
 
 def test_workspace_defaults_to_current_directory() -> None:

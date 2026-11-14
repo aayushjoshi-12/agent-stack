@@ -10,13 +10,22 @@ session; gateways use it to build :class:`~agent_stack.gateways.base.MessageEnve
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
-from collections.abc import AsyncIterator
-from dataclasses import dataclass
-from typing import cast
+import logging
+from collections.abc import AsyncIterator, Collection, Coroutine
+from dataclasses import dataclass, field
+from typing import Any, cast
 from uuid import uuid4
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 
 from agent_stack.app.config import AppConfig
 from agent_stack.core.agent import Agent
@@ -28,6 +37,7 @@ from agent_stack.core.event_bus import EventBus
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.factory import AgentFactory
 from agent_stack.core.run import Run, RunHandle, RunManager, RunRequest
+from agent_stack.core.runtime import usage_data
 from agent_stack.core.session import BranchingSessionStore, Session, SessionStore
 from agent_stack.gateways.base import (
     HistoryItem,
@@ -57,6 +67,9 @@ class Application:
     metrics: Metrics
     event_log: EventLogStore | None = None
     change_store: ChangeStore | None = None
+    #: The small model that names a conversation after its first message (``None``: no titling).
+    title_model: BaseChatModel | None = None
+    _background: set[asyncio.Task[None]] = field(default_factory=set, repr=False)
 
     async def send_message(
         self,
@@ -78,7 +91,67 @@ class Application:
             message=envelope.text,
             parent_run_id=parent_run_id,
         )
-        return await self.run_manager.start(request)
+        first = parent_run_id is None and self.title_model is not None
+        if first:
+            first = not await self._has_history(envelope.session)
+        handle = await self.run_manager.start(request)
+        if first:
+            self._spawn(self._autotitle(envelope.session, handle.run_id, envelope.text))
+        return handle
+
+    async def drain_background(self) -> None:
+        """Wait for side work (conversation titling) to finish; for shutdown and tests."""
+        while self._background:
+            await asyncio.gather(*list(self._background), return_exceptions=True)
+
+    def _spawn(self, coro: Coroutine[Any, Any, None]) -> None:
+        task = asyncio.ensure_future(coro)
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+
+    async def _has_history(self, session_id: str) -> bool:
+        try:
+            return bool(await self.session_store.get_messages(session_id))
+        except Exception:  # an unreadable session is not worth titling
+            return True
+
+    async def _autotitle(self, session_id: str, run_id: str, first_message: str) -> None:
+        """Name the conversation with the small model; the first message stays as the fallback.
+
+        The title call is this conversation's spend like any other, so it is recorded as a
+        ``model.usage`` event (``purpose: title``) and shows in the cost totals. Never raises.
+        """
+        model = self.title_model
+        if model is None or not first_message.strip():
+            return
+        try:
+            response = await asyncio.wait_for(
+                model.ainvoke(
+                    [
+                        SystemMessage(content=_TITLE_PROMPT),
+                        HumanMessage(content=first_message[:2000]),
+                    ]
+                ),
+                timeout=30,
+            )
+            title = _clean_title(_text_of(response))
+            provisional = {None, "", first_message.strip()[:80]}
+            # a title the user already chose (a rename during the call) is never overwritten
+            if title:
+                await self._retitle(session_id, title, only_if=provisional)
+            usage = usage_data(response) if isinstance(response, AIMessage) else None
+            if usage is not None:
+                await self.event_bus.publish(
+                    AgentEvent.create(
+                        EventType.MODEL_USAGE,
+                        run_id=run_id,
+                        session_id=session_id,
+                        sequence=0,
+                        data={**usage, "purpose": "title"},
+                    )
+                )
+        except Exception:  # a cosmetic title must never disturb the conversation
+            _LOG.debug("conversation titling failed", exc_info=True)
 
     async def cancel_run(self, run_id: str) -> None:
         """Cancel a running run; unknown or finished runs are an idempotent no-op."""
@@ -155,12 +228,28 @@ class Application:
 
     async def rename_session(self, session_id: str, title: str) -> None:
         """Give a session a new title (unlike ``set_session_title``, replaces an existing one)."""
-        session = await self.session_store.get(session_id)
-        if session is None:
-            return
-        session.title = title
-        with contextlib.suppress(SessionVersionConflictError):
-            await self.session_store.save(session, expected_version=session.version)
+        await self._retitle(session_id, title, only_if=None)
+
+    async def _retitle(
+        self, session_id: str, title: str, *, only_if: Collection[str | None] | None
+    ) -> bool:
+        """Set a title, retrying when a running conversation saves the session at the same moment.
+
+        A run bumps the session's version as it works, so a single optimistic save can lose the
+        race and be dropped. ``only_if`` limits the change to a session whose title is currently
+        one of those values (re-checked on every attempt). Returns whether the title was set.
+        """
+        for attempt in range(6):
+            session = await self.session_store.get(session_id)
+            if session is None or (only_if is not None and session.title not in only_if):
+                return False
+            session.title = title
+            try:
+                await self.session_store.save(session, expected_version=session.version)
+                return True
+            except SessionVersionConflictError:
+                await asyncio.sleep(0.05 * (attempt + 1))
+        return False  # the title is cosmetic: give up rather than fight a busy session
 
     async def session_history(self, session_id: str) -> list[HistoryItem]:
         """A stored conversation as display rows: user text, assistant text, tool calls."""
@@ -314,6 +403,22 @@ class SessionResolver:
             )
             await self._session_store.save(session)
         return session.id
+
+
+_LOG = logging.getLogger("agent_stack.app")
+
+_TITLE_PROMPT = (
+    "Write a title of 3 to 6 words for a conversation that begins with the user's message below. "
+    "Reply with only the title: no quotes, no markdown, no trailing punctuation."
+)
+
+
+def _clean_title(raw: str) -> str:
+    """One short line from a model's reply: no quotes, markdown or trailing punctuation."""
+    line = next((ln.strip() for ln in raw.splitlines() if ln.strip()), "")
+    line = line.strip("\"'`*# \t").rstrip(".:;,!")
+    line = " ".join(line.split())
+    return line[:80]
 
 
 def _text_of(message: BaseMessage) -> str:

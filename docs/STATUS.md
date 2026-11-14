@@ -5,7 +5,7 @@ cold. Everything below was true at commit `2be1c43`; `git log` has the later tru
 
 ## State
 
-- 538 tests, `make check` (ruff + strict mypy + pytest) green. Private repo, `master`, in sync.
+- 553 tests, `make check` (ruff + strict mypy + pytest) green. Private repo, `master`, in sync.
 - Run it: `agent-stack` (TUI), `agent-stack chat` (line REPL), `agent-stack telegram`
   (bot), `agent-stack audit tail`. Default model `openrouter:deepseek/deepseek-v4-pro`
   (`AGENT_STACK_MODEL`); see `.env.example` for every variable.
@@ -18,6 +18,14 @@ cold. Everything below was true at commit `2be1c43`; `git log` has the later tru
 | Trust | 26, 27, 28 | approval flow; redaction, JSON logs, metrics, eight invariants; hardening matrix |
 | Event log, branching | 29, 30 | durable redacted `event_log` table + `Application.replay`; `Application.branch_session` forks a conversation at a logged event |
 | Large output | 15 | results over 20 KB become artifacts; `read_artifact` pages through them |
+
+## Small model for side work
+
+- `AGENT_STACK_SMALL_MODEL` (ADR 014): the `explorer` subagent and conversation titles use a
+  cheaper model; answers and all file edits use the main model. Cost totals show the per-model
+  split (`/cost` on Telegram, the web chip's tooltip). `main` turns it off.
+- Fixed on the way: renaming a conversation while a run was going was silently undone when the
+  run saved its session at the end.
 
 ## Files the agent changed (TUI, web)
 

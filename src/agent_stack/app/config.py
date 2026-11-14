@@ -13,6 +13,25 @@ from pathlib import Path
 
 from agent_stack.core.errors import ConfigurationError
 
+#: The small model used when the main model is on OpenRouter and none is chosen: the cheapest
+#: tool-capable model that completed real agent tasks in testing (see docs/STATUS.md).
+DEFAULT_SMALL_MODEL = "openrouter:z-ai/glm-5.3-flash"
+_NO_SPLIT = frozenset({"", "main", "same", "none", "off"})
+
+
+def _small_model(raw: str | None, main_model: str) -> str | None:
+    """Resolve ``AGENT_STACK_SMALL_MODEL``: unset picks a default only where one is known to work.
+
+    A default for a provider the user may not have a key for would break their setup, so outside
+    OpenRouter an unset value means "use the main model for everything".
+    """
+    if raw is None:
+        return DEFAULT_SMALL_MODEL if main_model.startswith("openrouter:") else None
+    value = raw.strip()
+    if value.lower() in _NO_SPLIT or value == main_model:
+        return None
+    return value
+
 
 @dataclass(frozen=True)
 class AppConfig:
@@ -24,6 +43,11 @@ class AppConfig:
     """
 
     model: str = "openrouter:deepseek/deepseek-v4-pro"
+    #: A cheaper model for side work that does not need the main model's judgement: the
+    #: read-only ``explorer`` subagent and conversation titles (the same split Claude Code makes
+    #: with its Haiku-class model). Code edits and answers always use ``model``. ``None`` means
+    #: "no split": everything uses ``model``.
+    small_model: str | None = None
     #: Context window (tokens) of ``model``; only used for the TUI's usage meter.
     context_window: int = 1_000_000
     #: Per-conversation spend cap in USD; a conversation at or over it starts no further run.
@@ -77,8 +101,10 @@ class AppConfig:
         if budget is not None and budget < 0:
             raise ConfigurationError("AGENT_STACK_BUDGET_USD must not be negative")
 
+        model = source.get("AGENT_STACK_MODEL", defaults.model)
         return cls(
-            model=source.get("AGENT_STACK_MODEL", defaults.model),
+            model=model,
+            small_model=_small_model(source.get("AGENT_STACK_SMALL_MODEL"), model),
             approval_tools=approval_tools,
             context_window=int(source.get("AGENT_STACK_CONTEXT_WINDOW", defaults.context_window)),
             budget_usd=budget,

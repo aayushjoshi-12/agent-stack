@@ -32,6 +32,7 @@ from agent_stack.gateways.base import (
     SessionSummary,
     SessionUsage,
     format_cost,
+    model_breakdown,
     usage_summary,
 )
 from agent_stack.gateways.telegram.api import TelegramApi, TelegramError
@@ -519,6 +520,7 @@ class TelegramGateway:
             return
         lines = [
             f"Conversation: {usage_summary(usage)}",
+            f"By model: {model_breakdown(usage)}" if model_breakdown(usage) else "",
             f"Reasoning tokens: {usage.reasoning_tokens:,}" if usage.reasoning_tokens else "",
         ]
         budget = self._app.config.budget_usd

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from dotenv import load_dotenv
+from langchain_core.language_models import BaseChatModel
 
 from agent_stack.app.application import Application
 from agent_stack.app.config import AppConfig
@@ -12,12 +13,14 @@ from agent_stack.context.instructions import InstructionsLoader
 from agent_stack.core.agent import Agent, SubAgentSpec
 from agent_stack.core.approval import ApprovalBroker, ToolPolicy
 from agent_stack.core.context import ContextBuilder
+from agent_stack.core.errors import ConfigurationError
 from agent_stack.core.factory import AgentFactory
 from agent_stack.core.locks import SessionLockManager
 from agent_stack.core.run import RunManager
 from agent_stack.core.workspace import WorkspacePolicy
 from agent_stack.memory import MemoryIndex, memory_tools
 from agent_stack.memory.store import SqliteMemoryStore
+from agent_stack.models.factory import build_model
 from agent_stack.observability.audit import AuditLogger, audit_log_path
 from agent_stack.observability.logging import EventLogger, configure_logging
 from agent_stack.observability.metrics import Metrics
@@ -84,6 +87,19 @@ file paths that justify them. You cannot modify anything.
 _READ_ONLY_TOOLS = frozenset({"list_directory", "read_file", "search_files", "grep_files"})
 
 
+def _title_model(name: str | None) -> BaseChatModel | None:
+    """The small model that names conversations, or ``None`` (titles then stay the first message).
+
+    Failing to build it (no API key for its provider) must never stop the app from starting.
+    """
+    if name is None:
+        return None
+    try:
+        return build_model(name)
+    except ConfigurationError:
+        return None
+
+
 def build_application(config: AppConfig | None = None) -> Application:
     """Construct the full object graph.
 
@@ -143,7 +159,7 @@ def build_application(config: AppConfig | None = None) -> Application:
 
     explorer = Agent(
         name="explorer",
-        model=resolved.model,
+        model=resolved.small_model or resolved.model,  # read-only searching: the cheap model
         tools=tuple(tool for tool in fs_tools if tool.name in _READ_ONLY_TOOLS),
         system_prompt=EXPLORER_SYSTEM_PROMPT,
     )
@@ -170,6 +186,7 @@ def build_application(config: AppConfig | None = None) -> Application:
         system_prompt=DEFAULT_SYSTEM_PROMPT,
         tool_policy=ToolPolicy(frozenset(resolved.approval_tools)),
     )
+    title_model = _title_model(resolved.small_model)
     approvals = ApprovalBroker()
     factory = AgentFactory(
         session_store=session_store,
@@ -200,4 +217,5 @@ def build_application(config: AppConfig | None = None) -> Application:
         metrics=metrics,
         event_log=event_log,
         change_store=change_store,
+        title_model=title_model,
     )

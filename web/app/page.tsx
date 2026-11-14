@@ -458,6 +458,7 @@ function CostChip({ usage, always = false }: { usage: UsageInfo; always?: boolea
     `${usage.output_tokens.toLocaleString()} out` +
     (usage.reasoning_tokens ? ` (${usage.reasoning_tokens.toLocaleString()} reasoning)` : "") +
     (unpriced > 0 ? ` · ${unpriced} unpriced` : "") +
+    (usage.models_summary ? ` · ${usage.models_summary}` : "") +
     (usage.budget_usd !== null ? ` · budget ${formatCost(usage.budget_usd)}` : "");
   return (
     <span
