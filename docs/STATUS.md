@@ -5,7 +5,7 @@ cold. Everything below was true at commit `2be1c43`; `git log` has the later tru
 
 ## State
 
-- 517 tests, `make check` (ruff + strict mypy + pytest) green. Private repo, `master`, in sync.
+- 538 tests, `make check` (ruff + strict mypy + pytest) green. Private repo, `master`, in sync.
 - Run it: `agent-stack` (TUI), `agent-stack chat` (line REPL), `agent-stack telegram`
   (bot), `agent-stack audit tail`. Default model `openrouter:deepseek/deepseek-v4-pro`
   (`AGENT_STACK_MODEL`); see `.env.example` for every variable.
@@ -18,6 +18,21 @@ cold. Everything below was true at commit `2be1c43`; `git log` has the later tru
 | Trust | 26, 27, 28 | approval flow; redaction, JSON logs, metrics, eight invariants; hardening matrix |
 | Event log, branching | 29, 30 | durable redacted `event_log` table + `Application.replay`; `Application.branch_session` forks a conversation at a logged event |
 | Large output | 15 | results over 20 KB become artifacts; `read_artifact` pages through them |
+
+## Files the agent changed (TUI, web)
+
+- `write_file`/`edit_file` report each change (text before and after) through the run context to a
+  change store: SQLite indexes ids and paths, the snapshots live in `.agent/changes/`
+  (ADR-008). `Application.changed_files` / `changed_file` give the net diff per file (a run or the
+  whole conversation, subagent runs included).
+- TUI: a write/edit card opens on the diff of that call; `ctrl+g` lists every changed file with
+  its net diff. Web: a "Files" panel (Diff / File / Rendered tabs, markdown and mermaid rendered),
+  "View changes" on the cards, and a diff preview on the approval card before anything runs.
+- Limit, stated in both UIs: only changes made through the two file tools are tracked, not files
+  changed by shell commands (`run_command`). Binary or oversized files are not recorded.
+- The web UI renders markdown with GFM, highlighted code and mermaid (loaded on first use,
+  `securityLevel: strict`); remote images are not loaded (a prompt-injected URL could carry
+  data out) and links open in a new tab without a referrer.
 
 ## Cost (every gateway)
 
@@ -59,7 +74,8 @@ cold. Everything below was true at commit `2be1c43`; `git log` has the later tru
 Verified for real on 2026-11-14 (cheap models via OpenRouter, small spend):
 
 - **Real-model runs:** the line REPL, the web API and the web UI each ran real tasks (a file
-  read, an approved shell command, a subagent, a stop mid-generation, cost accounting).
+  read, an approved shell command, a subagent, a stop mid-generation, cost accounting, a markdown file with a mermaid diagram written and edited
+  with approvals, then read back through the files panel).
 - **Telegram against the real Bot API:** the bot registered its command menu and the owner
   confirmed `/start`, replies, the tool-call viewer and per-run cost in a real chat.
 

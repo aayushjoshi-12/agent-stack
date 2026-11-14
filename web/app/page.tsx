@@ -6,7 +6,8 @@ import { Composer } from "@/components/Composer";
 import { Connect } from "@/components/Connect";
 import { Mark } from "@/components/Mark";
 import { Sidebar } from "@/components/Sidebar";
-import { api, ApiError, type Conn, type HistoryRow, type SessionSummary, type UsageInfo } from "@/lib/api";
+import { api, ApiError, type ChangedFile, type Conn, type HistoryRow, type SessionSummary, type UsageInfo } from "@/lib/api";
+import { ChangesPanel } from "@/components/ChangesPanel";
 import { formatCost, formatTokens } from "@/lib/format";
 import type { Item, RunPhase } from "@/lib/events";
 import { useLive } from "@/lib/useLive";
@@ -62,6 +63,9 @@ export default function Page() {
   const [error, setError] = useState("");
   const [stopping, setStopping] = useState(false);
   const [usage, setUsage] = useState<UsageInfo | null>(null);
+  const [changes, setChanges] = useState<{ files: ChangedFile[]; note: string }>({ files: [], note: "" });
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [focusPath, setFocusPath] = useState<string | null>(null);
   const [drawer, setDrawer] = useState(false);
   const [forkable, setForkable] = useState<{ sessionId: string; eventId: string } | null>(null);
   const runBySession = useRef<Map<string, string>>(new Map());
@@ -148,6 +152,24 @@ export default function Page() {
       current = false;
     };
   }, [conn, activeId, usageTick, running]);
+
+  // The files the agent changed: refetched when a conversation opens, whenever a write/edit
+  // tool finishes, and when a run ends.
+  const changeTick = live.state.changeTick;
+  useEffect(() => {
+    if (!conn || !activeId) {
+      setChanges({ files: [], note: "" });
+      return;
+    }
+    let current = true;
+    api
+      .changes(conn, activeId)
+      .then((r) => current && setChanges(r))
+      .catch(() => current && setChanges({ files: [], note: "" })); // informational: never block the chat
+    return () => {
+      current = false;
+    };
+  }, [conn, activeId, changeTick, running]);
 
   const restored = useRef(false);
   useEffect(() => {
@@ -280,6 +302,11 @@ export default function Page() {
     );
   }
 
+  const openFile = (path: string) => {
+    setFocusPath(path);
+    setPanelOpen(true);
+  };
+
   const activeTitle = sessions.find((s) => s.id === activeId)?.title ?? "New conversation";
   const lastAssistant = (() => {
     for (let i = history.length - 1; i >= 0; i -= 1) if (history[i]?.kind === "assistant") return i;
@@ -287,7 +314,7 @@ export default function Page() {
   })();
 
   return (
-    <div className="grid h-full grid-cols-1 md:grid-cols-[300px_1fr]">
+    <div className={`grid h-full grid-cols-1 ${panelOpen ? "md:grid-cols-[300px_minmax(0,1fr)_minmax(380px,520px)]" : "md:grid-cols-[300px_minmax(0,1fr)]"}`}>
       <div className={`${drawer ? "fixed inset-0 z-20 w-[300px] max-w-[85vw]" : "hidden"} min-h-0 md:static md:block md:w-auto`}>
         <Sidebar
           sessions={sessions}
@@ -314,13 +341,18 @@ export default function Page() {
       </div>
       {drawer && <button className="fixed inset-0 z-10 bg-ink/40 md:hidden" aria-label="Close menu" onClick={() => setDrawer(false)} />}
 
-      <main id="conversation" tabIndex={-1} className="flex h-full min-h-0 flex-col outline-none">
+      <main id="conversation" tabIndex={-1} className="flex h-full min-h-0 min-w-0 flex-col outline-none">
         <header className="flex items-center gap-3 border-b-2 border-line bg-surface px-4 py-3">
           <button type="button" className="btn md:hidden" onClick={() => setDrawer(true)} aria-label="Open conversations">
             ☰
           </button>
           <Mark kind={running ? "running" : live.state.phase === "failed" ? "failed" : "idle"} />
           <h2 className="min-w-0 flex-1 truncate text-lg font-bold">{activeTitle}</h2>
+          {changes.files.length > 0 && (
+            <button type="button" className={`btn ${panelOpen ? "btn-yellow" : ""}`} onClick={() => setPanelOpen((v) => !v)} aria-pressed={panelOpen} aria-label={`Files changed: ${changes.files.length}`}>
+              Files <span className="code tabular-nums">{changes.files.length}</span>
+            </button>
+          )}
           {usage && usage.calls > 0 && <CostChip usage={usage} />}
           <span className="code text-soft" aria-live="polite">
             {stopping ? "stopping…" : running ? (pendingApproval ? "waiting for you" : "running") : live.state.phase === "cancelled" ? "stopped" : ""}
@@ -371,14 +403,14 @@ export default function Page() {
                   )}
                 </div>
               ) : (
-                <ToolCard key={`h${i}`} tool={historyTool(row, i)} />
+                <ToolCard key={`h${i}`} tool={historyTool(row, i)} onOpenFile={openFile} />
               ),
             )}
             {pendingUser && <UserBubble text={pendingUser} />}
             {live.state.items.map((item) => {
               switch (item.kind) {
                 case "tool":
-                  return <ToolCard key={item.key} tool={item} onDecide={(t, a) => void decide(t, a)} />;
+                  return <ToolCard key={item.key} tool={item} onDecide={(t, a) => void decide(t, a)} onOpenFile={openFile} />;
                 case "assistant":
                   return <AssistantBubble key={item.key} text={item.text} depth={item.depth} />;
                 case "reasoning":
@@ -399,6 +431,20 @@ export default function Page() {
           </div>
         </div>
       </main>
+
+      {panelOpen && activeId && (
+        <div className="fixed inset-0 z-30 min-h-0 md:static md:z-auto">
+          <ChangesPanel
+            conn={conn}
+            sessionId={activeId}
+            files={changes.files}
+            note={changes.note}
+            focusPath={focusPath}
+            refreshKey={changeTick + (running ? 0 : 1)}
+            onClose={() => setPanelOpen(false)}
+          />
+        </div>
+      )}
     </div>
   );
 }

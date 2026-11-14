@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { isTruncated, previewEdit, previewWrite } from "@/lib/diff";
 import { toolLabel, type Item } from "@/lib/events";
+import { DiffView } from "./DiffView";
 import { Mark, type MarkKind } from "./Mark";
 import { Markdown } from "./Markdown";
 
@@ -16,12 +18,44 @@ function Indent({ depth, children }: { depth: number; children: React.ReactNode 
   );
 }
 
+/** What a write/edit is about to do, drawn as a diff, so the approval is informed. */
+function ApprovalPreview({ tool }: { tool: Tool }) {
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  if (tool.tool === "edit_file") {
+    const oldText = str(tool.args.old);
+    const newText = str(tool.args.new);
+    const cut = isTruncated(oldText) || isTruncated(newText);
+    return (
+      <div>
+        <div className="text-xs font-bold uppercase tracking-wide text-soft">proposed change to {str(tool.args.path)}</div>
+        <div className="box-flat mt-1 max-h-72 overflow-y-auto bg-surface">
+          <DiffView rows={previewEdit(oldText, newText)} label="Proposed edit" />
+        </div>
+        {cut && <p className="code mt-1 text-soft">preview cut short (the log caps long text); the full change runs if you approve.</p>}
+      </div>
+    );
+  }
+  const content = str(tool.args.content);
+  const { rows, hidden } = previewWrite(content);
+  return (
+    <div>
+      <div className="text-xs font-bold uppercase tracking-wide text-soft">proposed new content for {str(tool.args.path)}</div>
+      <div className="box-flat mt-1 max-h-72 overflow-y-auto bg-surface">
+        <DiffView rows={rows} label="Proposed file content" />
+      </div>
+      {(hidden > 0 || isTruncated(content)) && <p className="code mt-1 text-soft">{hidden > 0 ? `… ${hidden} more lines. ` : ""}preview is partial; the whole file is written if you approve.</p>}
+    </div>
+  );
+}
+
 export function ToolCard({
   tool,
   onDecide,
+  onOpenFile,
 }: {
   tool: Tool;
   onDecide?: (tool: Tool, approve: boolean) => void;
+  onOpenFile?: (path: string) => void;
 }) {
   const waiting = tool.approval?.state === "pending";
   const [open, setOpen] = useState(false);
@@ -33,6 +67,8 @@ export function ToolCard({
   }, [waiting]);
   const mark: MarkKind = waiting ? "approval" : tool.status === "ok" ? "ok" : tool.status === "failed" ? "failed" : "running";
   const showBody = open || waiting;
+  const filePath = typeof tool.args.path === "string" ? tool.args.path : null;
+  const writes = (tool.tool === "write_file" || tool.tool === "edit_file") && filePath !== null;
   return (
     <Indent depth={tool.depth}>
       <article className={`box-flat ${waiting ? "border-yellow shadow-[4px_4px_0_var(--yellow)]" : ""}`} aria-label={`Tool call: ${tool.tool}`}>
@@ -50,6 +86,12 @@ export function ToolCard({
         </button>
         {showBody && (
           <div className="space-y-2 border-t-2 border-line px-3 py-3">
+            {waiting && writes && <ApprovalPreview tool={tool} />}
+            {tool.status === "ok" && writes && filePath && onOpenFile && (
+              <button type="button" className="btn btn-yellow" onClick={() => onOpenFile(filePath)}>
+                View changes to {filePath.split("/").pop()}
+              </button>
+            )}
             <div>
               <div className="text-xs font-bold uppercase tracking-wide text-soft">arguments</div>
               <pre className="code mt-1 max-h-56 overflow-auto bg-sunk p-2 whitespace-pre-wrap break-all">

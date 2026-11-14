@@ -17,6 +17,14 @@ export type UsageInfo = {
   summary: string;
 };
 
+export type ChangedFile = { path: string; kind: "created" | "modified"; edits: number; added: number; removed: number };
+export type ChangedFileDetail = ChangedFile & {
+  diff: string;
+  diff_truncated: boolean;
+  before: string | null;
+  after: string;
+};
+
 export class ApiError extends Error {
   readonly status: number;
   constructor(message: string, status: number) {
@@ -63,6 +71,10 @@ export const api = {
     call<{ run_id: string }>(c, `/sessions/${encodeURIComponent(id)}/messages`, json({ text })),
   branch: (c: Conn, id: string, eventId: string) =>
     call<{ id: string }>(c, `/sessions/${encodeURIComponent(id)}/branch`, json({ event_id: eventId })),
+  changes: (c: Conn, id: string) =>
+    call<{ files: ChangedFile[]; note: string }>(c, `/sessions/${encodeURIComponent(id)}/changes`),
+  changeFile: (c: Conn, id: string, path: string) =>
+    call<ChangedFileDetail>(c, `/sessions/${encodeURIComponent(id)}/changes/file?path=${encodeURIComponent(path)}`),
   usage: (c: Conn, id: string) => call<UsageInfo>(c, `/sessions/${encodeURIComponent(id)}/usage`),
   run: (c: Conn, id: string) => call<RunInfo>(c, `/runs/${encodeURIComponent(id)}`),
   cancel: (c: Conn, id: string) => call<{ runs: Record<string, string> }>(c, `/runs/${encodeURIComponent(id)}/cancel`, { method: "POST" }),

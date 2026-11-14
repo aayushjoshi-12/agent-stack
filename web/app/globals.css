@@ -209,3 +209,54 @@ body {
   scrollbar-width: thin;
   scrollbar-color: var(--ink-soft) transparent;
 }
+
+/* Diff rows: tinted, and always marked with a +/− sign, so colour is never the only signal. */
+.diff-add {
+  background: color-mix(in srgb, var(--blue) 16%, var(--surface));
+}
+.diff-del {
+  background: color-mix(in srgb, var(--red) 16%, var(--surface));
+}
+
+/* Syntax highlighting (highlight.js classes) drawn from the same tokens as everything else. */
+.hljs {
+  color: var(--ink);
+}
+.hljs-comment,
+.hljs-quote {
+  color: var(--ink-soft);
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-built_in,
+.hljs-type,
+.hljs-literal,
+.hljs-doctag {
+  color: var(--blue);
+  font-weight: 700;
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-attr,
+.hljs-symbol,
+.hljs-template-variable {
+  color: color-mix(in srgb, var(--red) 72%, var(--ink));
+}
+.hljs-number,
+.hljs-meta,
+.hljs-variable,
+.hljs-params {
+  color: color-mix(in srgb, var(--blue) 60%, var(--ink));
+}
+.hljs-title,
+.hljs-section,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class {
+  font-weight: 700;
+}
+.hljs-deletion {
+  color: var(--red);
+}

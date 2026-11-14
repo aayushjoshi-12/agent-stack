@@ -58,6 +58,8 @@ export type LiveState = {
   completedEventId: string | null;
   /** Counts model.usage events: the UI refetches the conversation's cost whenever it moves. */
   usageTick: number;
+  /** Counts finished write_file/edit_file calls: the UI refetches the changed-files list. */
+  changeTick: number;
 };
 
 export const OUTPUT_CAP = 20_000;
@@ -69,6 +71,7 @@ export const emptyLive = (): LiveState => ({
   phase: "idle",
   completedEventId: null,
   usageTick: 0,
+  changeTick: 0,
 });
 
 const str = (v: unknown, fallback = ""): string => (typeof v === "string" ? v : fallback);
@@ -169,7 +172,9 @@ export function applyEvent(state: LiveState, event: ApiEvent): LiveState {
         status: ok ? "ok" : "failed",
         error: ok ? null : str(d.error) || "failed",
       }));
-      return items ? { ...base, items } : base;
+      const touchesFiles = ok && (d.tool === "write_file" || d.tool === "edit_file");
+      const counted = touchesFiles ? { ...base, changeTick: base.changeTick + 1 } : base;
+      return items ? { ...counted, items } : counted;
     }
     case "approval.required": {
       const callId = str(d.tool_call_id);

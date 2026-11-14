@@ -114,3 +114,16 @@ test("each model.usage event nudges the cost display, from any run, and never re
   assert.equal(s.usageTick, 2);
   assert.equal(s.items.length, 0); // usage is not a transcript row
 });
+
+test("a finished write or edit nudges the changed-files list; a failed one or a read does not", () => {
+  const s = play([
+    ev("run.started"),
+    ev("tool.started", { tool: "write_file", tool_call_id: "w", args: { path: "a" } }),
+    ev("tool.completed", { tool: "write_file", tool_call_id: "w", ok: true }),
+    ev("tool.started", { tool: "edit_file", tool_call_id: "e", args: { path: "a" } }),
+    ev("tool.completed", { tool: "edit_file", tool_call_id: "e", ok: false, error: "not found" }),
+    ev("tool.started", { tool: "read_file", tool_call_id: "r", args: { path: "a" } }),
+    ev("tool.completed", { tool: "read_file", tool_call_id: "r", ok: true }),
+  ]);
+  assert.equal(s.changeTick, 1);
+});
