@@ -73,7 +73,7 @@ class AppConfig:
     budget_usd: float | None = None
     #: Tools that pause for a human's approval before they run. Comma-separated in
     #: ``AGENT_STACK_APPROVAL_TOOLS``; set it empty to run everything unattended.
-    approval_tools: tuple[str, ...] = ("run_command", "write_file", "edit_file", "web_fetch")
+    approval_tools: tuple[str, ...] = ("run_command", "write_file", "edit_file", "web_fetch", "monitor_start")
     workspace: Path = field(default_factory=Path.cwd)
     #: Where state shared by every project lives (global instructions, ideas, cross-project
     #: memory). ``AGENT_STACK_HOME``; defaults to ``~/.agent-stack``.

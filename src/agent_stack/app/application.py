@@ -46,6 +46,7 @@ from agent_stack.gateways.base import (
     SessionUsage,
     format_cost,
 )
+from agent_stack.monitor import MonitorService
 from agent_stack.observability.metrics import Metrics
 from agent_stack.persistence.event_log import EventLogStore
 
@@ -69,6 +70,8 @@ class Application:
     change_store: ChangeStore | None = None
     #: The small model that names a conversation after its first message (``None``: no titling).
     title_model: BaseChatModel | None = None
+    #: Background pollers; their notes are put in front of the session's next message.
+    monitors: MonitorService | None = None
     _background: set[asyncio.Task[None]] = field(default_factory=set, repr=False)
 
     async def send_message(
@@ -85,10 +88,15 @@ class Application:
         """
         if parent_run_id is None:  # a subagent runs inside its parent's already-checked budget
             await self._check_budget(envelope.session)
+        text = envelope.text
+        if parent_run_id is None and self.monitors is not None:
+            notes = self.monitors.drain(envelope.session)
+            if notes:
+                text = f"{notes}\n\n{text}"
         request = RunRequest(
             session_id=envelope.session,
             user_id=envelope.principal,
-            message=envelope.text,
+            message=text,
             parent_run_id=parent_run_id,
         )
         first = parent_run_id is None and self.title_model is not None
@@ -101,6 +109,8 @@ class Application:
 
     async def drain_background(self) -> None:
         """Wait for side work (conversation titling) to finish; for shutdown and tests."""
+        if self.monitors is not None:
+            await self.monitors.stop_all()
         while self._background:
             await asyncio.gather(*list(self._background), return_exceptions=True)
 
