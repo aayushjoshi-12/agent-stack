@@ -391,6 +391,14 @@ class Timeline:
 
         return await build(root)
 
+    async def tree_text(self, session_id: str, *, files: bool = True) -> str:
+        """The branch tree as text, the conversation ``session_id`` marked with ``*``."""
+        return render_ascii(await self.tree(session_id), current=session_id, files=files)
+
+    async def tree_mermaid(self, session_id: str) -> str:
+        """The branch tree as a Mermaid flowchart."""
+        return render_mermaid(await self.tree(session_id), current=session_id)
+
     # ── references ───────────────────────────────────────────────────────────
     async def reference(self, session_id: str, point: str) -> str:
         """A string that names a point in a conversation, to paste into another chat."""

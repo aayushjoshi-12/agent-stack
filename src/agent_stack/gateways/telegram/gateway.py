@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import html
 import json
 import logging
 import os
@@ -24,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from agent_stack.app.application import Application
+from agent_stack.app.application import Application, LineTurn
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.gateways.base import (
     HistoryItem,
@@ -57,6 +58,7 @@ _PAGE = 6  # conversations per page of /sessions
 _LISTING = 60  # how many recent conversations /sessions can page through
 _RECAP = 4  # messages replayed when a conversation is opened
 _MODES = ("off", "compact", "full")
+_REWIND_CHOICES = 8  # recent messages offered by /rewind
 _COMMANDS = [
     ("new", "Start a fresh conversation"),
     ("sessions", "Browse and open conversations"),
@@ -65,6 +67,10 @@ _COMMANDS = [
     ("verbose", "How much tool activity to show: off, compact, full"),
     ("rename", "Rename this conversation"),
     ("delete", "Delete this conversation"),
+    ("rewind", "Go back to an earlier message (code, conversation or both)"),
+    ("branches", "Draw this conversation's branches"),
+    ("ref", "Share this point, or open a shared one: /ref [asref://…]"),
+    ("files", "Put this conversation's files in the working folder"),
     ("cost", "What this conversation has cost so far"),
     ("status", "Where you are and what is running"),
     ("cancel", "Stop the current run"),
@@ -79,6 +85,10 @@ _HELP = (
     "/verbose [off|compact|full]  how much tool activity to show while it works\n"
     "/rename <title>  rename this conversation\n"
     "/delete  delete this conversation (asks first)\n"
+    "/rewind  go back to an earlier message; restores the code, the conversation, or both\n"
+    "/branches  draw this conversation's branches\n"
+    "/ref [ref]  make a reference to this point, or open one from another chat\n"
+    "/files  put this conversation's files in the working folder\n"
     "/cost  what this conversation has cost (tokens and dollars)\n"
     "/status  where you are and what is running\n"
     "/cancel  stop the current run"
@@ -165,6 +175,7 @@ class _Chat:
     listing: list[SessionSummary] = field(default_factory=list)
     tools: list[HistoryItem] = field(default_factory=list)  # snapshot behind the /tools buttons
     approvals: dict[str, tuple[str, str, int, str]] = field(default_factory=dict)
+    rewind: list[LineTurn] = field(default_factory=list)  # snapshot behind the /rewind buttons
 
     @property
     def busy(self) -> bool:
@@ -369,6 +380,14 @@ class TelegramGateway:
             await self._cmd_rename(chat, argument)
         elif command == "/delete":
             await self._cmd_delete(chat)
+        elif command == "/rewind":
+            await self._cmd_rewind(chat)
+        elif command == "/branches":
+            await self._cmd_branches(chat)
+        elif command == "/ref":
+            await self._cmd_ref(chat, argument)
+        elif command == "/files":
+            await self._cmd_files(chat)
         elif command == "/cost":
             await self._cmd_cost(chat)
         elif command == "/status":
@@ -389,6 +408,149 @@ class TelegramGateway:
         chat.session, chat.title = None, None  # a draft, stored on the first message
         self._save_state()
         await self._say(chat, "New conversation. What would you like to do?")
+
+    # ── history: rewind, branches, references ────────────────────────────────
+    async def _cmd_rewind(self, chat: _Chat) -> None:
+        if await self._refuse_if_busy(chat):
+            return
+        if chat.session is None:
+            await self._say(chat, "Nothing to rewind to yet.")
+            return
+        try:
+            turns = [t for t in await self._app.timeline.lineage(chat.session) if t.turn.user_text]
+        except Exception as exc:
+            await self._say(chat, f"Cannot rewind here: {exc}")
+            return
+        if not turns:
+            await self._say(chat, "Nothing to rewind to yet.")
+            return
+        chat.rewind = turns[-_REWIND_CHOICES:]
+        rows = [
+            [_button(f"{item.turn.user_text.strip().splitlines()[0][:40]}", f"rw:{i}")]
+            for i, item in reversed(list(enumerate(chat.rewind)))
+        ]
+        await self._say(
+            chat,
+            "Go back to just before which message? (newest first)",
+            {"inline_keyboard": rows},
+        )
+
+    async def _on_rewind(self, chat: _Chat, callback_id: str, message_id: int, data: str) -> None:
+        parts = data.split(":")
+        try:
+            target = chat.rewind[int(parts[1])]
+        except (ValueError, IndexError):
+            await self._api.answer_callback_query(
+                callback_id, "That list is out of date. Send /rewind."
+            )
+            return
+        if chat.busy or chat.session is None:
+            await self._api.answer_callback_query(callback_id, "A run is in progress.")
+            return
+        if parts[0] == "rw":  # step two: what to restore
+            await self._api.answer_callback_query(callback_id)
+            i = parts[1]
+            keyboard = {
+                "inline_keyboard": [
+                    [_button("Code and conversation", f"rm:{i}:b")],
+                    [_button("Conversation only", f"rm:{i}:c")],
+                    [_button("Code only", f"rm:{i}:k")],
+                    [_button("Never mind", f"rm:{i}:x")],
+                ]
+            }
+            await self._edit(
+                chat.chat_id,
+                message_id,
+                f"Rewind to before “{target.turn.user_text.strip()[:60]}”. Restore what?",
+                keyboard,
+            )
+            return
+        mode = parts[2] if len(parts) > 2 else "x"
+        if mode == "x":
+            await self._api.answer_callback_query(callback_id, "Kept")
+            await self._edit(chat.chat_id, message_id, "Rewind cancelled.")
+            return
+        try:
+            outcome = await self._app.timeline.rewind_to(
+                chat.session, target, conversation=mode in ("b", "c"), code=mode in ("b", "k")
+            )
+        except Exception as exc:
+            await self._api.answer_callback_query(callback_id, "Rewind failed")
+            await self._edit(chat.chat_id, message_id, f"Rewind failed: {exc}"[:300])
+            return
+        await self._api.answer_callback_query(callback_id, "Rewound")
+        if outcome.session_id != chat.session:
+            chat.session, chat.title, chat.restored = outcome.session_id, "rewound", False
+            self._save_state()
+        moved = len(outcome.files.moved)
+        text = "Rewound. " + (f"{moved} file(s) restored." if moved else "No files changed.")
+        if outcome.files.conflicts:
+            text += f" Left alone (changed since): {', '.join(outcome.files.conflicts)}."
+        await self._edit(chat.chat_id, message_id, text)
+        if mode in ("b", "c"):
+            await self._say(chat, "Your message, to edit and send again:")
+            await self._say(chat, outcome.prompt)
+
+    async def _cmd_branches(self, chat: _Chat) -> None:
+        if chat.session is None:
+            await self._say(chat, "No conversation yet.")
+            return
+        try:
+            text = await self._app.timeline.tree_text(chat.session)
+        except Exception as exc:
+            await self._say(chat, f"Cannot draw the branches: {exc}")
+            return
+        body = html.escape(text)
+        await self._say_html(chat, f"<pre>{body}</pre>", raw=text)
+
+    async def _cmd_ref(self, chat: _Chat, argument: str) -> None:
+        if await self._refuse_if_busy(chat):
+            return
+        timeline = self._app.timeline
+        try:
+            if argument:  # open a reference from another chat
+                opened = await timeline.open_reference(argument)
+                chat.session, chat.title, chat.restored = opened, "from a reference", False
+                self._save_state()
+                await self._say(
+                    chat,
+                    "Opened a new conversation from that point. Its files are not in the "
+                    "folder yet: send /files to put them there.",
+                )
+                return
+            if chat.session is None:
+                await self._say(chat, "No conversation yet.")
+                return
+            done = [t for t in await timeline.turns(chat.session) if t.completed_event_id]
+            if not done:
+                await self._say(chat, "Nothing has finished in this conversation yet.")
+                return
+            ref = await timeline.reference(chat.session, str(done[-1].index))
+        except Exception as exc:
+            await self._say(chat, f"Error: {exc}")
+            return
+        await self._say_html(
+            chat,
+            f"Reference to the last finished turn (paste it into another chat with /ref):\n"
+            f"<code>{html.escape(ref)}</code>",
+            raw=ref,
+        )
+
+    async def _cmd_files(self, chat: _Chat) -> None:
+        if await self._refuse_if_busy(chat):
+            return
+        if chat.session is None:
+            await self._say(chat, "No conversation yet.")
+            return
+        try:
+            result = await self._app.timeline.restore_files(chat.session)
+        except Exception as exc:
+            await self._say(chat, f"Could not restore files: {exc}")
+            return
+        text = f"{len(result.moved)} file(s) restored." if result.moved else "Files already match."
+        if result.conflicts:
+            text += f" Left alone (changed since): {', '.join(result.conflicts)}."
+        await self._say(chat, text)
 
     async def _cmd_cancel(self, chat: _Chat) -> None:
         if not chat.busy or chat.run_id is None:
@@ -564,6 +726,8 @@ class TelegramGateway:
             await self._on_delete(chat, callback_id, message_id, data)
         elif prefix == "vb":
             await self._on_verbose(chat, callback_id, message_id, data)
+        elif prefix in ("rw", "rm"):
+            await self._on_rewind(chat, callback_id, message_id, data)
         else:
             await self._api.answer_callback_query(callback_id)
 
