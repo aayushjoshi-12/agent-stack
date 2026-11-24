@@ -44,6 +44,7 @@ from agent_stack.gateways.tui.widgets import (
     HelpScreen,
     Notice,
     PromptArea,
+    RewindScreen,
     SessionPicker,
     Sidebar,
     SidebarState,
@@ -57,6 +58,9 @@ from agent_stack.gateways.tui.widgets import (
 __all__ = ["TuiApp", "TuiCommands"]
 
 _QUIT_WORDS = frozenset({"exit", "quit"})
+
+#: Two Escapes within this many seconds count as "esc esc".
+_DOUBLE_ESC_SECONDS = 0.8
 
 
 #: Tools whose calls change files; their cards show a diff once they finish.
@@ -73,6 +77,8 @@ class TuiCommands(Provider):
             ("Cancel current run", app.action_cancel_run),
             ("New conversation", app.action_new_session),
             ("Switch conversation…", app.action_switch_session),
+            ("Rewind to an earlier message…", app.action_rewind),
+            ("Put this conversation's files in the folder", app.action_restore_files),
             ("Toggle sidebar", app.action_toggle_sidebar),
             ("Switch dark / light theme", app.action_toggle_theme),
             ("Keyboard shortcuts", app.action_help),
@@ -131,6 +137,9 @@ class TuiApp(App[None]):
         wanted = application.config.theme
         self.theme = wanted if wanted in self.available_themes else DEFAULT_THEME
 
+        self._last_escape = 0.0
+        #: The conversation whose file state the folder was last put in (None: unknown).
+        self._folder_state: str | None = session_id
         self._active_run_id: str | None = None
         self._run_active = False
         self._cancel_sent = False
@@ -437,6 +446,8 @@ class TuiApp(App[None]):
         self._last_outcome = "cancelled" if self._cancel_sent and outcome == "failed" else outcome
         self._run_active = False
         self._cancel_sent = False
+        if self._session_id is not None:
+            self._folder_state = self._session_id  # this conversation's edits are what is on disk
         for card in self.cards.values():
             if card.status == "running":
                 card.finish("done")
@@ -599,11 +610,116 @@ class TuiApp(App[None]):
             self.exit()
 
     async def action_escape_or_focus(self) -> None:
-        """Esc always returns control: cancel a live run, else focus the prompt."""
+        """Esc returns control: cancel a live run, else focus the prompt; esc esc rewinds.
+
+        A second Esc within a moment clears what is typed, or, with an empty prompt, opens the
+        rewind picker (the Claude Code habit).
+        """
         if self._run_active and not self._cancel_sent:
             await self.action_cancel_run()
+            return
+        prompt = self.query_one("#prompt", PromptArea)
+        now = time.monotonic()
+        double = now - self._last_escape < _DOUBLE_ESC_SECONDS
+        self._last_escape = 0.0 if double else now
+        if not double:
+            prompt.focus()
+        elif prompt.text.strip():
+            prompt.clear()
         else:
-            self.query_one("#prompt", PromptArea).focus()
+            await self.action_rewind()
+
+    async def action_rewind(self) -> None:
+        """Pick an earlier message and go back to it (conversation, code, or both)."""
+        if self._busy():
+            return
+        if self._session_id is None:
+            self.notify("Nothing to rewind to yet.")
+            return
+        try:
+            turns = await self.application.timeline.lineage(self._session_id)
+        except Exception as exc:  # a conversation with no event log, say
+            self.notify(f"Cannot rewind here: {exc}", severity="error")
+            return
+        turns = [t for t in turns if t.turn.user_text]
+        if not turns:
+            self.notify("Nothing to rewind to yet.")
+            return
+        self.push_screen(RewindScreen(turns), self._on_rewind_picked)
+
+    async def action_restore_files(self) -> None:
+        """Put the folder in this conversation's file state (after opening another one)."""
+        if self._busy() or self._session_id is None:
+            return
+        source = self._folder_state or self._session_id
+        try:
+            result = await self.application.timeline.switch_files(source, self._session_id)
+        except Exception as exc:
+            self.notify(f"Could not restore files: {exc}", severity="error")
+            return
+        if not result.conflicts:
+            self._folder_state = self._session_id
+        moved = len(result.moved)
+        text = (
+            f"{moved} file{'s' if moved != 1 else ''} restored."
+            if moved
+            else "Files already match."
+        )
+        if result.conflicts:
+            text += f" Left alone (changed since): {', '.join(result.conflicts)}"
+        self.notify(text, severity="warning" if result.conflicts else "information")
+
+    async def _warn_if_files_differ(self, session_id: str) -> None:
+        """After opening a conversation: say so when the folder is in another one's state."""
+        source = self._folder_state
+        if source is None or source == session_id:
+            return
+        try:
+            result = await self.application.timeline.switch_files(source, session_id, dry_run=True)
+        except Exception:
+            return
+        if result.moved or result.conflicts:
+            self.notify(
+                "The files in the folder match another conversation. "
+                "ctrl+p, then 'Put this conversation's files in the folder' to match this one.",
+                severity="warning",
+                timeout=10,
+            )
+
+    def _on_rewind_picked(self, choice: tuple[Any, str] | None) -> None:
+        if choice is not None:
+            self._spawn(self._rewind(*choice))
+
+    async def _rewind(self, target: Any, mode: str) -> None:
+        current = self._session_id
+        if current is None:
+            return
+        try:
+            outcome = await self.application.timeline.rewind_to(
+                current,
+                target,
+                conversation=mode in ("both", "conversation"),
+                code=mode in ("both", "code"),
+            )
+        except Exception as exc:
+            self.notify(f"Rewind failed: {exc}", severity="error")
+            return
+        if mode in ("both", "code") and not outcome.files.conflicts:
+            self._folder_state = outcome.session_id
+        if outcome.session_id != current:
+            self._titles[outcome.session_id] = "rewound"
+            await self._open_session(outcome.session_id)
+        moved = len(outcome.files.moved)
+        text = (
+            f"Rewound. {moved} file{'s' if moved != 1 else ''} restored." if moved else "Rewound."
+        )
+        if outcome.files.conflicts:
+            text += f" Left alone (changed since): {', '.join(outcome.files.conflicts)}"
+        self.notify(text, severity="warning" if outcome.files.conflicts else "information")
+        if mode in ("both", "conversation"):
+            prompt = self.query_one("#prompt", PromptArea)
+            prompt.load_text(outcome.prompt)  # edit it and send again
+            prompt.focus()
 
     def action_scroll_chat(self, key: str) -> None:
         chat = self._chat()
@@ -691,6 +807,7 @@ class TuiApp(App[None]):
         self._refresh_all()
         self.call_after_refresh(chat.scroll_end, animate=False)
         self.query_one("#prompt", PromptArea).focus()
+        await self._warn_if_files_differ(session_id)
 
     def action_toggle_sidebar(self) -> None:
         """Flip the sidebar against the width default; a second press returns to automatic.

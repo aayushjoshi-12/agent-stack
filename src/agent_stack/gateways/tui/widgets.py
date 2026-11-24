@@ -14,7 +14,7 @@ import time
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from textual import events
 from textual.binding import Binding
@@ -29,6 +29,9 @@ from textual.widgets.option_list import Option
 from agent_stack.app.application import FileDiff
 from agent_stack.gateways.base import SessionSummary
 from agent_stack.gateways.tui.render import diff_kind
+
+if TYPE_CHECKING:
+    from agent_stack.app.application import LineTurn
 
 __all__ = [
     "AgentMessage",
@@ -559,6 +562,7 @@ HELP = (
             ("up / down", "message history (on first / last line)"),
             ("pageup / pagedown", "scroll the conversation"),
             ("esc", "cancel the run, or return to the prompt"),
+            ("esc esc", "rewind: go back to an earlier message (clears typed text first)"),
             ("tab / shift+tab", "move between prompt and tool cards"),
             ("enter / click", "expand or collapse a focused card"),
         ),
@@ -750,6 +754,89 @@ class SessionPicker(ModalScreen[str | None]):
 
     def action_close(self) -> None:
         self.dismiss(None)
+
+
+#: What a rewind restores, in the order the picker offers them.
+REWIND_CHOICES = (
+    ("both", "Restore code and conversation"),
+    ("conversation", "Restore conversation (keep the code as it is now)"),
+    ("code", "Restore code (keep the conversation)"),
+    ("cancel", "Never mind"),
+)
+
+
+class RewindScreen(ModalScreen["tuple[LineTurn, str] | None"]):
+    """Go back to an earlier message, like Claude Code's double-Esc.
+
+    Step one picks the message (newest highlighted, since that is usually the one you want),
+    step two what to restore. Nothing is deleted: the conversation you leave stays in the chats
+    list, so a rewind can always be undone by opening it again.
+    """
+
+    BINDINGS: ClassVar[list[Any]] = [Binding("escape,q", "back", "back")]
+    FOOT_TURNS = "[$foreground-muted]enter choose · esc close[/]"
+    FOOT_MODE = "[$foreground-muted]enter restore · esc back[/]"
+
+    def __init__(self, turns: list[LineTurn]) -> None:
+        super().__init__()
+        self._turns = turns
+        self._picked: LineTurn | None = None
+
+    def compose(self):  # type: ignore[no-untyped-def]
+        with Vertical(id="picker-card"):
+            yield Static(
+                "[bold $primary]Rewind[/]  [$foreground-muted]go back to…[/]", id="picker-title"
+            )
+            yield OptionList(*self._turn_options(), id="picker-list")
+            yield Static(self.FOOT_TURNS, id="picker-foot")
+
+    def _turn_options(self) -> list[Option]:
+        rows = []
+        for number, item in enumerate(self._turns):
+            files = item.turn.files_changed
+            tail = (
+                f"  [$foreground-muted]{files} file{'s' if files != 1 else ''}[/]" if files else ""
+            )
+            text = escape(" ".join(item.turn.user_text.split())[:58] or "(no text)")
+            rows.append(Option(f"{text}{tail}", id=str(number)))
+        return rows
+
+    def on_mount(self) -> None:
+        listing = self.query_one(OptionList)
+        listing.focus()
+        listing.highlighted = max(0, len(self._turns) - 1)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        listing = self.query_one(OptionList)
+        if self._picked is None:
+            self._picked = self._turns[int(event.option.id or 0)]
+            listing.clear_options()
+            listing.add_options([Option(label, id=key) for key, label in REWIND_CHOICES])
+            listing.highlighted = 0
+            title = escape(" ".join(self._picked.turn.user_text.split())[:50])
+            self.query_one("#picker-title", Static).update(
+                f"[bold $primary]Rewind to before[/] {title}"
+            )
+            self.query_one("#picker-foot", Static).update(self.FOOT_MODE)
+            return
+        if event.option.id == "cancel":
+            self.dismiss(None)
+        else:
+            self.dismiss((self._picked, str(event.option.id)))
+
+    def action_back(self) -> None:
+        if self._picked is None:
+            self.dismiss(None)
+            return
+        self._picked = None
+        listing = self.query_one(OptionList)
+        listing.clear_options()
+        listing.add_options(self._turn_options())
+        listing.highlighted = max(0, len(self._turns) - 1)
+        self.query_one("#picker-title", Static).update(
+            "[bold $primary]Rewind[/]  [$foreground-muted]go back to…[/]"
+        )
+        self.query_one("#picker-foot", Static).update(self.FOOT_TURNS)
 
 
 class ApprovalScreen(ModalScreen[bool]):

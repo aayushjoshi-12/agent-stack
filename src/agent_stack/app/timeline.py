@@ -38,6 +38,8 @@ if TYPE_CHECKING:
 __all__ = [
     "REF_PREFIX",
     "FileMove",
+    "LineTurn",
+    "RewindOutcome",
     "SwitchResult",
     "Timeline",
     "TreeNode",
@@ -62,6 +64,23 @@ class Turn:
     timestamp: datetime
     user_text: str
     files_changed: int
+
+
+@dataclass(frozen=True)
+class LineTurn:
+    """A turn in a conversation's whole lineage: ``session_id`` is the conversation that owns it."""
+
+    turn: Turn
+    session_id: str
+
+
+@dataclass(frozen=True)
+class RewindOutcome:
+    """What a rewind did: the conversation to be in now, and what happened to the files."""
+
+    session_id: str
+    files: SwitchResult
+    prompt: str  # the rewound message's text, to put back in the input box
 
 
 @dataclass(frozen=True)
@@ -149,6 +168,88 @@ class Timeline:
             )
         return found
 
+    async def lineage(self, session_id: str) -> list[LineTurn]:
+        """Every turn that led to this conversation, oldest first, across its forks.
+
+        A fork's earlier turns belong to the conversation it was forked from; each entry names
+        its owner, because a point can only be forked from the conversation whose log holds it.
+        """
+        app = self._app
+        session = await app.get_session(session_id)
+        own = [LineTurn(turn, session_id) for turn in await self.turns(session_id)]
+        if session is None or not session.branch_of or not session.branch_point_event_id:
+            return own
+        point = await app.event_log.get(session.branch_point_event_id) if app.event_log else None
+        if point is None:
+            return own
+        earlier = [
+            lt
+            for lt in await self.lineage(session.branch_of)
+            if lt.turn.timestamp < point.timestamp
+        ]
+        return [*earlier, *own]
+
+    async def rewind_to(
+        self,
+        current: str,
+        target: LineTurn,
+        *,
+        conversation: bool = True,
+        code: bool = True,
+        force: bool = False,
+    ) -> RewindOutcome:
+        """Go back to just before ``target``'s message, as Claude Code's rewind does.
+
+        ``conversation``: fork there and continue in the fork (the original keeps everything).
+        ``code``: put the files as they were then. With only ``code``, the conversation stays and
+        the restore is recorded in it as ordinary edits, so its file history stays truthful.
+        The returned ``prompt`` is the rewound message, to be offered for editing and resending.
+        """
+        app = self._app
+        event = target.turn.started_event_id
+        prompt = target.turn.user_text
+        if conversation:
+            branch = await self.fork(target.session_id, event)
+            moved = (
+                await self.switch_files(current, branch, force=force) if code else SwitchResult()
+            )
+            return RewindOutcome(branch, moved, prompt)
+        if not code or app.change_store is None:
+            return RewindOutcome(current, SwitchResult(), prompt)
+        stamp = (await self.event(target.session_id, event)).timestamp
+        wanted = _net(
+            [
+                e
+                for e in await app.change_store.entries(target.session_id)
+                if _as_time(e.created_at) <= stamp
+            ]
+        )
+        have = _net(await app.change_store.entries(current))
+        policy = WorkspacePolicy(app.config.workspace)
+        result = SwitchResult()
+        for path in sorted(set(have) | set(wanted)):
+            pristine = (have.get(path) or wanted[path])[0]
+            expected = have[path][1] if path in have else pristine
+            desired = wanted[path][1] if path in wanted else pristine
+            if expected == desired:
+                continue
+            file = policy.resolve(path)
+            actual = file.read_text(encoding="utf-8", errors="replace") if file.is_file() else None
+            if actual != expected and not force:
+                result.conflicts.append(path)
+                continue
+            if desired is None:
+                file.unlink(missing_ok=True)
+                result.moved.append(FileMove(path, "deleted"))
+                continue
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_text(desired, encoding="utf-8")
+            result.moved.append(FileMove(path, "wrote"))
+            await app.change_store.record(
+                session_id=current, run_id="rewind", path=path, before=actual, after=desired
+            )
+        return RewindOutcome(current, result, prompt)
+
     async def _user_texts(self, session_id: str, count: int) -> list[str]:
         """The last ``count`` user messages: a fork's own turns are the tail of its transcript."""
         messages = await self._app.session_store.get_messages(session_id)
@@ -176,13 +277,13 @@ class Timeline:
 
     # ── files ────────────────────────────────────────────────────────────────
     async def switch_files(
-        self, from_session: str, to_session: str, *, force: bool = False
+        self, from_session: str, to_session: str, *, force: bool = False, dry_run: bool = False
     ) -> SwitchResult:
         """Make the working folder match ``to_session`` after it matched ``from_session``.
 
         Only files either conversation edited are touched. A file whose current content is not
         what ``from_session`` left (somebody edited it by hand) is reported as a conflict and left
-        alone, unless ``force``.
+        alone, unless ``force``. With ``dry_run`` nothing is written; the result says what would be.
         """
         app = self._app
         if app.change_store is None:
@@ -203,11 +304,13 @@ class Timeline:
                 result.conflicts.append(path)
                 continue
             if desired is None:
-                file.unlink(missing_ok=True)
+                if not dry_run:
+                    file.unlink(missing_ok=True)
                 result.moved.append(FileMove(path, "deleted"))
             else:
-                file.parent.mkdir(parents=True, exist_ok=True)
-                file.write_text(desired, encoding="utf-8")
+                if not dry_run:
+                    file.parent.mkdir(parents=True, exist_ok=True)
+                    file.write_text(desired, encoding="utf-8")
                 result.moved.append(FileMove(path, "wrote"))
         return result
 

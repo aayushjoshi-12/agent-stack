@@ -185,3 +185,45 @@ async def test_agent_tools_name_read_and_draw(tmp_path: Path) -> None:
         assert "a.txt" in await tools["read_reference"].ainvoke({"reference": ref})
         assert "* s1" in await tools["show_branches"].ainvoke({})  # the current one is starred
     assert (await tools["read_reference"].ainvoke({"reference": "nope"})).startswith("Error")
+
+
+async def test_lineage_runs_through_forks_and_rewind_to_works_from_a_branch(
+    tmp_path: Path,
+) -> None:
+    w = await _two_turns(tmp_path)
+    first = (await w.app.timeline.lineage("s1"))[0]
+    assert first.turn.user_text == "make a" and first.session_id == "s1"
+
+    # rewind to before turn 2 (conversation + code), then look at the lineage of the fork
+    out = await w.app.timeline.rewind_to("s1", (await w.app.timeline.lineage("s1"))[1])
+    assert out.prompt == "change a, add b" and out.files.ok
+    assert (w.workspace / "a.txt").read_text() == "v1\n" and not (w.workspace / "b.txt").exists()
+    line = await w.app.timeline.lineage(out.session_id)
+    assert [(lt.turn.user_text, lt.session_id) for lt in line] == [("make a", "s1")]
+
+    # from the fork, go back further than the fork point: the owner is the original
+    again = await w.app.timeline.rewind_to(out.session_id, line[0])
+    assert again.session_id not in ("s1", out.session_id)
+    assert not (w.workspace / "a.txt").exists()  # before turn 1 nothing existed
+
+
+async def test_code_only_rewind_keeps_the_conversation_and_records_the_restore(
+    tmp_path: Path,
+) -> None:
+    w = await _two_turns(tmp_path)
+    target = (await w.app.timeline.lineage("s1"))[1]  # before turn 2
+    out = await w.app.timeline.rewind_to("s1", target, conversation=False)
+    assert out.session_id == "s1" and out.files.ok
+    assert (w.workspace / "a.txt").read_text() == "v1\n"
+    entries = await w.store.entries("s1")
+    assert entries[-1].run_id == "rewind" and entries[-1].after == "v1\n"
+    # the conversation still has both turns
+    assert len(await w.app.timeline.turns("s1")) == 2
+
+
+async def test_conversation_only_rewind_leaves_the_files(tmp_path: Path) -> None:
+    w = await _two_turns(tmp_path)
+    target = (await w.app.timeline.lineage("s1"))[1]
+    out = await w.app.timeline.rewind_to("s1", target, code=False)
+    assert out.session_id != "s1" and out.files.moved == []
+    assert (w.workspace / "a.txt").read_text() == "v2\n"

@@ -28,6 +28,9 @@ from langchain_core.messages import (
 )
 
 from agent_stack.app.config import AppConfig
+from agent_stack.app.timeline import LineTurn as LineTurn  # re-exported for gateways
+from agent_stack.app.timeline import RewindOutcome as RewindOutcome
+from agent_stack.app.timeline import SwitchResult as SwitchResult
 from agent_stack.app.timeline import Timeline
 from agent_stack.core.agent import Agent
 from agent_stack.core.approval import ApprovalBroker
