@@ -62,6 +62,8 @@ class AppConfig:
     #: Model calls one run may make (tool calls are capped at twice this). The default suits
     #: chat; a long autonomous task needs more. ``AGENT_STACK_MAX_STEPS``.
     max_steps: int = 50
+    #: Wall-clock seconds one run may take before it is stopped. ``AGENT_STACK_MAX_RUNTIME``.
+    max_runtime_seconds: float = 1800.0
     #: Refuse shell commands that name paths outside the workspace (``find /``, a sibling repo).
     #: A guard against accidents, not a sandbox. Turn off (``AGENT_STACK_SHELL_CONFINED=0``)
     #: only inside a container that is the sandbox.
@@ -137,6 +139,9 @@ class AppConfig:
             context_window=int(source.get("AGENT_STACK_CONTEXT_WINDOW", defaults.context_window)),
             context_budget=int(source.get("AGENT_STACK_CONTEXT_BUDGET", defaults.context_budget)),
             max_steps=int(source.get("AGENT_STACK_MAX_STEPS", defaults.max_steps)),
+            max_runtime_seconds=float(
+                source.get("AGENT_STACK_MAX_RUNTIME", defaults.max_runtime_seconds)
+            ),
             shell_confined=source.get("AGENT_STACK_SHELL_CONFINED", "1").strip().lower()
             not in ("0", "false", "no", "off"),
             budget_usd=budget,

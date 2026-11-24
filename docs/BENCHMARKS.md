@@ -148,6 +148,23 @@ after about 10 minutes and discarded):
 | code-from-image | 0 | 0 | agent timeout (no crash this time) |
 | adaptive-rejection-sampler | 0 | n/a | verifier timeout |
 
+What the transcripts showed, and what was changed (none of it re-measured; the budget is spent):
+
+- **A cap I had not meant to leave in.** `compile-compcert` ended with `RuntimeDeadlineExceeded:
+  Run exceeded its 1800.0s runtime limit`: agent-stack's own default wall-clock limit, not the
+  task's. It was mid-build (about half of the Coq files done) and had polled 20+ times with
+  `sleep 27`. The earlier "no caps" statement above is therefore wrong for the 15-task run too:
+  the 1800 s limit and the 300 s tool timeout applied. Now `AGENT_STACK_MAX_RUNTIME` (default 1800)
+  exists and the Harbor adapter sets 86400, so only the task's own timeout applies.
+- **Polling too often.** Prompt now says to start long jobs in the background and wait 60-120 s
+  per command.
+- **Undoing its own proof** (`configure-git-webserver`): prompt now says to leave results in place.
+- **Dumping a large image to the terminal** (`code-from-image`, 1200 s task timeout): prompt now
+  says to print slices, not whole files.
+- **`cancel-async-tasks`**: the agent wrote a 27-check suite and a very elaborate solution and
+  still failed the one case, so this looks like a model-quality limit, not something the harness
+  can fix with a prompt line. Left as is.
+
 **1 of 7**, about $0.5 (the key's remaining limit, US$0.19, was nearly used up by the end). Two
 agent timeouts and one verifier timeout under emulation with seven containers sharing 10 CPUs: this
 run's wall-clock failures are probably load, not the agent. Treat the three timeouts as

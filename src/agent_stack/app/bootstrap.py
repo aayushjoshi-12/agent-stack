@@ -82,6 +82,14 @@ Doing a task (coding, setup, fixes):
   running a command that exercises it. Fix what fails, then stop.
 - Decide, act, verify. If you catch yourself going back and forth on the same
   point, pick the best option, run it, and let the result settle it.
+- Leave your results in place. Do not delete, reset or "clean up" what you built or
+  tested (files, repos, services, data) unless the task says to; what you made is what
+  gets checked.
+- Long jobs (builds, installs, training): start them in the background with output to a
+  log, then wait with one command that sleeps 60-120 seconds and prints the log tail,
+  instead of polling every few seconds. Do other useful work while you wait.
+- Print only what you need. Never dump a large file or image to the terminal; show a
+  slice (head, tail, grep) or a summary.
 - Do the work yourself instead of listing steps for the user, unless you truly
   cannot (no access, no permission); then say exactly what is blocked and why.
 
@@ -209,7 +217,11 @@ def build_application(config: AppConfig | None = None) -> Application:
             ),
         ),
         system_prompt=DEFAULT_SYSTEM_PROMPT,
-        limits=AgentLimits(max_steps=resolved.max_steps, max_tool_calls=2 * resolved.max_steps),
+        limits=AgentLimits(
+            max_steps=resolved.max_steps,
+            max_tool_calls=2 * resolved.max_steps,
+            max_runtime_seconds=resolved.max_runtime_seconds,
+        ),
         tool_policy=ToolPolicy(frozenset(resolved.approval_tools)),
     )
     title_model = small

@@ -13,3 +13,8 @@ def test_a_spiral_crosses_the_threshold() -> None:
 
 def test_prompt_asks_for_verification_before_stopping() -> None:
     assert "awkward cases first" in DEFAULT_SYSTEM_PROMPT
+
+
+def test_prompt_keeps_results_and_waits_on_long_jobs() -> None:
+    assert "Leave your results in place" in DEFAULT_SYSTEM_PROMPT
+    assert "sleeps 60-120 seconds" in DEFAULT_SYSTEM_PROMPT
