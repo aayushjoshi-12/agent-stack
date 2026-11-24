@@ -3,7 +3,9 @@
     harbor run -d terminal-bench@2.0 --agent-import-path bench.harbor_agent:AgentStackAgent \
         -m openrouter:z-ai/glm-5.3-flash -n 1
 
-The source is packed from git HEAD, uploaded to /opt/agent-stack and installed with uv. The agent
+With AGENT_STACK_PREBUILT=<tarball from bench/prebuild.sh> the environment is simply unpacked;
+otherwise the source is packed from git HEAD, uploaded to /opt/agent-stack and installed with uv
+(about nine minutes under emulation, so prebuild). The agent
 runs headless (``agent-stack run --yes -``): the container is the sandbox, so every tool is
 approved. The model key is read from the *Harbor process* environment (OPENROUTER_API_KEY) and
 handed to the container only for the agent command. Grading is Harbor's, never the agent's.
@@ -38,12 +40,31 @@ class AgentStackAgent(BaseInstalledAgent):
 
     @override
     async def install(self, environment: BaseEnvironment) -> None:
+        prebuilt = os.environ.get("AGENT_STACK_PREBUILT")
+        if prebuilt:  # built once by bench/prebuild.sh; seconds instead of ~9 minutes emulated
+            await environment.upload_file(Path(prebuilt), "/tmp/env.tar.gz")
+            await self.exec_as_root(
+                environment,
+                command="tar -C /opt -xzf /tmp/env.tar.gz && rm /tmp/env.tar.gz",
+            )
+            return
         await self.ensure_system_dependencies(environment, ("curl", "git"))
         with tempfile.TemporaryDirectory() as tmp:
             archive = Path(tmp) / "agent-stack.tar"
             subprocess.run(
-                ["git", "-C", str(_REPO), "archive", "-o", str(archive), "HEAD",
-                 "src", "pyproject.toml", "uv.lock", "README.md"],
+                [
+                    "git",
+                    "-C",
+                    str(_REPO),
+                    "archive",
+                    "-o",
+                    str(archive),
+                    "HEAD",
+                    "src",
+                    "pyproject.toml",
+                    "uv.lock",
+                    "README.md",
+                ],
                 check=True,
             )
             await environment.upload_file(archive, "/tmp/agent-stack.tar")
@@ -64,7 +85,9 @@ class AgentStackAgent(BaseInstalledAgent):
 
     @override
     @with_prompt_template
-    async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
+    async def run(
+        self, instruction: str, environment: BaseEnvironment, context: AgentContext
+    ) -> None:
         env = {
             "AGENT_STACK_MODEL": self.model_name or os.environ["AGENT_STACK_MODEL"],
             "OPENROUTER_API_KEY": os.environ["OPENROUTER_API_KEY"],
