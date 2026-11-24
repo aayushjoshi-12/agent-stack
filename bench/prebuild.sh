@@ -12,7 +12,7 @@ docker run --rm --platform linux/amd64 -v "$tmp":/work ubuntu:24.04 bash -c '
   apt-get update -qq && apt-get install -y -qq curl ca-certificates >/dev/null
   mkdir -p /opt/agent-stack && tar -xf /work/src.tar -C /opt/agent-stack
   curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh >/dev/null
-  cd /opt/agent-stack && UV_PYTHON_INSTALL_DIR=/opt/agent-stack/python uv sync --frozen --no-dev --python 3.12
+  cd /opt/agent-stack && UV_HTTP_TIMEOUT=600 UV_PYTHON_INSTALL_DIR=/opt/agent-stack/python uv sync --frozen --no-dev --python 3.12
   cp /usr/local/bin/uv /opt/agent-stack/uv
   chmod -R a+rX /opt/agent-stack
   tar -C /opt -czf /work/env.tar.gz agent-stack'
