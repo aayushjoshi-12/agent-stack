@@ -118,3 +118,26 @@ async def test_tools_work_inside_a_run_and_refuse_outside_paths(tmp_path: Path) 
         assert "mon-" in await tools["monitor_list"].ainvoke({})
         assert await tools["monitor_notes"].ainvoke({}) == "No new monitor notes."
     await service.stop_all()
+
+
+async def test_waiting_notes_are_put_in_front_of_the_next_message() -> None:
+    from agent_stack.gateways.base import MessageEnvelope
+    from tests.fakes import FakeChatModel, ai
+    from tests.unit.test_application import _build_application
+
+    model = FakeChatModel([ai("ok"), ai("ok again")])
+    app, _runs, _sessions = _build_application(model)
+    app.monitors = MonitorService(Path("."), runner=Script(_result("a"), _result("b")), min_interval=0.01)
+    app.monitors.start("s1", "x", interval=0.01)
+    await _until(lambda: app.monitors.peek("s1") == 1)  # type: ignore[union-attr]
+
+    handle = await app.send_message(MessageEnvelope(principal="u", session="s1", text="status?"))
+    await handle.result()
+    sent = [str(m.content) for m in model.calls[0] if m.type == "human"]
+    assert sent and sent[-1].startswith("[Monitor notes since your last turn]")
+    assert sent[-1].endswith("status?")
+
+    handle = await app.send_message(MessageEnvelope(principal="u", session="s1", text="again"))
+    await handle.result()
+    assert "Monitor notes" not in str(model.calls[1][-1].content)  # delivered once
+    await app.monitors.stop_all()  # type: ignore[union-attr]
