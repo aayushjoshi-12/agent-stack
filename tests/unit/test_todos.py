@@ -137,3 +137,31 @@ async def test_tools_refuse_outside_a_run(db: SqliteDatabase) -> None:
         ("todo_complete", {"id": 1}),
     ):
         assert "only available inside a run" in await tools[name].ainvoke(args)
+
+
+async def test_open_todos_are_shown_in_the_system_prompt_every_call(
+    db: SqliteDatabase, tmp_path: Path
+) -> None:
+    from agent_stack.context.composer import SystemPromptComposer
+    from agent_stack.context.instructions import InstructionsLoader
+    from agent_stack.memory import MemoryIndex
+    from agent_stack.skills import SkillLoader, SkillRegistry
+
+    store = SqliteTodoStore(db)
+    await store.add("s1", "write the parser")
+    await store.add("s1", "run the tests")
+    await store.complete("s1", 1)
+    composer = SystemPromptComposer(
+        instructions=InstructionsLoader(),
+        skills=SkillRegistry(SkillLoader([tmp_path / 'none'])),
+        memory=MemoryIndex(tmp_path),
+        workspace_root=tmp_path,
+        todos=store,
+    )
+
+    with run_context(_context("s1")):
+        parts = await composer.parts(base_prompt="BASE")
+    assert parts[0] == "BASE"
+    assert "[x] 1. write the parser" in parts[1]
+    assert "[ ] 2. run the tests" in parts[1]
+    assert await composer.parts(base_prompt="BASE") == ("BASE",)  # no run, no todo block

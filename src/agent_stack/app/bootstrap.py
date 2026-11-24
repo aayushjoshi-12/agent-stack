@@ -165,11 +165,13 @@ def build_application(config: AppConfig | None = None) -> Application:
         )
     )
     memory = MemoryIndex(workspace)
+    todo_store = SqliteTodoStore(db)
     composer = SystemPromptComposer(
         instructions=InstructionsLoader(global_dir=resolved.home),
         skills=skills,
         memory=memory,
         workspace_root=workspace,
+        todos=todo_store,
     )
     small = _title_model(resolved.small_model)
     context_builder = ContextBuilder(
@@ -190,13 +192,13 @@ def build_application(config: AppConfig | None = None) -> Application:
         model=resolved.model,
         tools=(
             *fs_tools,
-            run_command_tool(policy),
+            run_command_tool(policy, confine=resolved.shell_confined),
             *control_tools(),
             *skill_tools(skills),
             *memory_tools(memory),
             *idea_tools(IdeaInbox(resolved.home)),
             *persistent_memory_tools(SqliteMemoryStore(db)),
-            *todo_tools(SqliteTodoStore(db)),
+            *todo_tools(todo_store),
             *artifact_tools(artifacts),
         ),
         subagents=(

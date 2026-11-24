@@ -13,7 +13,10 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from agent_stack.context.instructions import InstructionFile, InstructionsLoader
+from agent_stack.core.run_context import current_run_context
+from agent_stack.core.state import TodoStatus
 from agent_stack.memory import MemoryIndex
+from agent_stack.persistence.todos import SqliteTodoStore
 from agent_stack.skills import SkillRegistry
 
 __all__ = ["SystemPromptComposer"]
@@ -22,6 +25,7 @@ __all__ = ["SystemPromptComposer"]
 _INSTRUCTIONS_HEADER = "# Project instructions (AGENTS.md)"
 _SKILLS_HEADER = "# Available skills"
 _SKILLS_FOOTER = "Use the load_skill tool to read a skill's instructions before using it."
+_TODOS_HEADER = "# Your todo list (kept current; tick items off with todo_complete)"
 _MEMORY_HEADER = "# Memory"
 _MEMORY_FOOTER = "Use the read_memory_topic tool to read a topic's notes before relying on it."
 
@@ -36,7 +40,9 @@ class SystemPromptComposer:
         skills: SkillRegistry,
         memory: MemoryIndex,
         workspace_root: Path,
+        todos: SqliteTodoStore | None = None,
     ) -> None:
+        self._todos = todos
         self._instructions = instructions
         self._skills = skills
         self._memory = memory
@@ -45,6 +51,10 @@ class SystemPromptComposer:
     async def parts(self, *, base_prompt: str) -> Sequence[str]:
         """Ordered resident parts: base prompt, instructions, skills metadata, memory index."""
         parts: list[str] = [base_prompt]
+
+        todo_block = await self._todo_block()
+        if todo_block:
+            parts.append(todo_block)  # right after the base prompt: small, and never cleared
 
         files = await self._instructions.load(self._workspace_root)
         if files:
@@ -59,6 +69,20 @@ class SystemPromptComposer:
             parts.append(_memory_block(index))
 
         return tuple(parts)
+
+
+    async def _todo_block(self) -> str | None:
+        """The session's todo list, shown on every call so clearing old messages cannot lose it."""
+        context = current_run_context()
+        if self._todos is None or context is None:
+            return None
+        items = await self._todos.list_items(context.session_id)
+        if not items:
+            return None
+        lines = [
+            f"[{'x' if i.status is TodoStatus.DONE else ' '}] {i.id}. {i.text}" for i in items
+        ]
+        return f"{_TODOS_HEADER}\n\n" + "\n".join(lines)
 
 
 def _instructions_block(files: Sequence[InstructionFile]) -> str:

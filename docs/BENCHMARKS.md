@@ -159,13 +159,13 @@ two trials in `agent-state/`):
 - Old tool results were never cleared; now a token budget clears them first, then drops the oldest
   messages, and summarises old history with the small model.
 - The default 50-step limit ended a realistic feature task early; now `AGENT_STACK_MAX_STEPS`.
-- Shell commands are not workspace-confined (see Safety rules). Still open.
+- Shell commands were not workspace-confined (see Safety rules). Now `run_command` refuses commands that name paths outside the workspace (`find /`, `~/...`, a sibling repo); system dirs and /tmp are allowed. It is a guard against accidents, not a sandbox: a command can still hide a path in a variable or script. `AGENT_STACK_SHELL_CONFINED=0` turns it off (the Terminal-Bench adapter does, since the container is the sandbox).
 - The token estimate (characters / 4) undercounts: with a 24k budget the real input reached 35k
   (rag) and 36.7k (dominoes), about 1.5x over. Fixed: the builder now learns a correction
   ratio (1 to 3x, smoothed) from the provider's reported `input_tokens` after each call.
 - rag run, read from its transcript: 75 tool calls, the first edit at call 68 (about 90% of the step
   budget went on exploration), 44 of 54 shell calls were `cat`/`sed`/`grep`/`ls` reads, and the todo
   list was written twice (13 `todo_add` calls for about 6 items), which suggests the plan was
-  trimmed out of the context and rebuilt. Hypothesis, not yet verified: the todo list is not
-  re-shown after old messages are cleared. Note the empty-workspace mistake forced shell reads in
+  trimmed out of the context and rebuilt. Fix: the open todo list is now part of the system prompt on every model call, so clearing old
+  messages cannot lose it (hypothesis about the cause was never verified; not yet measured). Note the empty-workspace mistake forced shell reads in
   this particular run, so the read/`cat` ratio is not representative.

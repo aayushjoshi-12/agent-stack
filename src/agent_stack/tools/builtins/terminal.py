@@ -12,6 +12,7 @@ import asyncio
 import codecs
 import contextlib
 import os
+import re
 import signal
 import time
 from collections.abc import Sequence
@@ -228,7 +229,37 @@ async def run_command(
     return result
 
 
-def run_command_tool(policy: WorkspacePolicy) -> BaseTool:
+#: Absolute paths a command may always mention: system binaries/libraries and scratch space.
+_SAFE_PREFIXES = (
+    "/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/dev", "/proc", "/sys",
+    "/opt", "/tmp", "/var/tmp", "/private/tmp", "/private/var/folders", "/var/folders",
+    "/System", "/Library", "/Applications", "/nix",
+)  # fmt: skip
+_PATH_TOKEN_RE = re.compile(r"""(?<![\w.$:/-])(~[\w-]*/?[^\s'";|&<>()`]*|/[^\s'";|&<>()`]*)""")
+
+
+def outside_paths(command: str, root: Path) -> list[str]:
+    """Absolute or home paths in ``command`` that lie outside ``root`` and the safe system dirs.
+
+    A guard against accidents (``find /``, editing a sibling repo), not a security boundary:
+    a determined command can hide a path in a variable or a script. Use a container for that.
+    """
+    found: list[str] = []
+    for token in _PATH_TOKEN_RE.findall(command):
+        path = Path(token).expanduser()
+        if token in ("/",) or str(path) == "/":
+            found.append(token)
+            continue
+        text = str(path)
+        if path.is_relative_to(root) or any(
+            text == p or text.startswith(p + "/") for p in _SAFE_PREFIXES
+        ):
+            continue
+        found.append(token)
+    return found
+
+
+def run_command_tool(policy: WorkspacePolicy, *, confine: bool = True) -> BaseTool:
     """Build the ``run_command`` tool, defaulting ``cwd`` to the workspace root."""
 
     @tool("run_command")
@@ -250,6 +281,14 @@ def run_command_tool(policy: WorkspacePolicy) -> BaseTool:
         ``timeout`` (reported as timed out).
         """
         working_dir = policy.resolve(cwd)
+        if confine and not policy.allow_external:
+            outside = outside_paths(command, policy.root)
+            if outside:
+                return (
+                    f"Error: this command touches paths outside the workspace "
+                    f"({', '.join(outside[:3])}); the workspace is {policy.root}. "
+                    "Work inside it, or ask the user to run this themselves."
+                )
         result = await run_command(
             command,
             cwd=working_dir,
