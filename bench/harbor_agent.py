@@ -38,7 +38,7 @@ class AgentStackAgent(BaseInstalledAgent):
 
     @override
     async def install(self, environment: BaseEnvironment) -> None:
-        await self.ensure_system_dependencies(environment, ("curl", "git", "ca-certificates"))
+        await self.ensure_system_dependencies(environment, ("curl", "git"))
         with tempfile.TemporaryDirectory() as tmp:
             archive = Path(tmp) / "agent-stack.tar"
             subprocess.run(
