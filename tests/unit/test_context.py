@@ -158,3 +158,26 @@ def test_still_over_budget_drops_oldest_but_keeps_the_pin() -> None:
     assert estimate_tokens(ctx.messages, len("base")) <= 200
     assert isinstance(ctx.messages[2], AIMessage)  # no orphaned tool result after the note
     assert ctx.messages[-1] is messages[-1]
+
+
+def test_calibrate_makes_the_budget_stricter_when_the_estimate_undercounts() -> None:
+    from langchain_core.messages import AIMessage
+
+    builder = ContextBuilder(max_tokens=1000, recent_window=100, keep_tool_results=0)
+    history: list = [HumanMessage(content="go")]
+    for i in range(30):
+        history += [AIMessage(content="x" * 100), HumanMessage(content=f"{i}" * 100)]
+    before = len(builder.build(system_parts=["s"], history=history).messages)
+    ctx = builder.build(system_parts=["s"], history=history)
+    builder.calibrate(ctx.raw_estimate, ctx.raw_estimate * 2)  # the provider saw twice as many
+    assert builder.scale > 1.2
+    after = len(builder.build(system_parts=["s"], history=history).messages)
+    assert after < before
+
+
+def test_calibrate_ignores_nonsense_readings() -> None:
+    builder = ContextBuilder(max_tokens=1000)
+    builder.calibrate(0, 500)
+    builder.calibrate(500, 0)
+    builder.calibrate(1000, 10)  # real lower than estimate: never loosens past 1.0
+    assert builder.scale == 1.0

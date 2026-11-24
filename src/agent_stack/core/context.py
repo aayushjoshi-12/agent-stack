@@ -53,6 +53,8 @@ class Context:
 
     system: tuple[str, ...]
     messages: tuple[BaseMessage, ...]
+    #: The builder's own (uncalibrated) token estimate of this context, for ``calibrate``.
+    raw_estimate: int = 0
 
 
 class Summarizer(Protocol):
@@ -137,6 +139,8 @@ class ContextBuilder:
         self.max_system_bytes = max_system_bytes
         self.max_tokens = max_tokens
         self.keep_tool_results = keep_tool_results
+        #: Real tokens per estimated token, learned from the provider's reported usage.
+        self.scale = 1.0
 
     def build(
         self,
@@ -158,7 +162,19 @@ class ContextBuilder:
             messages = [pinned, *_without_leading_tool_results(messages)]
         if self.max_tokens is not None:
             messages = self._fit_tokens(system, messages, pinned)
-        return Context(system=system, messages=tuple(messages))
+        raw = estimate_tokens(messages, sum(len(part) for part in system))
+        return Context(system=system, messages=tuple(messages), raw_estimate=raw)
+
+    def calibrate(self, raw_estimate: int, actual_tokens: int) -> None:
+        """Learn how far the estimate is off from the provider's reported input tokens.
+
+        The ratio is smoothed and kept between 1 and 3: it only ever makes the budget more
+        careful, and one odd reading cannot swing it.
+        """
+        if raw_estimate <= 0 or actual_tokens <= 0:
+            return
+        ratio = min(3.0, max(1.0, actual_tokens / raw_estimate))
+        self.scale = 0.5 * self.scale + 0.5 * ratio
 
     def _fit_tokens(
         self, system: tuple[str, ...], messages: list[BaseMessage], pinned: BaseMessage | None
@@ -167,7 +183,7 @@ class ContextBuilder:
         system_chars = sum(len(part) for part in system)
 
         def size(items: Sequence[BaseMessage]) -> int:
-            return estimate_tokens(items, system_chars)
+            return int(estimate_tokens(items, system_chars) * self.scale)
 
         if size(messages) <= self.max_tokens:
             return messages

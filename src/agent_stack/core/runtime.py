@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime
@@ -30,6 +31,20 @@ from agent_stack.tools.executor import ToolExecutionResult, ToolExecutor
 
 if TYPE_CHECKING:
     from agent_stack.persistence.base import CheckpointStore
+
+
+#: Reasoning that says "wait" / "actually" this many times in one step is going in circles.
+SPIRAL_THRESHOLD = 12
+SPIRAL_NUDGE = (
+    "[Your last reasoning went back and forth on the same point. Pick the best option now, "
+    "act on it, and check the result by running something; do not re-derive it.]"
+)
+_SECOND_GUESS_RE = re.compile(r"\b(wait|actually|hmm|but wait|on second thought)\b", re.IGNORECASE)
+
+
+def count_second_guessing(reasoning: str) -> int:
+    """How many times a step's reasoning stops to doubt itself (a sign of a reasoning spiral)."""
+    return len(_SECOND_GUESS_RE.findall(reasoning))
 
 
 def reasoning_text(message: AIMessage) -> str:
@@ -138,6 +153,7 @@ class AgentRuntime:
         self._event_bus = event_bus
         self._session_lock = session_lock
         self._context_builder = context_builder
+        self._last_raw_estimate = 0
         self._system_parts = system_parts
         self._approvals = approvals
 
@@ -218,6 +234,7 @@ class AgentRuntime:
         deadline = time.monotonic() + limits.max_runtime_seconds
         step_count = 0
         tool_call_count = 0
+        spiral_nudge = False
 
         await self._emit(
             EventType.RUN_STARTED,
@@ -236,6 +253,9 @@ class AgentRuntime:
                 if inbox is not None:
                     for text in inbox():
                         new_messages.append(HumanMessage(content=text))
+                if spiral_nudge:
+                    spiral_nudge = False
+                    new_messages.append(HumanMessage(content=SPIRAL_NUDGE))
                 response = await self._within(
                     deadline,
                     lambda: self._model.ainvoke(
@@ -252,6 +272,10 @@ class AgentRuntime:
                 step_count += 1
 
                 usage = usage_data(response)
+                if usage is not None and self._context_builder is not None:
+                    self._context_builder.calibrate(
+                        self._last_raw_estimate, int(usage["input_tokens"])
+                    )
                 if usage is not None:
                     await self._emit(
                         EventType.MODEL_USAGE,
@@ -262,6 +286,8 @@ class AgentRuntime:
                     )
 
                 reasoning = reasoning_text(response)
+                if count_second_guessing(reasoning) >= SPIRAL_THRESHOLD:
+                    spiral_nudge = True
                 if reasoning:
                     await self._emit(
                         EventType.MODEL_REASONING,
@@ -490,6 +516,7 @@ class AgentRuntime:
             history=[*history, *new_messages],
             pinned=new_messages[0] if new_messages else None,
         )
+        self._last_raw_estimate = ctx.raw_estimate
         return [SystemMessage(content="\n\n".join(ctx.system)), *ctx.messages]
 
     async def _save_session(self, session: Session, stored_version: int) -> None:

@@ -149,9 +149,8 @@ two trials in `agent-state/`):
 - **Handing work back.** With nobody to answer, the agent finished `configure-git-webserver` by
   listing steps for the user. Fixed (a guess, not yet measured): one-shot mode now says the run is
   unattended, to finish the work and to check it before stopping.
-- **Stopping early without testing the hard case** (`cancel-async-tasks`): not fixed.
-- **Reasoning spirals** on this model (`cobol-modernization`): not fixed; a harness-level answer
-  (reasoning effort, or a nudge after repeated self-doubt) still has to be tried.
+- **Stopping early without testing the hard case** (`cancel-async-tasks`): prompt now says to check every requirement, awkward cases first, by running something before stopping. A guess, not yet measured.
+- **Reasoning spirals** on this model (`cobol-modernization`): the runtime now counts "wait/actually/hmm" in a step's reasoning and, at 12 or more, adds a message telling the model to pick, act and verify. A guess, not yet measured.
 - **Verifier infrastructure** is part of the score: three trials failed because the grader could
   not download numpy under emulation, not because of the agent.
 
@@ -162,8 +161,8 @@ two trials in `agent-state/`):
 - The default 50-step limit ended a realistic feature task early; now `AGENT_STACK_MAX_STEPS`.
 - Shell commands are not workspace-confined (see Safety rules). Still open.
 - The token estimate (characters / 4) undercounts: with a 24k budget the real input reached 35k
-  (rag) and 36.7k (dominoes), about 1.5x over. To do: calibrate from the provider's reported
-  `input_tokens` of the previous call.
+  (rag) and 36.7k (dominoes), about 1.5x over. Fixed: the builder now learns a correction
+  ratio (1 to 3x, smoothed) from the provider's reported `input_tokens` after each call.
 - rag run, read from its transcript: 75 tool calls, the first edit at call 68 (about 90% of the step
   budget went on exploration), 44 of 54 shell calls were `cat`/`sed`/`grep`/`ls` reads, and the todo
   list was written twice (13 `todo_add` calls for about 6 items), which suggests the plan was
