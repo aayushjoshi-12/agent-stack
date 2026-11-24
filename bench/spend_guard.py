@@ -26,6 +26,15 @@ def usage(key: str) -> float:
         return float(json.load(response)["data"]["usage"])
 
 
+def stop_harbor() -> list[int]:
+    """SIGTERM every Harbor process; returns the pids signalled."""
+    out = subprocess.run(["pgrep", "-f", "venv/bin/harbor"], capture_output=True, text=True)
+    pids = [int(pid) for pid in out.stdout.split()]
+    for pid in pids:
+        os.kill(pid, signal.SIGTERM)
+    return pids
+
+
 def main() -> int:
     ceiling = float(sys.argv[1])
     poll = float(sys.argv[2]) if len(sys.argv) > 2 else 15.0
@@ -43,11 +52,7 @@ def main() -> int:
             last = now
         if now >= ceiling:
             print("guard: ceiling reached, stopping harbor", flush=True)
-            pids = subprocess.run(
-                ["pgrep", "-f", "venv/bin/harbor"], capture_output=True, text=True
-            ).stdout.split()
-            for pid in pids:
-                os.kill(int(pid), signal.SIGTERM)
+            stop_harbor()
             return 3
         time.sleep(poll)
 

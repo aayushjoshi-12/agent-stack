@@ -56,6 +56,18 @@ The TUI inherits your terminal's colours (no palette of its own). It assumes a d
 terminal; on a light terminal set `AGENT_STACK_THEME=ansi-light` (see
 [ADR 011](docs/decisions/011-terminal-native-theme.md)).
 
+## Ideas inbox
+
+One place for ideas from every project: `agent-stack ideas add <project> <title> <text>`,
+`agent-stack ideas list [--project P]`, `agent-stack ideas show <project> <title>`. The agent can
+use the same inbox through its `add_idea`, `list_ideas` and `read_idea` tools. Files live in
+`~/.agent-stack/ideas` (`AGENT_STACK_HOME`).
+
+## Headless runs
+
+`agent-stack run [--yes] <prompt|->` does one task without a UI. `--yes` approves every gated
+tool call, so only use it in a container. See `docs/BENCHMARKS.md` for how it was measured.
+
 ## Layout
 
 ```text

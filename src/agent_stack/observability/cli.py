@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_stack.app.config import AppConfig
+from agent_stack.memory.ideas import IdeaInbox
 from agent_stack.observability.audit import audit_log_path
 
 __all__ = ["main", "tail"]
@@ -36,6 +37,17 @@ def _parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--yes", action="store_true", help="approve every gated tool call (only inside a sandbox)"
     )
+    ideas = sub.add_parser("ideas", help="the cross-project ideas inbox (~/.agent-stack/ideas)")
+    ideas_sub = ideas.add_subparsers(dest="ideas_command", required=True)
+    ideas_list = ideas_sub.add_parser("list", help="list ideas, optionally for one project")
+    ideas_list.add_argument("--project", default=None)
+    ideas_add = ideas_sub.add_parser("add", help="save an idea")
+    ideas_add.add_argument("project")
+    ideas_add.add_argument("title")
+    ideas_add.add_argument("body", nargs="?", default="-", help="the idea, or '-' for stdin")
+    ideas_show = ideas_sub.add_parser("show", help="print one idea")
+    ideas_show.add_argument("project")
+    ideas_show.add_argument("title")
     sub.add_parser("tui", help="run the Textual terminal UI gateway")
     sub.add_parser("chat", help="run the line REPL gateway")
     sub.add_parser("telegram", help="run the Telegram bot gateway (needs TELEGRAM_BOT_TOKEN)")
@@ -127,6 +139,22 @@ def _run_web() -> int:
     return 0
 
 
+def _ideas(parsed: argparse.Namespace) -> int:
+    inbox = IdeaInbox(AppConfig.from_env().home)
+    try:
+        if parsed.ideas_command == "list":
+            print("\n".join(inbox.list(parsed.project)) or "No ideas yet.")
+        elif parsed.ideas_command == "add":
+            body = sys.stdin.read() if parsed.body == "-" else parsed.body
+            print(f"saved {inbox.add(parsed.project, parsed.title, body)}")
+        else:
+            print(inbox.read(parsed.project, parsed.title))
+    except (ValueError, FileNotFoundError) as exc:
+        print(f"ideas: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Dispatch the CLI; with no arguments, launch the TUI."""
     args = list(sys.argv[1:] if argv is None else argv)
@@ -140,6 +168,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if parsed.command == "run":
         return _run_once(parsed.prompt, parsed.yes)
+    if parsed.command == "ideas":
+        return _ideas(parsed)
     if parsed.command == "tui":
         return _run_tui()
     if parsed.command == "chat":

@@ -1,7 +1,7 @@
 [project]
 name = "agent-stack"
 version = "0.1.0"
-description = "Add your description here"
+description = "A personal agent runtime with terminal, Telegram and web gateways"
 readme = "README.md"
 authors = [
     { name = "aayush joshi", email = "joshiaayush1244@gmail.com" }
