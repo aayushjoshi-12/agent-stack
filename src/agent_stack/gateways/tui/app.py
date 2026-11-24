@@ -38,6 +38,7 @@ from agent_stack.gateways.tui.theme import DARK, DEFAULT_THEME, LIGHT, THEMES
 from agent_stack.gateways.tui.widgets import (
     AgentMessage,
     ApprovalScreen,
+    BranchesScreen,
     ChangesScreen,
     Disclosure,
     HeaderBar,
@@ -78,6 +79,8 @@ class TuiCommands(Provider):
             ("New conversation", app.action_new_session),
             ("Switch conversation…", app.action_switch_session),
             ("Rewind to an earlier message…", app.action_rewind),
+            ("Show conversation branches", app.action_show_branches),
+            ("Copy a reference to this point", app.action_make_reference),
             ("Put this conversation's files in the folder", app.action_restore_files),
             ("Toggle sidebar", app.action_toggle_sidebar),
             ("Switch dark / light theme", app.action_toggle_theme),
@@ -211,7 +214,54 @@ class TuiApp(App[None]):
         if self._busy():
             return
         self.query_one("#prompt", PromptArea).clear_text()
+        if text.strip().startswith("asref://"):  # a pasted reference opens; it is not a prompt
+            await self._open_reference(text.strip())
+            return
         await self._submit_prompt(text)
+
+    async def _open_reference(self, reference: str) -> None:
+        """Open a point shared from another conversation as a new one."""
+        try:
+            opened = await self.application.timeline.open_reference(reference)
+        except Exception as exc:
+            self.notify(f"Cannot open that reference: {exc}", severity="error")
+            return
+        self._titles[opened] = "from a reference"
+        await self._open_session(opened)  # also warns when the folder holds other files
+        self.notify("Opened from a reference. Its history is above; continue from here.")
+
+    async def action_show_branches(self) -> None:
+        """Draw the branches of the open conversation."""
+        if self._session_id is None:
+            self.notify("Nothing to show yet.")
+            return
+        try:
+            text = await self.application.timeline.tree_text(self._session_id)
+        except Exception as exc:
+            self.notify(f"Cannot draw the branches: {exc}", severity="error")
+            return
+        self.push_screen(BranchesScreen(text))
+
+    async def action_make_reference(self) -> None:
+        """Name the last finished turn so another conversation can open it."""
+        if self._session_id is None:
+            self.notify("Nothing to reference yet.")
+            return
+        try:
+            timeline = self.application.timeline
+            done = [t for t in await timeline.turns(self._session_id) if t.completed_event_id]
+            if not done:
+                self.notify("Nothing has finished in this conversation yet.")
+                return
+            reference = await timeline.reference(self._session_id, str(done[-1].index))
+        except Exception as exc:
+            self.notify(f"Cannot make a reference: {exc}", severity="error")
+            return
+        self.copy_to_clipboard(reference)
+        self.notify(
+            f"Copied. Paste it into another conversation's prompt and press enter:\n{reference}",
+            timeout=15,
+        )
 
     async def _submit_prompt(self, text: str) -> None:
         self._remove_welcome()

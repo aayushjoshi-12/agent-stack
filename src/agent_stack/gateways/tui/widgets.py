@@ -756,6 +756,28 @@ class SessionPicker(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+class BranchesScreen(ModalScreen[None]):
+    """The branch tree of the open conversation as text; Esc closes."""
+
+    BINDINGS: ClassVar[list[Any]] = [Binding("escape,q", "close", "close")]
+
+    def __init__(self, text: str) -> None:
+        super().__init__()
+        self._text = text
+
+    def compose(self):  # type: ignore[no-untyped-def]
+        with Vertical(id="picker-card"):
+            yield Static(
+                "[bold $primary]Branches[/]  [$foreground-muted]* is this one[/]", id="picker-title"
+            )
+            with VerticalScroll(id="changes-scroll"):
+                yield Static(escape(self._text))
+            yield Static("[$foreground-muted]esc close[/]", id="picker-foot")
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
 #: What a rewind restores, in the order the picker offers them.
 REWIND_CHOICES = (
     ("both", "Restore code and conversation"),

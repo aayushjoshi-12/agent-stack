@@ -128,7 +128,7 @@ Footer { background: $surface; }
 /* ── help overlay ───────────────────────────────────────────────────────── */
 /* Modals share one look. Declared after `Screen`, whose background would otherwise replace
    the modal's dimmed backdrop. Cards differ only in width and the colour of the left bar. */
-HelpScreen, ApprovalScreen, SessionPicker, RewindScreen {
+HelpScreen, ApprovalScreen, SessionPicker, RewindScreen, BranchesScreen {
     align: center middle;
     background: $background 70%;
 }

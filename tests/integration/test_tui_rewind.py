@@ -114,3 +114,31 @@ async def test_opening_the_original_warns_and_the_palette_action_restores_its_fi
         await app.action_restore_files()
         await _settle(pilot)
         assert (w.workspace / "a.txt").read_text() == "v2\n"  # now the original's state
+
+
+async def test_branches_screen_reference_copy_and_pasting_a_reference_opens_it(
+    tmp_path: Path,
+) -> None:
+    from agent_stack.gateways.tui.widgets import BranchesScreen
+
+    w = await _two_turns(tmp_path)
+    app = TuiApp(w.app, session_id="s1")
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _settle(pilot)
+        await app.action_show_branches()
+        await _settle(pilot)
+        assert isinstance(app.screen, BranchesScreen)
+        await pilot.press("escape")
+        await _settle(pilot)
+
+        before = len(await w.app.session_store.get_messages("s1"))
+        await app.action_make_reference()
+        await _settle(pilot)
+        ref = next(n.message.split("\n")[1] for n in app._notifications if "asref://" in n.message)
+        assert ref.startswith("asref://")
+
+        app.query_one("#prompt", PromptArea).load_text(ref)
+        await pilot.press("enter")
+        await _settle(pilot)
+        assert app._session_id not in (None, "s1")  # a fork of s1 is now open
+        assert len(await w.app.session_store.get_messages("s1")) == before  # nothing was sent
