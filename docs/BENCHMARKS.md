@@ -118,7 +118,16 @@ title/summary calls). It is a 15-task sample on a cheap model; the confidence in
 (roughly 20 to 70%), and it is not comparable to leaderboard numbers.
 
 Re-run of the three grader failures with `--ve UV_HTTP_TIMEOUT=600` (job
-`tb2-glm53flash-rerun-infra`): see below once finished.
+`tb2-glm53flash-rerun-infra`, same agent code as the 15-task run). The grader ran this time:
+
+| Task | Reward | Notes |
+|---|---|---|
+| build-pmars | 1 | passes once the grader can download its dependencies |
+| adaptive-rejection-sampler | 0 | 0 of 9 tests: the expected `ars` function and sample files were not produced |
+| compile-compcert | 0 | 0 of 3 tests: `/tmp/CompCert/ccomp` was never built |
+
+Corrected score: **7 / 15 = 47%**. The grader failures were not all agent successes: one of the
+three passed, two were real failures.
 
 Known limits of this setup: the task images are amd64 and run emulated on an Apple-silicon Mac,
 so agent install is slow and wall-clock times are not representative; a handful of tasks is a tiny
