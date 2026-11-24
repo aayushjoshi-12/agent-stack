@@ -276,6 +276,24 @@ class Timeline:
         return event
 
     # ── files ────────────────────────────────────────────────────────────────
+    async def folder_state(self) -> str | None:
+        """The conversation whose files the working folder currently holds, if known."""
+        store = self._app.change_store
+        return None if store is None else await store.folder_state()
+
+    async def files_differ(self, session_id: str) -> bool:
+        """True when putting the folder in ``session_id``'s state would change something."""
+        source = await self.folder_state()
+        if source is None or source == session_id:
+            return False
+        result = await self.switch_files(source, session_id, dry_run=True)
+        return bool(result.moved or result.conflicts)
+
+    async def restore_files(self, session_id: str, *, force: bool = False) -> SwitchResult:
+        """Put the folder in ``session_id``'s file state (from whatever it holds now)."""
+        source = await self.folder_state() or session_id
+        return await self.switch_files(source, session_id, force=force)
+
     async def switch_files(
         self, from_session: str, to_session: str, *, force: bool = False, dry_run: bool = False
     ) -> SwitchResult:
@@ -312,6 +330,8 @@ class Timeline:
                     file.parent.mkdir(parents=True, exist_ok=True)
                     file.write_text(desired, encoding="utf-8")
                 result.moved.append(FileMove(path, "wrote"))
+        if not dry_run and not result.conflicts:
+            await app.change_store.set_folder_state(to_session)
         return result
 
     # ── go back / fork ───────────────────────────────────────────────────────

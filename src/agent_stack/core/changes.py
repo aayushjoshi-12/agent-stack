@@ -96,6 +96,12 @@ class ChangeStore(ChangeRecorder, Protocol):
         """Every recorded edit of a conversation (subagent runs included), oldest first."""
         ...
 
+    async def folder_state(self) -> str | None:
+        """The conversation whose file state the working folder was last put in, if known."""
+        ...
+
+    async def set_folder_state(self, session_id: str) -> None: ...
+
     async def copy_upto(self, source: str, target: str, upto: str) -> int:
         """Copy ``source``'s edits made at or before ``upto`` (ISO time) into ``target``.
 

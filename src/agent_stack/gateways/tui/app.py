@@ -138,8 +138,6 @@ class TuiApp(App[None]):
         self.theme = wanted if wanted in self.available_themes else DEFAULT_THEME
 
         self._last_escape = 0.0
-        #: The conversation whose file state the folder was last put in (None: unknown).
-        self._folder_state: str | None = session_id
         self._active_run_id: str | None = None
         self._run_active = False
         self._cancel_sent = False
@@ -446,8 +444,6 @@ class TuiApp(App[None]):
         self._last_outcome = "cancelled" if self._cancel_sent and outcome == "failed" else outcome
         self._run_active = False
         self._cancel_sent = False
-        if self._session_id is not None:
-            self._folder_state = self._session_id  # this conversation's edits are what is on disk
         for card in self.cards.values():
             if card.status == "running":
                 card.finish("done")
@@ -651,14 +647,11 @@ class TuiApp(App[None]):
         """Put the folder in this conversation's file state (after opening another one)."""
         if self._busy() or self._session_id is None:
             return
-        source = self._folder_state or self._session_id
         try:
-            result = await self.application.timeline.switch_files(source, self._session_id)
+            result = await self.application.timeline.restore_files(self._session_id)
         except Exception as exc:
             self.notify(f"Could not restore files: {exc}", severity="error")
             return
-        if not result.conflicts:
-            self._folder_state = self._session_id
         moved = len(result.moved)
         text = (
             f"{moved} file{'s' if moved != 1 else ''} restored."
@@ -671,14 +664,11 @@ class TuiApp(App[None]):
 
     async def _warn_if_files_differ(self, session_id: str) -> None:
         """After opening a conversation: say so when the folder is in another one's state."""
-        source = self._folder_state
-        if source is None or source == session_id:
-            return
         try:
-            result = await self.application.timeline.switch_files(source, session_id, dry_run=True)
+            differ = await self.application.timeline.files_differ(session_id)
         except Exception:
             return
-        if result.moved or result.conflicts:
+        if differ:
             self.notify(
                 "The files in the folder match another conversation. "
                 "ctrl+p, then 'Put this conversation's files in the folder' to match this one.",
@@ -704,8 +694,6 @@ class TuiApp(App[None]):
         except Exception as exc:
             self.notify(f"Rewind failed: {exc}", severity="error")
             return
-        if mode in ("both", "code") and not outcome.files.conflicts:
-            self._folder_state = outcome.session_id
         if outcome.session_id != current:
             self._titles[outcome.session_id] = "rewound"
             await self._open_session(outcome.session_id)

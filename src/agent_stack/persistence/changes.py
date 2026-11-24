@@ -38,9 +38,24 @@ class LocalChangeStore:
         self._db = db
         self._root = Path(root)
 
+    async def folder_state(self) -> str | None:
+        marker = self._root / ".folder-state"
+        try:
+            return await asyncio.to_thread(marker.read_text, encoding="utf-8") or None
+        except OSError:
+            return None
+
+    async def set_folder_state(self, session_id: str) -> None:
+        def write() -> None:
+            self._root.mkdir(parents=True, exist_ok=True)
+            (self._root / ".folder-state").write_text(session_id, encoding="utf-8")
+
+        await asyncio.to_thread(write)
+
     async def record(
         self, *, session_id: str, run_id: str, path: str, before: str | None, after: str
     ) -> None:
+        await self.set_folder_state(session_id)  # the folder now holds this conversation's edit
         await self._record_at(
             session_id, run_id, path, before, after, datetime.now(UTC).isoformat()
         )
