@@ -38,6 +38,13 @@ def _default_home() -> Path:
     return Path(raw).expanduser() if raw else Path.home() / ".agent-stack"
 
 
+def _fetch_mode(raw: str) -> str:
+    mode = raw.strip().lower()
+    if mode not in ("reader", "direct"):
+        raise ConfigurationError("AGENT_STACK_FETCH_MODE must be 'reader' or 'direct'")
+    return mode
+
+
 @dataclass(frozen=True)
 class AppConfig:
     """Immutable application configuration.
@@ -64,6 +71,10 @@ class AppConfig:
     max_steps: int = 50
     #: Wall-clock seconds one run may take before it is stopped. ``AGENT_STACK_MAX_RUNTIME``.
     max_runtime_seconds: float = 1800.0
+    #: How ``web_fetch`` gets a page: ``reader`` (a free reader service fetches it, so this machine
+    #: never connects to arbitrary hosts, but that service sees the URL) or ``direct``.
+    #: ``AGENT_STACK_FETCH_MODE``.
+    fetch_mode: str = "reader"
     #: Refuse shell commands that name paths outside the workspace (``find /``, a sibling repo).
     #: A guard against accidents, not a sandbox. Turn off (``AGENT_STACK_SHELL_CONFINED=0``)
     #: only inside a container that is the sandbox.
@@ -73,7 +84,13 @@ class AppConfig:
     budget_usd: float | None = None
     #: Tools that pause for a human's approval before they run. Comma-separated in
     #: ``AGENT_STACK_APPROVAL_TOOLS``; set it empty to run everything unattended.
-    approval_tools: tuple[str, ...] = ("run_command", "write_file", "edit_file", "web_fetch", "monitor_start")
+    approval_tools: tuple[str, ...] = (
+        "run_command",
+        "write_file",
+        "edit_file",
+        "web_fetch",
+        "monitor_start",
+    )
     workspace: Path = field(default_factory=Path.cwd)
     #: Where state shared by every project lives (global instructions, ideas, cross-project
     #: memory). ``AGENT_STACK_HOME``; defaults to ``~/.agent-stack``.
@@ -139,6 +156,7 @@ class AppConfig:
             context_window=int(source.get("AGENT_STACK_CONTEXT_WINDOW", defaults.context_window)),
             context_budget=int(source.get("AGENT_STACK_CONTEXT_BUDGET", defaults.context_budget)),
             max_steps=int(source.get("AGENT_STACK_MAX_STEPS", defaults.max_steps)),
+            fetch_mode=_fetch_mode(source.get("AGENT_STACK_FETCH_MODE", defaults.fetch_mode)),
             max_runtime_seconds=float(
                 source.get("AGENT_STACK_MAX_RUNTIME", defaults.max_runtime_seconds)
             ),

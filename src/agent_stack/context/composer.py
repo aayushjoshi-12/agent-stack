@@ -70,7 +70,6 @@ class SystemPromptComposer:
 
         return tuple(parts)
 
-
     async def _todo_block(self) -> str | None:
         """The session's todo list, shown on every call so clearing old messages cannot lose it."""
         context = current_run_context()
@@ -79,9 +78,7 @@ class SystemPromptComposer:
         items = await self._todos.list_items(context.session_id)
         if not items:
             return None
-        lines = [
-            f"[{'x' if i.status is TodoStatus.DONE else ' '}] {i.id}. {i.text}" for i in items
-        ]
+        lines = [f"[{'x' if i.status is TodoStatus.DONE else ' '}] {i.id}. {i.text}" for i in items]
         return f"{_TODOS_HEADER}\n\n" + "\n".join(lines)
 
 

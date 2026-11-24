@@ -15,7 +15,9 @@ __all__ = ["monitor_tools"]
 _NO_RUN = "Error: monitors are only available inside a run."
 
 
-def monitor_tools(service: MonitorService, workspace: Path, *, confine: bool = True) -> tuple[BaseTool, ...]:
+def monitor_tools(
+    service: MonitorService, workspace: Path, *, confine: bool = True
+) -> tuple[BaseTool, ...]:
     def session() -> str | None:
         context = current_run_context()
         return None if context is None else context.session_id

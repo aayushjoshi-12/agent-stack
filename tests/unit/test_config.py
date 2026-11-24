@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from agent_stack.app.config import AppConfig
 
 
@@ -85,3 +87,12 @@ def test_max_steps_comes_from_env() -> None:
 def test_max_runtime_is_configurable() -> None:
     assert AppConfig.from_env({}).max_runtime_seconds == 1800.0
     assert AppConfig.from_env({"AGENT_STACK_MAX_RUNTIME": "7200"}).max_runtime_seconds == 7200.0
+
+
+def test_fetch_mode_defaults_to_reader_and_is_validated() -> None:
+    assert AppConfig.from_env({}).fetch_mode == "reader"
+    assert AppConfig.from_env({"AGENT_STACK_FETCH_MODE": "Direct"}).fetch_mode == "direct"
+    from agent_stack.core.errors import ConfigurationError
+
+    with pytest.raises(ConfigurationError):
+        AppConfig.from_env({"AGENT_STACK_FETCH_MODE": "proxy"})

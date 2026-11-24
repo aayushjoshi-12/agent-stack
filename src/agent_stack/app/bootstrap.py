@@ -221,7 +221,7 @@ def build_application(config: AppConfig | None = None) -> Application:
             *idea_tools(IdeaInbox(resolved.home)),
             *persistent_memory_tools(SqliteMemoryStore(db)),
             *todo_tools(todo_store),
-            *web_tools(),
+            *web_tools(mode=resolved.fetch_mode),
             *timeline_tools(lambda: app_holder[0] if app_holder else None),
             *monitor_tools(monitors, workspace, confine=resolved.shell_confined),
             *artifact_tools(artifacts),

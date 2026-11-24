@@ -28,7 +28,7 @@ def _public(host: str) -> list[str]:
 
 
 def _tools(handler: httpx.MockTransport) -> dict[str, object]:
-    return {t.name: t for t in web_tools(transport=handler, resolver=_public)}
+    return {t.name: t for t in web_tools(mode="direct", transport=handler, resolver=_public)}
 
 
 def test_extract_text_drops_scripts_and_keeps_structure() -> None:
@@ -104,3 +104,22 @@ async def test_search_lists_results_and_handles_failure() -> None:
     blocked = httpx.MockTransport(lambda r: httpx.Response(202, text=""))
     assert "HTTP 202" in await _tools(blocked)["web_search"].ainvoke({"query": "q"})  # type: ignore[attr-defined]
     assert (await _tools(ok)["web_search"].ainvoke({"query": "  "})).startswith("Error")  # type: ignore[attr-defined]
+
+
+async def test_reader_mode_only_talks_to_the_reader_and_refuses_private_urls() -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, text="Title: T\n\nMarkdown Content:\nhello")
+
+    tools = {
+        t.name: t
+        for t in web_tools(mode="reader", transport=httpx.MockTransport(handler), resolver=_public)
+    }
+    out = await tools["web_fetch"].ainvoke({"url": "https://example.org/a?x=1"})  # type: ignore[attr-defined]
+    assert seen == ["https://r.jina.ai/https://example.org/a?x=1"]
+    assert out.startswith("[Untrusted web content") and "hello" in out
+    for bad in ("http://127.0.0.1/", "http://169.254.169.254/", "https://user:pw@example.org/"):
+        assert (await tools["web_fetch"].ainvoke({"url": bad})).startswith("Error:")  # type: ignore[attr-defined]
+    assert len(seen) == 1  # nothing private or credentialed was sent out
