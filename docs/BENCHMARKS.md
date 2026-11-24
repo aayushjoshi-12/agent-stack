@@ -90,11 +90,35 @@ OPENROUTER_API_KEY=... $B/hrun.sh run -d terminal-bench@2.0 \
   -m openrouter:<provider>/<model> -n 1 -l <tasks> -o $B/jobs
 ```
 
-Results: see the table below (filled as runs complete).
+Run `tb2-glm53flash-15`: model `z-ai/glm-5.3-flash`, the first 15 tasks of the dataset in its own
+order, one attempt each, two trials at a time, **no per-trial caps** (step limit 500, context budget
+120k, Terminal-Bench's own per-task timeouts), commit `80ffa36`+ (before the fixes listed below).
 
-| Model | Tasks run | Passed | Cost (USD) | Notes |
-|---|---|---|---|---|
-| | | | | |
+| Task | Reward | Agent cost | Notes |
+|---|---|---|---|
+| bn-fit-modify | 1 | $0.033 | |
+| break-filter-js-from-html | 1 | $0.013 | |
+| build-pov-ray | 1 | $0.020 | |
+| chess-best-move | 1 | $0.099 | |
+| circuit-fibsqrt | 1 | $0.097 | |
+| constraints-scheduling | 1 | $0.005 | |
+| cancel-async-tasks | 0 | $0.011 | 5 of 6 tests; stopped after 9 calls without testing the failing case (cancellation while tasks wait on the semaphore) |
+| configure-git-webserver | 0 | $0.008 | finished with "what's left for you" (add your key, make the hostname resolve) instead of doing it |
+| cobol-modernization | 0 | $0.090 | 1 of 3 tests; long reasoning spirals ("WAIT WAIT WAIT", 114k output tokens in 27 calls) |
+| build-cython-ext | 0 | $0.199 | 260 model calls, still exploring at the end; see "context window" below |
+| caffe-cifar-10 | 0 | n/a | agent timeout (1200 s) while compiling Caffe under emulation |
+| code-from-image | 0 | n/a | agent-stack crashed: Rich markup error on a `[/` in tool output (fixed) |
+| adaptive-rejection-sampler | 0 | $0.066 | **grader failure**: numpy download timed out (re-run below) |
+| build-pmars | 0 | $0.052 | **grader failure**: same |
+| compile-compcert | 0 | $0.022 | **grader failure**: same |
+
+**6 / 15 = 40%** as scored, **6 / 12 = 50%** if the three grader failures are excluded. Total spend
+for the run: about **$0.91** (the key's own usage counter, which also covers the agent's
+title/summary calls). It is a 15-task sample on a cheap model; the confidence interval is wide
+(roughly 20 to 70%), and it is not comparable to leaderboard numbers.
+
+Re-run of the three grader failures with `--ve UV_HTTP_TIMEOUT=600` (job
+`tb2-glm53flash-rerun-infra`): see below once finished.
 
 Known limits of this setup: the task images are amd64 and run emulated on an Apple-silicon Mac,
 so agent install is slow and wall-clock times are not representative; a handful of tasks is a tiny
@@ -102,6 +126,25 @@ sample; no repeats (Terminal-Bench's own rules ask for 5 attempts per task for a
 entry, so none of this is leaderboard-eligible).
 
 ## What these runs found (and fixed)
+
+From the Terminal-Bench transcripts (`agent/agent-stack.txt` per trial; the full session state for
+two trials in `agent-state/`):
+
+- **A Rich markup crash.** Tool output containing `[/...]` was printed through Rich's markup
+  parser and killed the run (`code-from-image`). Fixed: raw text is never parsed as markup; a test
+  fails without the fix.
+- **Context window.** The builder kept only the last 40 messages even with a token budget. A long
+  task (`build-cython-ext`: 260 calls, 1.7M input tokens, about 6.5k per call) therefore kept
+  forgetting its own progress and re-planning. Fixed: the token budget alone decides what is kept,
+  and when messages are dropped the model is told so.
+- **Handing work back.** With nobody to answer, the agent finished `configure-git-webserver` by
+  listing steps for the user. Fixed (a guess, not yet measured): one-shot mode now says the run is
+  unattended, to finish the work and to check it before stopping.
+- **Stopping early without testing the hard case** (`cancel-async-tasks`): not fixed.
+- **Reasoning spirals** on this model (`cobol-modernization`): not fixed; a harness-level answer
+  (reasoning effort, or a nudge after repeated self-doubt) still has to be tried.
+- **Verifier infrastructure** is part of the score: three trials failed because the grader could
+  not download numpy under emulation, not because of the agent.
 
 - A run longer than ~20 tool calls dropped the user's own request from the model's input
   (message-count window). Fixed: the request is pinned (`ContextBuilder.build(pinned=...)`).
