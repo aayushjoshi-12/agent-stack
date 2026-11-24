@@ -16,6 +16,7 @@ from agent_stack.core.approval import ApprovalBroker, ToolPolicy
 from agent_stack.core.context import ContextBuilder
 from agent_stack.core.errors import ConfigurationError
 from agent_stack.core.factory import AgentFactory
+from agent_stack.core.limits import AgentLimits
 from agent_stack.core.locks import SessionLockManager
 from agent_stack.core.run import RunManager
 from agent_stack.core.workspace import WorkspacePolicy
@@ -193,6 +194,7 @@ def build_application(config: AppConfig | None = None) -> Application:
             ),
         ),
         system_prompt=DEFAULT_SYSTEM_PROMPT,
+        limits=AgentLimits(max_steps=resolved.max_steps, max_tool_calls=2 * resolved.max_steps),
         tool_policy=ToolPolicy(frozenset(resolved.approval_tools)),
     )
     title_model = small

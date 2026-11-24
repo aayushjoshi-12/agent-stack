@@ -121,7 +121,9 @@ def test_the_runs_request_survives_a_long_run() -> None:
     request = HumanMessage(content="THE GOAL")
     messages = [request] + [m for i in range(30) for m in _tool_turn(i)]  # 61 messages > window 40
 
-    ctx = ContextBuilder(recent_window=40).build(system_parts=["base"], history=messages, pinned=request)
+    ctx = ContextBuilder(recent_window=40).build(
+        system_parts=["base"], history=messages, pinned=request
+    )
 
     assert ctx.messages[0] is request
     assert isinstance(ctx.messages[1], AIMessage)  # no orphaned tool result after the pin

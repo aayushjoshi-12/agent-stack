@@ -138,3 +138,20 @@ async def test_cli_prints_no_cost_line_before_anything_was_spent() -> None:
     output = await _run_with_input(application, "hello\nexit\n")
 
     assert "spent so far" not in output
+
+
+async def test_run_once_rejects_gated_tools_unless_approve_all() -> None:
+    from agent_stack.gateways.cli import run_once
+
+    for approve_all in (False, True):
+        application = FakeApplication(events=_approval_events())
+
+        code = await run_once(
+            application,  # type: ignore[arg-type]
+            "go",
+            approve_all=approve_all,
+            out=Console(file=io.StringIO()),
+        )
+
+        assert code == 0
+        assert [d[-1] for d in application.decisions] == [approve_all]

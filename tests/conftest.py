@@ -16,7 +16,9 @@ dotenv.load_dotenv = lambda *args, **kwargs: False  # type: ignore[assignment]
 
 
 @pytest.fixture(autouse=True)
-def _isolated_home(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+def _isolated_home(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Never read or write the developer's real ``~/.agent-stack``."""
     monkeypatch.setenv("AGENT_STACK_HOME", str(tmp_path_factory.mktemp("agent-stack-home")))
 

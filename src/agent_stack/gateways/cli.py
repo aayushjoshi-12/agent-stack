@@ -159,3 +159,32 @@ async def run_cli(
         except KeyboardInterrupt:
             break
     console.print("[dim]bye[/dim]")
+
+
+async def run_once(
+    application: Application,
+    prompt: str,
+    *,
+    approve_all: bool = False,
+    principal: str = "cli-run",
+    out: Console | None = None,
+) -> int:
+    """One-shot, non-interactive run: stream the events, return 0 on success, 1 on failure.
+
+    Gated tools are rejected unless ``approve_all`` (the caller vouches for the sandbox).
+    """
+    console = out if out is not None else Console()
+
+    async def decide(_event: AgentEvent) -> bool:
+        return approve_all
+
+    session = await application.new_session(principal)
+    envelope = MessageEnvelope(principal=principal, session=session, text=prompt)
+    gateway = LineGateway(out=console, approver=decide)
+    try:
+        async for _event in gateway.handle_message(application, envelope):
+            pass
+    except Exception as exc:
+        console.print(f"[red]run failed:[/] {type(exc).__name__}: {exc}")
+        return 1
+    return 0

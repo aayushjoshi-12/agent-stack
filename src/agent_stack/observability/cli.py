@@ -31,6 +31,11 @@ def _parser() -> argparse.ArgumentParser:
     tail_parser.add_argument(
         "--from-sequence", type=int, default=0, help="skip sequences below this"
     )
+    run_parser = sub.add_parser("run", help="run one prompt non-interactively, then exit")
+    run_parser.add_argument("prompt", help="the task, or '-' to read it from stdin")
+    run_parser.add_argument(
+        "--yes", action="store_true", help="approve every gated tool call (only inside a sandbox)"
+    )
     sub.add_parser("tui", help="run the Textual terminal UI gateway")
     sub.add_parser("chat", help="run the line REPL gateway")
     sub.add_parser("telegram", help="run the Telegram bot gateway (needs TELEGRAM_BOT_TOKEN)")
@@ -74,6 +79,16 @@ def _run_chat() -> int:
 
     asyncio.run(run_cli(build_application()))
     return 0
+
+
+def _run_once(prompt: str, yes: bool) -> int:
+    import asyncio
+
+    from agent_stack.app.bootstrap import build_application
+    from agent_stack.gateways.cli import run_once
+
+    text = sys.stdin.read() if prompt == "-" else prompt
+    return asyncio.run(run_once(build_application(), text, approve_all=yes))
 
 
 def _run_telegram() -> int:
@@ -123,6 +138,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         path = audit_log_path(AppConfig.from_env().workspace)
         tail(path, run_id=parsed.run_id, from_sequence=parsed.from_sequence)
         return 0
+    if parsed.command == "run":
+        return _run_once(parsed.prompt, parsed.yes)
     if parsed.command == "tui":
         return _run_tui()
     if parsed.command == "chat":

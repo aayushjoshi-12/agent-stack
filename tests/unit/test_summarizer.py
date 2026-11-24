@@ -12,7 +12,9 @@ async def test_transcript_is_sent_as_data_and_the_result_is_cached() -> None:
     model = FakeChatModel([ai("GOAL: fix it"), ai("should not be used")])
     history = [
         HumanMessage(content="fix the bug in a.py"),
-        AIMessage(content="", tool_calls=[{"name": "read_file", "args": {"path": "a.py"}, "id": "1"}]),
+        AIMessage(
+            content="", tool_calls=[{"name": "read_file", "args": {"path": "a.py"}, "id": "1"}]
+        ),
         ToolMessage(content="y" * 5000, tool_call_id="1", name="read_file"),
     ]
     summarizer = LLMSummarizer(model)  # type: ignore[arg-type]
