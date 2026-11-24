@@ -68,6 +68,20 @@ use the same inbox through its `add_idea`, `list_ideas` and `read_idea` tools. F
 `agent-stack run [--yes] <prompt|->` does one task without a UI. `--yes` approves every gated
 tool call, so only use it in a container. See `docs/BENCHMARKS.md` for how it was measured.
 
+## Web, monitors, history
+
+- `web_search` (DuckDuckGo, no key) and `web_fetch` (public http/https only; private addresses
+  are refused, and each fetch needs approval). Results are labelled untrusted.
+- `monitor_start` watches a command in the background with no model calls and leaves a note only
+  when the output changes, matches a pattern, or the command succeeds; notes appear at the top of
+  your next message. Stops itself after an hour or ten notes.
+- History: `agent-stack turns|tree|fork|rewind|switch|ref ...`. A rewind forks at the point and
+  puts the files back; the original conversation keeps everything after it, and `switch` returns
+  the folder to any branch. `agent-stack tree <session> --html tree.html` draws the branches.
+  `agent-stack ref make <session> <turn>` prints an `asref://` string another chat can read with
+  `read_reference` or open with `ref open`. Only `write_file`/`edit_file` changes are tracked,
+  not files changed by shell commands.
+
 ## Layout
 
 ```text

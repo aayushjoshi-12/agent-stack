@@ -129,3 +129,59 @@ async def test_a_reference_describes_a_point_and_opens_as_a_new_conversation(
         parse_ref("https://example.org")
     with pytest.raises(PersistenceError):
         await w.app.timeline.event("s1", "9")
+
+
+async def test_the_command_line_drives_the_same_operations(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import argparse
+
+    from agent_stack.observability import history_cli
+
+    w = await _two_turns(tmp_path)
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="command")
+    history_cli.add_parsers(sub)
+
+    async def cli(*argv: str) -> tuple[int, str]:
+        code = await history_cli.run(w.app, parser.parse_args(list(argv)))
+        return code, capsys.readouterr().out
+
+    code, out = await cli("turns", "s1")
+    assert code == 0 and "make a" in out and "2 file(s)" in out
+    code, out = await cli("ref", "make", "s1", "1")
+    assert code == 0 and out.startswith("asref://")
+    ref = out.strip()
+    code, out = await cli("ref", "show", ref)
+    assert code == 0 and "USER: make a" in out
+    code, out = await cli("rewind", "s1", "1")
+    assert code == 0 and "deleted b.txt" in out and "wrote a.txt" in out
+    branch = out.split()[2]
+    code, out = await cli("tree", branch, "--html", str(tmp_path / "t.html"))
+    assert code == 0 and "o s1" in out and (tmp_path / "t.html").read_text().count("mermaid") >= 2
+    code, out = await cli("switch", branch, "s1")
+    assert code == 0 and (w.workspace / "b.txt").exists()
+    code, out = await cli("rewind", "s1", "99")
+    assert code == 1 and out.startswith("error:")
+    code, out = await cli("sessions")
+    assert code == 0 and "(branch of s1)" in out
+
+
+async def test_agent_tools_name_read_and_draw(tmp_path: Path) -> None:
+    from agent_stack.app.timeline_tools import timeline_tools
+    from agent_stack.core.agent import Agent
+    from agent_stack.core.run_context import RunContext, run_context
+
+    w = await _two_turns(tmp_path)
+    tools = {t.name: t for t in timeline_tools(lambda: w.app)}
+    context = RunContext(
+        run_id="r", session_id="s1", user_id="u", depth=0, parent_run_id=None,
+        agent=Agent(name="a", model="test:m"), services=None,  # type: ignore[arg-type]
+    )  # fmt: skip
+    assert "inside a run" in await tools["show_branches"].ainvoke({})
+    with run_context(context):
+        ref = await tools["reference_here"].ainvoke({})
+        assert ref.startswith("asref://")
+        assert "a.txt" in await tools["read_reference"].ainvoke({"reference": ref})
+        assert "* s1" in await tools["show_branches"].ainvoke({})  # the current one is starred
+    assert (await tools["read_reference"].ainvoke({"reference": "nope"})).startswith("Error")

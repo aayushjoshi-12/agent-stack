@@ -17,6 +17,7 @@ from typing import Any
 
 from agent_stack.app.config import AppConfig
 from agent_stack.memory.ideas import IdeaInbox
+from agent_stack.observability import history_cli
 from agent_stack.observability.audit import audit_log_path
 
 __all__ = ["main", "tail"]
@@ -48,6 +49,7 @@ def _parser() -> argparse.ArgumentParser:
     ideas_show = ideas_sub.add_parser("show", help="print one idea")
     ideas_show.add_argument("project")
     ideas_show.add_argument("title")
+    history_cli.add_parsers(sub)
     sub.add_parser("tui", help="run the Textual terminal UI gateway")
     sub.add_parser("chat", help="run the line REPL gateway")
     sub.add_parser("telegram", help="run the Telegram bot gateway (needs TELEGRAM_BOT_TOKEN)")
@@ -139,6 +141,14 @@ def _run_web() -> int:
     return 0
 
 
+def _history(parsed: argparse.Namespace) -> int:
+    import asyncio
+
+    from agent_stack.app.bootstrap import build_application
+
+    return asyncio.run(history_cli.run(build_application(), parsed))
+
+
 def _ideas(parsed: argparse.Namespace) -> int:
     inbox = IdeaInbox(AppConfig.from_env().home)
     try:
@@ -168,6 +178,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if parsed.command == "run":
         return _run_once(parsed.prompt, parsed.yes)
+    if parsed.command in history_cli.COMMANDS:
+        return _history(parsed)
     if parsed.command == "ideas":
         return _ideas(parsed)
     if parsed.command == "tui":
