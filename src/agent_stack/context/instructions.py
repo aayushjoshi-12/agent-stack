@@ -80,6 +80,20 @@ class InstructionsLoader:
                 total += effective
         return files
 
+    def between(self, root: Path, directory: Path) -> list[InstructionFile]:
+        """Instructions of the folders below ``root`` down to ``directory``, nearest first.
+
+        ``root`` itself is left out (``load`` already puts it in the system prompt). This is
+        how a file read deep in a project picks up that subfolder's own ``AGENTS.md``.
+        """
+        root = root.resolve()
+        found: list[InstructionFile] = []
+        current = directory.resolve()
+        while current != root and current.is_relative_to(root):
+            found.extend(self._load_cached(path) for path in self._pick(current))
+            current = current.parent
+        return found
+
     def _directories_up_to(self, start: Path, stop: Path | None) -> list[Path]:
         """Directories from ``start`` up to (and including) ``stop`` or the root."""
         directories: list[Path] = []

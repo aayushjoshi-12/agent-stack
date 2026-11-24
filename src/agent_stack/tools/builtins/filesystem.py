@@ -16,6 +16,7 @@ import os
 import re
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from langchain_core.tools import BaseTool, tool
 
@@ -23,6 +24,9 @@ from agent_stack.core.changes import ChangeRecorder
 from agent_stack.core.errors import ToolError
 from agent_stack.core.run_context import current_run_context
 from agent_stack.core.workspace import WorkspacePolicy
+
+if TYPE_CHECKING:
+    from agent_stack.context.instructions import InstructionsLoader
 
 __all__ = ["MAX_FILE_BYTES", "MAX_GREP_SECONDS", "MAX_SEARCH_RESULTS", "filesystem_tools"]
 
@@ -263,14 +267,46 @@ async def _record_change(
         )
 
 
+class _NestedNotes:
+    """Appends a subfolder's own ``AGENTS.md`` to the first read of a file inside it.
+
+    The workspace root's instructions are already in the system prompt; instructions that
+    live deeper only apply to work in that folder, so they are shown when the agent first
+    reads something there (once per session), as Claude Code does.
+    """
+
+    def __init__(self, loader: InstructionsLoader, policy: WorkspacePolicy) -> None:
+        self._loader = loader
+        self._policy = policy
+        self._shown: set[tuple[str, Path]] = set()
+
+    def after_read(self, path: str, text: str) -> str:
+        context = current_run_context()
+        session = context.session_id if context is not None else ""
+        target = self._policy.resolve(path)
+        notes = []
+        for item in self._loader.between(self._policy.root, target.parent):
+            key = (session, item.path)
+            if key not in self._shown:
+                self._shown.add(key)
+                rel = item.path.relative_to(self._policy.root).as_posix()
+                notes.append(f"[Instructions for this folder ({rel})]\n{item.content}")
+        return text if not notes else text + "\n\n" + "\n\n".join(notes)
+
+
 def filesystem_tools(
-    policy: WorkspacePolicy, recorder: ChangeRecorder | None = None
+    policy: WorkspacePolicy,
+    recorder: ChangeRecorder | None = None,
+    nested_instructions: InstructionsLoader | None = None,
 ) -> tuple[BaseTool, ...]:
     """Build the workspace-scoped filesystem tool set for ``policy``.
 
     With a ``recorder``, every successful ``write_file``/``edit_file`` is reported to it (inside a
     run) so a gateway can show what changed. Changes made by shell commands are not seen.
+    With ``nested_instructions``, reading a file in a subfolder that has its own ``AGENTS.md``
+    shows that file too (once per session).
     """
+    notes = _NestedNotes(nested_instructions, policy) if nested_instructions else None
 
     @tool
     async def list_directory(path: str = ".") -> str:
@@ -290,7 +326,8 @@ def filesystem_tools(
         files, search first or read the relevant region. ``path`` is relative to the
         workspace root.
         """
-        return _read_file(policy, path)
+        text = _read_file(policy, path)
+        return notes.after_read(path, text) if notes is not None else text
 
     @tool
     async def write_file(path: str, content: str) -> str:

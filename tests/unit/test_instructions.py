@@ -167,3 +167,30 @@ async def test_global_dir_is_the_furthest_layer_and_truncation_is_logged(
 
     assert [f.path.parent.name for f in files] == ["project", "home"]
     assert "truncated to 50" in caplog.text
+
+
+async def test_reading_in_a_subfolder_shows_its_own_instructions_once(tmp_path: Path) -> None:
+    from agent_stack.core.workspace import WorkspacePolicy
+    from agent_stack.tools.builtins.filesystem import filesystem_tools
+
+    (tmp_path / "AGENTS.md").write_text("root rules")
+    sub = tmp_path / "svc" / "api"
+    sub.mkdir(parents=True)
+    (tmp_path / "svc" / "AGENTS.md").write_text("svc rules")
+    (sub / "AGENTS.md").write_text("api rules")
+    (sub / "a.py").write_text("print(1)")
+    (tmp_path / "top.txt").write_text("top")
+    tools = {
+        t.name: t
+        for t in filesystem_tools(
+            WorkspacePolicy(tmp_path), nested_instructions=InstructionsLoader()
+        )
+    }
+
+    first = await tools["read_file"].ainvoke({"path": "svc/api/a.py"})
+    assert "print(1)" in first and "api rules" in first and "svc rules" in first
+    assert "root rules" not in first  # the root is already in the system prompt
+    assert first.index("api rules") < first.index("svc rules")  # nearest first
+    again = await tools["read_file"].ainvoke({"path": "svc/api/a.py"})
+    assert again == "print(1)"
+    assert await tools["read_file"].ainvoke({"path": "top.txt"}) == "top"

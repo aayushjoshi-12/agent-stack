@@ -152,7 +152,8 @@ def build_application(config: AppConfig | None = None) -> Application:
     policy = WorkspacePolicy(root=workspace)
     artifacts = LocalArtifactStore(workspace / ".agent" / "artifacts")
     change_store = LocalChangeStore(db, workspace / ".agent" / "changes")
-    fs_tools = filesystem_tools(policy, change_store)
+    instructions = InstructionsLoader(global_dir=resolved.home)
+    fs_tools = filesystem_tools(policy, change_store, nested_instructions=instructions)
 
     # Context wiring (P16e): instructions + skill metadata + the memory index become
     # resident system parts, and a ContextBuilder bounds the message window. Discovery is
@@ -175,7 +176,7 @@ def build_application(config: AppConfig | None = None) -> Application:
     memory = MemoryIndex(workspace)
     todo_store = SqliteTodoStore(db)
     composer = SystemPromptComposer(
-        instructions=InstructionsLoader(global_dir=resolved.home),
+        instructions=instructions,
         skills=skills,
         memory=memory,
         workspace_root=workspace,
