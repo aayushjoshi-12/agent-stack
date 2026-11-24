@@ -66,3 +66,12 @@ def test_default_model_is_deepseek_v4_pro_on_openrouter() -> None:
 def test_context_window_defaults_and_is_overridable() -> None:
     assert AppConfig().context_window == 1_000_000
     assert AppConfig.from_env({"AGENT_STACK_CONTEXT_WINDOW": "128000"}).context_window == 128_000
+
+
+def test_home_and_skill_roots_come_from_env() -> None:
+    config = AppConfig.from_env(
+        {"AGENT_STACK_HOME": "/tmp/h", "AGENT_STACK_SKILLS_PATH": "/a/skills: /b/skills:"}
+    )
+
+    assert config.home == Path("/tmp/h")
+    assert config.skill_roots == (Path("/a/skills"), Path("/b/skills"))

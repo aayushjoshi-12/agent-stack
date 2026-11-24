@@ -1,6 +1,10 @@
 ---
 name: multiline
 description: |
-  A block scalar is not part of the supported single-line subset.
+  A block scalar is folded
+  into one line.
+  Extra keys are ignored.
+metadata:
+  author: someone
 ---
 # Multi

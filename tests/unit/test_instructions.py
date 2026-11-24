@@ -136,3 +136,34 @@ async def test_missing_files_are_ignored(tmp_path: Path) -> None:
     files = await InstructionsLoader().load(empty)
 
     assert files == []
+
+
+async def test_local_overlay_goes_first_and_imports_are_inlined(tmp_path: Path) -> None:
+    _write(tmp_path / "CLAUDE.md", "# CLAUDE\n@rules.md\n@../outside.md\n")
+    _write(tmp_path / "rules.md", "imported rule")
+    _write(tmp_path.parent / "outside.md", "must not leak")
+    _write(tmp_path / "CLAUDE.local.md", "never push")
+
+    files = await InstructionsLoader().load(tmp_path, stop_at=tmp_path)
+
+    assert [f.path.name for f in files] == ["CLAUDE.local.md", "CLAUDE.md"]
+    assert "imported rule" in files[1].content
+    assert "must not leak" not in files[1].content
+    assert "@../outside.md" in files[1].content  # left as written
+
+
+async def test_global_dir_is_the_furthest_layer_and_truncation_is_logged(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    project, home = tmp_path / "project", tmp_path / "home"
+    project.mkdir()
+    home.mkdir()
+    _write(project / "AGENTS.md", "x" * 100)
+    _write(home / "AGENTS.md", "global")
+
+    files = await InstructionsLoader(max_file_bytes=50, global_dir=home).load(
+        project, stop_at=project
+    )
+
+    assert [f.path.parent.name for f in files] == ["project", "home"]
+    assert "truncated to 50" in caplog.text

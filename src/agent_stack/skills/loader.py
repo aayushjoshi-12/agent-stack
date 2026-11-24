@@ -7,72 +7,55 @@ Markdown body:
 * **``load``** returns the full body (level 2).
 * **``read_resource``** serves files from inside the skill directory (level 3).
 
-The frontmatter subset is deliberately tiny. Only single-line ``key: value`` scalars
-over a fixed key set are supported; block scalars (``|`` / ``>``), unknown keys, and
-duplicate keys are rejected so malformed skills fail loudly at discovery instead of
-being silently mis-parsed.
+The frontmatter is parsed as YAML. A skill that is malformed fails loudly in strict mode;
+the non-strict runtime mode skips it and logs a warning naming the skill.
 """
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Sequence
 from pathlib import Path
+
+import yaml
 
 from agent_stack.core.errors import SkillsError
 from agent_stack.skills.models import Skill, SkillMetadata, SkillResource
 
 __all__ = ["MAX_DESCRIPTION_CHARS", "SkillLoader"]
 
-#: Frontmatter keys this parser understands, all single-line scalar values. ``metadata``
-#: (a nested map) is intentionally *not* part of the subset and is rejected as unsupported.
-SUPPORTED_KEYS = frozenset({"name", "description", "license", "compatibility", "allowed-tools"})
-
 #: Upper bound for a skill description per the ``SKILL.md`` spec.
 MAX_DESCRIPTION_CHARS = 1024
 
+_log = logging.getLogger(__name__)
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+_FRONTMATTER_RE = re.compile(r"\A---[ \t]*\n(.*?\n)?---[ \t]*(?:\n|\Z)", re.DOTALL)
 
 
 def _parse_skill_file(text: str) -> tuple[dict[str, str], str]:
     """Parse ``SKILL.md`` frontmatter into ``(fields, body)``.
 
-    The file must open with a ``---`` line and close with another; everything after the
-    closing delimiter is the body, returned verbatim. Only single-line scalars over
-    :data:`SUPPORTED_KEYS` are accepted: block scalars (``|``/``>``), unknown keys, and
-    duplicate keys all raise :class:`SkillsError`.
+    The frontmatter is real YAML (block scalars, nested ``metadata`` and unknown keys are all
+    legal in the wild), so a skill written for another harness loads here too. Only ``name``,
+    ``description`` and ``allowed-tools`` are used; a folded or literal description is
+    collapsed to one line.
     """
-    if not text.startswith("---"):
-        raise SkillsError("SKILL.md must start with a '---' frontmatter delimiter")
-
-    fields: dict[str, str] = {}
-    cursor = 3  # just past the opening "---"
-    while True:
-        newline = text.find("\n", cursor)
-        if newline == -1:
-            raise SkillsError("Unterminated frontmatter: missing closing '---'")
-        line = text[cursor:newline].strip()
-        cursor = newline + 1
-        if line == "---":
-            return fields, text[cursor:]
-        if not line:
-            continue
-        if ":" not in line:
-            raise SkillsError(f"Malformed frontmatter line (expected 'key: value'): {line!r}")
-        key, _, raw_value = line.partition(":")
-        field, value = key.strip(), raw_value.strip()
-        if field not in SUPPORTED_KEYS:
-            raise SkillsError(
-                f"Unsupported frontmatter key {field!r} "
-                f"(supported: {', '.join(sorted(SUPPORTED_KEYS))})"
-            )
-        if field in fields:
-            raise SkillsError(f"Duplicate frontmatter key {field!r}")
-        if value.startswith(("|", ">")):
-            raise SkillsError(
-                f"Unsupported multiline value for {field!r}: only single-line scalars are supported"
-            )
-        fields[field] = value
+    match = _FRONTMATTER_RE.match(text)
+    if match is None:
+        raise SkillsError("SKILL.md must start with a '---' frontmatter block and close it")
+    try:
+        data = yaml.safe_load(match.group(1) or "") or {}
+    except yaml.YAMLError as exc:
+        raise SkillsError(f"Malformed frontmatter: {exc}") from exc
+    if not isinstance(data, dict):
+        raise SkillsError("Frontmatter must be a mapping of 'key: value' pairs")
+    fields = {
+        key: " ".join(str(data[key]).split())
+        for key in ("name", "description", "allowed-tools")
+        if data.get(key) is not None
+    }
+    return fields, text[match.end() :]
 
 
 def _parse_skill(directory: Path) -> SkillMetadata:
@@ -146,9 +129,10 @@ class SkillLoader:
                     continue
                 try:
                     metadata = _parse_skill(child)
-                except SkillsError:
+                except SkillsError as exc:
                     if self._strict:
                         raise
+                    _log.warning("skipping skill %s: %s", child, exc)
                     continue
                 if metadata.name in by_name:
                     if self._strict:

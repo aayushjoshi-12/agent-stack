@@ -135,22 +135,24 @@ def build_application(config: AppConfig | None = None) -> Application:
     # Context wiring (P16e): instructions + skill metadata + the memory index become
     # resident system parts, and a ContextBuilder bounds the message window. Discovery is
     # non-strict so one non-conforming skill (e.g. a vendored one) cannot break every
-    # root; user-global `~/.claude/skills/` is intentionally omitted until config opts it
-    # in. Memory resolves `<workspace>/.agent/memory/`, falling back to a bare
+    # root; user-global skill folders are added only through `AGENT_STACK_SKILLS_PATH`. Memory resolves `<workspace>/.agent/memory/`, falling back to a bare
     # `<workspace>/MEMORY.md`; the root is created only when a topic is written.
     skills = SkillRegistry(
         SkillLoader(
             [
                 workspace / ".agent" / "skills",
+                workspace / ".agents" / "skills",
+                workspace / ".claude" / "skills",
                 _REPO_ROOT / "skills",
                 _REPO_ROOT / ".claude" / "skills",
+                *resolved.skill_roots,
             ],
             strict=False,
         )
     )
     memory = MemoryIndex(workspace)
     composer = SystemPromptComposer(
-        instructions=InstructionsLoader(),
+        instructions=InstructionsLoader(global_dir=resolved.home),
         skills=skills,
         memory=memory,
         workspace_root=workspace,

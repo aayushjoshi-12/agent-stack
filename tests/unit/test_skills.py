@@ -133,11 +133,21 @@ def test_duplicate_skill_names_across_roots_raise() -> None:
         loader.discover()
 
 
-def test_unsupported_multiline_description_raises() -> None:
-    loader = SkillLoader([root("multiline-root")])
+def test_block_scalar_description_is_collapsed_to_one_line() -> None:
+    (skill,) = SkillLoader([root("multiline-root")]).discover()
 
-    with pytest.raises(SkillsError, match=r"[Uu]nsupported"):
-        loader.discover()
+    assert skill.description == "A block scalar is folded into one line. Extra keys are ignored."
+
+
+def test_malformed_skill_is_skipped_and_logged_when_not_strict(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    loader = SkillLoader([root("nodesc-root"), root("skills-root")], strict=False)
+
+    names = [m.name for m in loader.discover()]
+
+    assert "nodesc" not in names and "good-skill" in names
+    assert "skipping skill" in caplog.text and "nodesc" in caplog.text
 
 
 def test_registry_get_and_metadata_are_deterministic() -> None:

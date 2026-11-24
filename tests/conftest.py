@@ -15,6 +15,12 @@ from tests.fakes import FailingTool, FakeChatModel, SleepTool, ai
 dotenv.load_dotenv = lambda *args, **kwargs: False  # type: ignore[assignment]
 
 
+@pytest.fixture(autouse=True)
+def _isolated_home(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never read or write the developer's real ``~/.agent-stack``."""
+    monkeypatch.setenv("AGENT_STACK_HOME", str(tmp_path_factory.mktemp("agent-stack-home")))
+
+
 @pytest.fixture
 def tmp_workspace(tmp_path: Path) -> Path:
     """An isolated workspace; never the real home/working directory."""

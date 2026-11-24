@@ -33,6 +33,11 @@ def _small_model(raw: str | None, main_model: str) -> str | None:
     return value
 
 
+def _default_home() -> Path:
+    raw = os.environ.get("AGENT_STACK_HOME")
+    return Path(raw).expanduser() if raw else Path.home() / ".agent-stack"
+
+
 @dataclass(frozen=True)
 class AppConfig:
     """Immutable application configuration.
@@ -57,6 +62,12 @@ class AppConfig:
     #: ``AGENT_STACK_APPROVAL_TOOLS``; set it empty to run everything unattended.
     approval_tools: tuple[str, ...] = ("run_command", "write_file", "edit_file")
     workspace: Path = field(default_factory=Path.cwd)
+    #: Where state shared by every project lives (global instructions, ideas, cross-project
+    #: memory). ``AGENT_STACK_HOME``; defaults to ``~/.agent-stack``.
+    home: Path = field(default_factory=lambda: _default_home())
+    #: Extra skill folders (e.g. ``~/.claude/skills``), colon-separated in
+    #: ``AGENT_STACK_SKILLS_PATH``. Nothing outside the workspace is read unless listed here.
+    skill_roots: tuple[Path, ...] = ()
     #: Explicit index path; ``None`` means ``<workspace>/agent.db`` (see :attr:`database`).
     db_path: Path | None = None
     #: TUI theme name. Defaults to the app's true-colour ``agent-stack-dark``; set
@@ -101,6 +112,10 @@ class AppConfig:
         if budget is not None and budget < 0:
             raise ConfigurationError("AGENT_STACK_BUDGET_USD must not be negative")
 
+        home_raw = source.get("AGENT_STACK_HOME")
+        skills_raw = source.get("AGENT_STACK_SKILLS_PATH", "")
+        skill_roots = tuple(Path(p.strip()).expanduser() for p in skills_raw.split(":") if p.strip())
+
         model = source.get("AGENT_STACK_MODEL", defaults.model)
         return cls(
             model=model,
@@ -109,6 +124,8 @@ class AppConfig:
             context_window=int(source.get("AGENT_STACK_CONTEXT_WINDOW", defaults.context_window)),
             budget_usd=budget,
             workspace=workspace,
+            home=Path(home_raw).expanduser() if home_raw else _default_home(),
+            skill_roots=skill_roots,
             db_path=db_path,
             theme=source.get("AGENT_STACK_THEME", defaults.theme),
         )
