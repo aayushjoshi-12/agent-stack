@@ -109,3 +109,12 @@ entry, so none of this is leaderboard-eligible).
   messages, and summarises old history with the small model.
 - The default 50-step limit ended a realistic feature task early; now `AGENT_STACK_MAX_STEPS`.
 - Shell commands are not workspace-confined (see Safety rules). Still open.
+- The token estimate (characters / 4) undercounts: with a 24k budget the real input reached 35k
+  (rag) and 36.7k (dominoes), about 1.5x over. To do: calibrate from the provider's reported
+  `input_tokens` of the previous call.
+- rag run, read from its transcript: 75 tool calls, the first edit at call 68 (about 90% of the step
+  budget went on exploration), 44 of 54 shell calls were `cat`/`sed`/`grep`/`ls` reads, and the todo
+  list was written twice (13 `todo_add` calls for about 6 items), which suggests the plan was
+  trimmed out of the context and rebuilt. Hypothesis, not yet verified: the todo list is not
+  re-shown after old messages are cleared. Note the empty-workspace mistake forced shell reads in
+  this particular run, so the read/`cat` ratio is not representative.
