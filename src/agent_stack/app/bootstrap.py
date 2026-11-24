@@ -20,6 +20,7 @@ from agent_stack.core.locks import SessionLockManager
 from agent_stack.core.run import RunManager
 from agent_stack.core.workspace import WorkspacePolicy
 from agent_stack.memory import MemoryIndex, memory_tools
+from agent_stack.memory.ideas import IdeaInbox, idea_tools
 from agent_stack.memory.store import SqliteMemoryStore
 from agent_stack.models.factory import build_model
 from agent_stack.observability.audit import AuditLogger, audit_log_path
@@ -179,6 +180,7 @@ def build_application(config: AppConfig | None = None) -> Application:
             *control_tools(),
             *skill_tools(skills),
             *memory_tools(memory),
+            *idea_tools(IdeaInbox(resolved.home)),
             *persistent_memory_tools(SqliteMemoryStore(db)),
             *todo_tools(SqliteTodoStore(db)),
             *artifact_tools(artifacts),
