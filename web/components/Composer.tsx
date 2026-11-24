@@ -6,17 +6,26 @@ export function Composer({
   running,
   stopping,
   disabled,
+  draft,
   onSend,
   onStop,
 }: {
   running: boolean;
   stopping: boolean;
   disabled: boolean;
+  /** Text to put in the box (a rewound message to edit, or "" to clear it); `n` makes each one new. */
+  draft?: { text: string; n: number } | null;
   onSend: (text: string) => void;
   onStop: () => void;
 }) {
   const [text, setText] = useState("");
   const area = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (!draft) return;
+    setText(draft.text);
+    area.current?.focus();
+  }, [draft]);
 
   useEffect(() => {
     const el = area.current;

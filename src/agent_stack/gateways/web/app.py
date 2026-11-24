@@ -27,7 +27,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from agent_stack.app.application import Application
+from agent_stack.app.application import Application, parse_ref
 from agent_stack.core.errors import BudgetExceededError, PersistenceError
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.run import Run
@@ -98,6 +98,31 @@ class BranchBody(BaseModel):
 
 class ApprovalBody(BaseModel):
     approve: bool
+
+
+class RewindBody(BaseModel):
+    """Where to go back to: the turn's owner conversation and its start event (from /turns)."""
+
+    owner_session_id: str = Field(min_length=1, max_length=200)
+    started_event_id: str = Field(min_length=1, max_length=100)
+    conversation: bool = True
+    code: bool = True
+    force: bool = False
+
+
+class ReferenceBody(BaseModel):
+    reference: str = Field(min_length=1, max_length=1000)
+
+
+class PointBody(BaseModel):
+    point: str | None = Field(default=None, max_length=100)  # a turn number or event id
+
+
+def _moves_json(files: Any) -> dict[str, Any]:
+    return {
+        "moved": [{"path": m.path, "action": m.action} for m in files.moved],
+        "conflicts": list(files.conflicts),
+    }
 
 
 def _event_json(event: AgentEvent) -> dict[str, Any]:
@@ -284,6 +309,121 @@ def create_app(application: Application, settings: WebSettings) -> FastAPI:
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND, "no such event in this session"
             ) from None
+
+    # ── history: rewind, branches, references ────────────────────────────────
+    @api.get("/sessions/{session_id}/turns", dependencies=auth)
+    async def turns(session_id: str) -> list[dict[str, Any]]:
+        """Every turn that led to this conversation, across its forks, oldest first."""
+        await owned_session(session_id)
+        try:
+            lineage = await application.timeline.lineage(session_id)
+        except (PersistenceError, RuntimeError) as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+        return [
+            {
+                "owner_session_id": item.session_id,
+                "started_event_id": item.turn.started_event_id,
+                "completed_event_id": item.turn.completed_event_id,
+                "timestamp": item.turn.timestamp.isoformat(),
+                "user_text": item.turn.user_text,
+                "files_changed": item.turn.files_changed,
+            }
+            for item in lineage
+        ]
+
+    @api.post("/sessions/{session_id}/rewind", dependencies=auth)
+    async def rewind(session_id: str, body: RewindBody) -> dict[str, Any]:
+        await owned_session(session_id)
+        lineage = await application.timeline.lineage(session_id)
+        target = next(
+            (
+                t
+                for t in lineage
+                if t.session_id == body.owner_session_id
+                and t.turn.started_event_id == body.started_event_id
+            ),
+            None,
+        )
+        if target is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such turn in this conversation")
+        try:
+            outcome = await application.timeline.rewind_to(
+                session_id,
+                target,
+                conversation=body.conversation,
+                code=body.code,
+                force=body.force,
+            )
+        except (PersistenceError, RuntimeError) as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+        return {
+            "session_id": outcome.session_id,
+            "prompt": outcome.prompt,
+            "files": _moves_json(outcome.files),
+        }
+
+    @api.get("/sessions/{session_id}/tree", dependencies=auth)
+    async def tree(session_id: str) -> dict[str, str]:
+        await owned_session(session_id)
+        try:
+            return {
+                "text": await application.timeline.tree_text(session_id),
+                "mermaid": await application.timeline.tree_mermaid(session_id),
+            }
+        except (PersistenceError, RuntimeError) as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+
+    @api.get("/sessions/{session_id}/files/status", dependencies=auth)
+    async def files_status(session_id: str) -> dict[str, bool]:
+        await owned_session(session_id)
+        return {"differs": await application.timeline.files_differ(session_id)}
+
+    @api.post("/sessions/{session_id}/files/restore", dependencies=auth)
+    async def files_restore(session_id: str) -> dict[str, Any]:
+        await owned_session(session_id)
+        try:
+            return _moves_json(await application.timeline.restore_files(session_id))
+        except (PersistenceError, RuntimeError) as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+
+    @api.post("/sessions/{session_id}/reference", dependencies=auth)
+    async def make_reference(session_id: str, body: PointBody) -> dict[str, str]:
+        await owned_session(session_id)
+        timeline = application.timeline
+        try:
+            point = body.point
+            if point is None:
+                done = [t for t in await timeline.turns(session_id) if t.completed_event_id]
+                if not done:
+                    raise PersistenceError("nothing has finished in this conversation yet")
+                point = str(done[-1].index)
+            return {"reference": await timeline.reference(session_id, point)}
+        except PersistenceError as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+
+    async def referenced_session(reference: str) -> str:
+        try:
+            session_id, _ = parse_ref(reference)
+        except PersistenceError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
+        await owned_session(session_id)  # a reference only opens conversations you own
+        return session_id
+
+    @api.post("/references/describe", dependencies=auth)
+    async def describe_reference(body: ReferenceBody) -> dict[str, str]:
+        await referenced_session(body.reference)
+        try:
+            return {"text": await application.timeline.describe(body.reference)}
+        except PersistenceError as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+
+    @api.post("/references/open", dependencies=auth, status_code=201)
+    async def open_reference(body: ReferenceBody) -> dict[str, str]:
+        await referenced_session(body.reference)
+        try:
+            return {"id": await application.timeline.open_reference(body.reference)}
+        except PersistenceError as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
 
     @api.post("/sessions/{session_id}/messages", dependencies=auth, status_code=202)
     async def send(session_id: str, body: MessageBody) -> dict[str, str]:

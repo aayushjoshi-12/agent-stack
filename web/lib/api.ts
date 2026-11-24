@@ -27,6 +27,17 @@ export type ChangedFileDetail = ChangedFile & {
   after: string;
 };
 
+export type TurnInfo = {
+  owner_session_id: string;
+  started_event_id: string;
+  completed_event_id: string | null;
+  timestamp: string;
+  user_text: string;
+  files_changed: number;
+};
+export type FileMoves = { moved: { path: string; action: string }[]; conflicts: string[] };
+export type RewindResult = { session_id: string; prompt: string; files: FileMoves };
+
 export class ApiError extends Error {
   readonly status: number;
   constructor(message: string, status: number) {
@@ -73,6 +84,15 @@ export const api = {
     call<{ run_id: string }>(c, `/sessions/${encodeURIComponent(id)}/messages`, json({ text })),
   branch: (c: Conn, id: string, eventId: string) =>
     call<{ id: string }>(c, `/sessions/${encodeURIComponent(id)}/branch`, json({ event_id: eventId })),
+  turns: (c: Conn, id: string) => call<TurnInfo[]>(c, `/sessions/${encodeURIComponent(id)}/turns`),
+  rewind: (c: Conn, id: string, body: { owner_session_id: string; started_event_id: string; conversation: boolean; code: boolean }) =>
+    call<RewindResult>(c, `/sessions/${encodeURIComponent(id)}/rewind`, json(body)),
+  tree: (c: Conn, id: string) => call<{ text: string; mermaid: string }>(c, `/sessions/${encodeURIComponent(id)}/tree`),
+  filesStatus: (c: Conn, id: string) => call<{ differs: boolean }>(c, `/sessions/${encodeURIComponent(id)}/files/status`),
+  filesRestore: (c: Conn, id: string) => call<FileMoves>(c, `/sessions/${encodeURIComponent(id)}/files/restore`, { method: "POST" }),
+  makeReference: (c: Conn, id: string) => call<{ reference: string }>(c, `/sessions/${encodeURIComponent(id)}/reference`, json({})),
+  describeReference: (c: Conn, reference: string) => call<{ text: string }>(c, "/references/describe", json({ reference })),
+  openReference: (c: Conn, reference: string) => call<{ id: string }>(c, "/references/open", json({ reference })),
   changes: (c: Conn, id: string) =>
     call<{ files: ChangedFile[]; note: string }>(c, `/sessions/${encodeURIComponent(id)}/changes`),
   changeFile: (c: Conn, id: string, path: string) =>

@@ -6,8 +6,9 @@ import { Composer } from "@/components/Composer";
 import { Connect } from "@/components/Connect";
 import { Mark } from "@/components/Mark";
 import { Sidebar } from "@/components/Sidebar";
-import { api, ApiError, type ChangedFile, type Conn, type HistoryRow, type SessionSummary, type UsageInfo } from "@/lib/api";
+import { api, ApiError, type ChangedFile, type Conn, type HistoryRow, type RewindResult, type SessionSummary, type UsageInfo } from "@/lib/api";
 import { ChangesPanel } from "@/components/ChangesPanel";
+import { HistoryPanel, type HistoryTab } from "@/components/HistoryPanel";
 import { formatCost, formatTokens } from "@/lib/format";
 import type { Item, RunPhase } from "@/lib/events";
 import { useLive } from "@/lib/useLive";
@@ -68,6 +69,12 @@ export default function Page() {
   const [focusPath, setFocusPath] = useState<string | null>(null);
   const [drawer, setDrawer] = useState(false);
   const [forkable, setForkable] = useState<{ sessionId: string; eventId: string } | null>(null);
+  const [historyTab, setHistoryTab] = useState<HistoryTab | null>(null);
+  const [draft, setDraft] = useState<{ text: string; n: number } | null>(null);
+  const [filesDiffer, setFilesDiffer] = useState(false);
+  const [notice, setNotice] = useState("");
+  const draftCount = useRef(0);
+  const lastEscape = useRef(0);
   const runBySession = useRef<Map<string, string>>(new Map());
   const activeRef = useRef<string | null>(null);
   activeRef.current = activeId;
@@ -171,6 +178,42 @@ export default function Page() {
     };
   }, [conn, activeId, changeTick, running]);
 
+  // Esc Esc: clear what is typed, or open the rewind picker (the terminal UI's habit).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || historyTab || running || !activeRef.current) return;
+      const now = Date.now();
+      const double = now - lastEscape.current < 800;
+      lastEscape.current = double ? 0 : now;
+      if (!double) return;
+      const box = document.getElementById("composer") as HTMLTextAreaElement | null;
+      if (box && box.value.trim()) {
+        draftCount.current += 1;
+        setDraft({ text: "", n: draftCount.current });
+      } else {
+        setHistoryTab("rewind");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [historyTab, running]);
+
+  // The folder may hold another conversation's files (after a rewind or switching chats).
+  useEffect(() => {
+    if (!conn || !activeId || running) {
+      setFilesDiffer(false);
+      return;
+    }
+    let current = true;
+    api
+      .filesStatus(conn, activeId)
+      .then((r) => current && setFilesDiffer(r.differs))
+      .catch(() => current && setFilesDiffer(false)); // informational
+    return () => {
+      current = false;
+    };
+  }, [conn, activeId, running, changeTick]);
+
   const restored = useRef(false);
   useEffect(() => {
     if (!conn) return;
@@ -236,6 +279,31 @@ export default function Page() {
       }
     },
     [conn, live, refreshSessions, fail],
+  );
+
+  const onRewound = useCallback(
+    (result: RewindResult) => {
+      setHistoryTab(null);
+      const moved = result.files.moved.length;
+      const left = result.files.conflicts;
+      setNotice(
+        `Rewound.${moved ? ` ${moved} file${moved === 1 ? "" : "s"} restored.` : ""}` +
+          (left.length ? ` Left alone (changed since): ${left.join(", ")}.` : ""),
+      );
+      void (async () => {
+        try {
+          await refreshSessions();
+          if (result.session_id !== activeRef.current) await openSession(result.session_id);
+          else await loadHistory(result.session_id);
+          draftCount.current += 1;
+          setDraft({ text: result.prompt, n: draftCount.current }); // the message, to edit and resend
+        } catch (e) {
+          fail(e);
+        }
+      })();
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [refreshSessions, loadHistory, fail],
   );
 
   const stop = useCallback(async () => {
@@ -353,6 +421,11 @@ export default function Page() {
               Files <span className="code tabular-nums">{changes.files.length}</span>
             </button>
           )}
+          {activeId && !running && (
+            <button type="button" className="btn" onClick={() => setHistoryTab("rewind")} aria-label="History: rewind, branches, share">
+              History
+            </button>
+          )}
           {usage && usage.calls > 0 && <CostChip usage={usage} />}
           <span className="code text-soft" aria-live="polite">
             {stopping ? "stopping…" : running ? (pendingApproval ? "waiting for you" : "running") : live.state.phase === "cancelled" ? "stopped" : ""}
@@ -363,6 +436,35 @@ export default function Page() {
         {usage && usage.calls > 0 && (
           <div className="border-b-2 border-line bg-sunk px-4 py-1 sm:hidden">
             <CostChip usage={usage} always />
+          </div>
+        )}
+
+        {filesDiffer && activeId && (
+          <div role="status" className="flex items-center gap-3 border-b-2 border-line bg-yellow px-4 py-2 font-bold text-on-yellow">
+            <span className="flex-1">The files in the folder match another conversation.</span>
+            <button
+              className="btn"
+              onClick={() =>
+                void api
+                  .filesRestore(conn, activeId)
+                  .then((r) => {
+                    setNotice(`${r.moved.length} file${r.moved.length === 1 ? "" : "s"} restored.${r.conflicts.length ? ` Left alone (changed since): ${r.conflicts.join(", ")}.` : ""}`);
+                    setFilesDiffer(r.conflicts.length > 0);
+                  })
+                  .catch(fail)
+              }
+            >
+              Put this conversation&apos;s files in the folder
+            </button>
+          </div>
+        )}
+
+        {notice && (
+          <div role="status" className="flex items-center gap-3 border-b-2 border-line bg-sunk px-4 py-2">
+            <span className="flex-1">{notice}</span>
+            <button className="underline" onClick={() => setNotice("")}>
+              dismiss
+            </button>
           </div>
         )}
 
@@ -427,10 +529,26 @@ export default function Page() {
 
         <div className="border-t-2 border-line bg-paper px-4 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
           <div className="mx-auto max-w-3xl">
-            <Composer running={running} stopping={stopping} disabled={false} onSend={(t) => void send(t)} onStop={() => void stop()} />
+            <Composer running={running} stopping={stopping} disabled={false} draft={draft} onSend={(t) => void send(t)} onStop={() => void stop()} />
           </div>
         </div>
       </main>
+
+      {historyTab && activeId && (
+        <HistoryPanel
+          conn={conn}
+          sessionId={activeId}
+          initialTab={historyTab}
+          onClose={() => setHistoryTab(null)}
+          onRewound={onRewound}
+          onOpened={(id) => {
+            setHistoryTab(null);
+            setNotice("Opened a new conversation from that point. If its files are not in the folder yet, use the banner above.");
+            void refreshSessions().then(() => openSession(id)).catch(fail);
+          }}
+          onError={fail}
+        />
+      )}
 
       {panelOpen && activeId && (
         <div className="fixed inset-0 z-30 min-h-0 md:static md:z-auto">

@@ -32,6 +32,7 @@ from agent_stack.app.timeline import LineTurn as LineTurn  # re-exported for gat
 from agent_stack.app.timeline import RewindOutcome as RewindOutcome
 from agent_stack.app.timeline import SwitchResult as SwitchResult
 from agent_stack.app.timeline import Timeline
+from agent_stack.app.timeline import parse_ref as parse_ref
 from agent_stack.core.agent import Agent
 from agent_stack.core.approval import ApprovalBroker
 from agent_stack.core.changes import ChangeStore

@@ -376,7 +376,7 @@ class Timeline:
                 children.setdefault(session.branch_of, []).append(session)
 
         async def build(session: Session) -> TreeNode:
-            node = TreeNode(session=session, turns=len(await self.turns(session.id)))
+            node = TreeNode(session=session, turns=len(await self.lineage(session.id)))
             if app.change_store is not None:
                 for path in await app.change_store.paths(session.id):
                     diff = await app.change_store.file_diff(session.id, path)
@@ -500,13 +500,17 @@ def render_mermaid(root: TreeNode, *, current: str | None = None) -> str:
 
     def walk(node: TreeNode, parent: TreeNode | None) -> None:
         name = node_id(node)
-        files = f"{len(node.files)} files" if node.files else "no files"
-        text = f"{_label(node)}<br/>{node.turns} turns, {files}".replace('"', "'")
+        n = len(node.files)
+        files = f"{n} file{'s' if n != 1 else ''}" if n else "no files"
+        title = (node.session.title or "untitled").replace('"', "'")[:34]
+        turns = f"{node.turns} turn{'s' if node.turns != 1 else ''}"
+        text = f"{title}<br/>…{node.session.id[-6:]} · {turns}, {files}"
         out.append(f'  {name}["{text}"]')
         if node.session.id == current:
             out.append(f"  style {name} stroke-width:3px")
         if parent is not None:
-            out.append(f"  {node_id(parent)} -->|{node.point_time or 'fork'}| {name}")
+            when = node.point_time[11:19] if node.point_time else "fork"
+            out.append(f"  {node_id(parent)} -->|{when}| {name}")
         for child in node.children:
             walk(child, node)
 
