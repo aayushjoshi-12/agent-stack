@@ -142,6 +142,7 @@ HelpScreen, ApprovalScreen, SessionPicker, RewindScreen, BranchesScreen {
     border-left: thick $primary;
 }
 #picker-card { width: 72; }
+#picker-card.wide { width: 120; }
 #changes-card { width: 110; max-height: 94%; }
 #approval-card { border-left: thick $warning; }
 #approval-what { margin-top: 1; }

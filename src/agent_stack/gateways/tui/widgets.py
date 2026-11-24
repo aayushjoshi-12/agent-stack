@@ -766,7 +766,7 @@ class BranchesScreen(ModalScreen[None]):
         self._text = text
 
     def compose(self):  # type: ignore[no-untyped-def]
-        with Vertical(id="picker-card"):
+        with Vertical(id="picker-card", classes="wide"):
             yield Static(
                 "[bold $primary]Branches[/]  [$foreground-muted]* is this one[/]", id="picker-title"
             )
