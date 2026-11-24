@@ -92,9 +92,9 @@ class AgentStackAgent(BaseInstalledAgent):
             "AGENT_STACK_MODEL": self.model_name or os.environ["AGENT_STACK_MODEL"],
             "OPENROUTER_API_KEY": os.environ["OPENROUTER_API_KEY"],
             "AGENT_STACK_APPROVAL_TOOLS": "",
-            "AGENT_STACK_MAX_STEPS": os.environ.get("AGENT_STACK_MAX_STEPS", "120"),
-            "AGENT_STACK_CONTEXT_BUDGET": os.environ.get("AGENT_STACK_CONTEXT_BUDGET", "60000"),
-            "AGENT_STACK_BUDGET_USD": os.environ.get("AGENT_STACK_BUDGET_USD", "0.30"),
+            # no per-trial caps: the step limit is effectively off, the context budget is the
+            # default; total spend is bounded by bench/spend_guard.py instead
+            "AGENT_STACK_MAX_STEPS": os.environ.get("AGENT_STACK_MAX_STEPS", "500"),
             "AGENT_STACK_DB": "/tmp/agent-stack.db",
             "AGENT_STACK_HOME": "/tmp/agent-stack-home",
         }
