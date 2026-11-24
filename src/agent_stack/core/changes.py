@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Literal, Protocol
 
 __all__ = [
+    "ChangeEntry",
     "ChangeRecord",
     "ChangeRecorder",
     "ChangeStore",
@@ -34,6 +35,19 @@ class ChangeRecord:
     session_id: str
     run_id: str
     path: str  # relative to the workspace root, POSIX style
+    created_at: str
+
+
+@dataclass(frozen=True)
+class ChangeEntry:
+    """One recorded edit with its full before/after text (what rewinding needs)."""
+
+    id: int
+    session_id: str
+    run_id: str
+    path: str
+    before: str | None
+    after: str
     created_at: str
 
 
@@ -77,6 +91,18 @@ class ChangeStore(ChangeRecorder, Protocol):
         ...
 
     async def delete_session(self, session_id: str) -> None: ...
+
+    async def entries(self, session_id: str) -> list[ChangeEntry]:
+        """Every recorded edit of a conversation (subagent runs included), oldest first."""
+        ...
+
+    async def copy_upto(self, source: str, target: str, upto: str) -> int:
+        """Copy ``source``'s edits made at or before ``upto`` (ISO time) into ``target``.
+
+        Snapshots are copied too, so deleting ``source`` later cannot break ``target``.
+        Returns how many edits were copied.
+        """
+        ...
 
 
 def make_diff(path: str, before: str | None, after: str) -> tuple[str, int, int, bool]:

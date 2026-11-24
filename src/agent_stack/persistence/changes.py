@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from agent_stack.core.changes import FileDiff, make_diff
+from agent_stack.core.changes import ChangeEntry, FileDiff, make_diff
 
 if TYPE_CHECKING:
     from agent_stack.persistence.sqlite import SqliteDatabase
@@ -41,6 +41,19 @@ class LocalChangeStore:
     async def record(
         self, *, session_id: str, run_id: str, path: str, before: str | None, after: str
     ) -> None:
+        await self._record_at(
+            session_id, run_id, path, before, after, datetime.now(UTC).isoformat()
+        )
+
+    async def _record_at(
+        self,
+        session_id: str,
+        run_id: str,
+        path: str,
+        before: str | None,
+        after: str,
+        created_at: str,
+    ) -> None:
         directory = _session_dir(self._root, session_id)
         name = uuid.uuid4().hex
         after_ref = f"{name}.after"
@@ -56,7 +69,7 @@ class LocalChangeStore:
         await self._db.execute(
             "INSERT INTO file_changes (session_id, run_id, path, before_ref, after_ref, created_at)"
             " VALUES (?, ?, ?, ?, ?, ?)",
-            (session_id, run_id, path, before_ref, after_ref, datetime.now(UTC).isoformat()),
+            (session_id, run_id, path, before_ref, after_ref, created_at),
         )
 
     @staticmethod
@@ -137,6 +150,63 @@ class LocalChangeStore:
             after=after,
             diff_truncated=truncated,
         )
+
+    async def entries(self, session_id: str) -> list[ChangeEntry]:
+        cte, where, params = self._scope(session_id, None)
+        rows = await self._db.query(
+            f"{cte}SELECT id, session_id, run_id, path, before_ref, after_ref, created_at "
+            f"FROM file_changes WHERE {where} ORDER BY id",
+            params,
+        )
+
+        def read() -> list[ChangeEntry]:
+            found: list[ChangeEntry] = []
+            for row in rows:
+                directory = _session_dir(self._root, str(row["session_id"]))
+                try:
+                    before = (
+                        None
+                        if row["before_ref"] is None
+                        else (directory / row["before_ref"]).read_text(encoding="utf-8")
+                    )
+                    after = (directory / row["after_ref"]).read_text(encoding="utf-8")
+                except OSError:
+                    continue  # a snapshot was removed by hand: that edit cannot be replayed
+                found.append(
+                    ChangeEntry(
+                        id=int(row["id"]),
+                        session_id=str(row["session_id"]),
+                        run_id=str(row["run_id"]),
+                        path=str(row["path"]),
+                        before=before,
+                        after=after,
+                        created_at=str(row["created_at"]),
+                    )
+                )
+            return found
+
+        return await asyncio.to_thread(read)
+
+    async def copy_upto(self, source: str, target: str, upto: str) -> int:
+        from datetime import datetime
+
+        limit = datetime.fromisoformat(upto)
+        copied = 0
+        for entry in await self.entries(source):
+            if datetime.fromisoformat(entry.created_at) > limit:
+                continue
+            # a distinct run id: the source's change scope is "its runs", and these copies must
+            # not be counted as the source's own edits
+            await self._record_at(
+                target,
+                f"fork:{target}:{entry.run_id}",
+                entry.path,
+                entry.before,
+                entry.after,
+                entry.created_at,
+            )
+            copied += 1
+        return copied
 
     async def delete_session(self, session_id: str) -> None:
         await self._db.execute("DELETE FROM file_changes WHERE session_id = ?", (session_id,))

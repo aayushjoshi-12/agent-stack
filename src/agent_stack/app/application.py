@@ -28,6 +28,7 @@ from langchain_core.messages import (
 )
 
 from agent_stack.app.config import AppConfig
+from agent_stack.app.timeline import Timeline
 from agent_stack.core.agent import Agent
 from agent_stack.core.approval import ApprovalBroker
 from agent_stack.core.changes import ChangeStore
@@ -106,6 +107,11 @@ class Application:
         if first:
             self._spawn(self._autotitle(envelope.session, handle.run_id, envelope.text))
         return handle
+
+    @property
+    def timeline(self) -> Timeline:
+        """Rewind, fork, switch files, the branch tree and shareable references."""
+        return Timeline(self)
 
     async def drain_background(self) -> None:
         """Wait for side work (conversation titling) to finish; for shutdown and tests."""

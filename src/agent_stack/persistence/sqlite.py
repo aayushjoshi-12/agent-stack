@@ -28,6 +28,7 @@ from agent_stack.core.state import Checkpoint, CheckpointStatus
 from agent_stack.persistence.conversation import ConversationStore
 from agent_stack.persistence.event_log import EventLogStore
 from agent_stack.persistence.migrations import create_schema
+from agent_stack.persistence.serializers import MessageRecord
 from agent_stack.tools.executor import ToolExecutionResult
 
 _RUN_COLUMNS = (
@@ -413,6 +414,17 @@ class SqliteSessionStore:
     async def get(self, session_id: str) -> Session | None:
         rows = await self._db.query("SELECT * FROM sessions WHERE id = ?", (session_id,))
         return _row_to_session(rows[0]) if rows else None
+
+    async def list_all(self, limit: int = 500) -> list[Session]:
+        """Every session of every owner, newest first (for the branch tree and the CLI)."""
+        rows = await self._db.query(
+            "SELECT * FROM sessions ORDER BY updated_at DESC, rowid DESC LIMIT ?", (limit,)
+        )
+        return [_row_to_session(row) for row in rows]
+
+    async def records(self, session_id: str) -> list[MessageRecord]:
+        """The raw transcript lines of a session, each with its timestamp."""
+        return await self._conversation.read(session_id)
 
     async def list_for_owner(self, owner_id: str, limit: int = 50) -> list[Session]:
         rows = await self._db.query(
