@@ -70,12 +70,19 @@ tool call, so only use it in a container. See `docs/BENCHMARKS.md` for how it wa
 
 ## Web, monitors, history
 
-- `web_search` (DuckDuckGo, no key) and `web_fetch` (public http/https only; private addresses
-  are refused, and each fetch needs approval). Results are labelled untrusted.
+- `web_search` (DuckDuckGo, no key) and `web_fetch`. By default a free reader service (r.jina.ai)
+  fetches the page, so this machine never connects to arbitrary hosts, but that service sees the
+  URL; `AGENT_STACK_FETCH_MODE=direct` fetches locally instead (private addresses refused). Each
+  fetch needs approval and results are labelled untrusted.
 - `monitor_start` watches a command in the background with no model calls and leaves a note only
   when the output changes, matches a pattern, or the command succeeds; notes appear at the top of
   your next message. Stops itself after an hour or ten notes.
-- History: `agent-stack turns|tree|fork|rewind|switch|ref ...`. A rewind forks at the point and
+- History, in every gateway. **TUI:** press `esc esc` (on an empty prompt) to pick an earlier
+  message and restore code, conversation or both; the message comes back in the input box. `ctrl+p`
+  has branches, copy a reference, and put this conversation's files in the folder; pasting an
+  `asref://` line opens it. **Telegram:** `/rewind`, `/branches`, `/ref`, `/files`. **Web:** `esc esc`
+  or the History button (rewind, a drawn branch graph, share a point). **CLI:**
+  `agent-stack turns|tree|fork|rewind|switch|ref ...`. A rewind forks at the point and
   puts the files back; the original conversation keeps everything after it, and `switch` returns
   the folder to any branch. `agent-stack tree <session> --html tree.html` draws the branches.
   `agent-stack ref make <session> <turn>` prints an `asref://` string another chat can read with
