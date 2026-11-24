@@ -55,6 +55,8 @@ class Context:
     messages: tuple[BaseMessage, ...]
     #: The builder's own (uncalibrated) token estimate of this context, for ``calibrate``.
     raw_estimate: int = 0
+    #: Messages left out to fit the token budget (oldest first), so a caller can summarise them.
+    dropped: tuple[BaseMessage, ...] = ()
 
 
 class Summarizer(Protocol):
@@ -148,6 +150,7 @@ class ContextBuilder:
         system_parts: Sequence[str],
         history: Sequence[BaseMessage],
         pinned: BaseMessage | None = None,
+        summary: str | None = None,
     ) -> Context:
         """Build a context: budget-fit system parts plus a bounded message window.
 
@@ -160,10 +163,13 @@ class ContextBuilder:
         messages = _recent(history, self.recent_window)
         if pinned is not None and pinned not in messages:
             messages = [pinned, *_without_leading_tool_results(messages)]
+        dropped: list[BaseMessage] = []
         if self.max_tokens is not None:
-            messages = self._fit_tokens(system, messages, pinned)
+            messages, dropped = self._fit_tokens(system, messages, pinned, summary)
         raw = estimate_tokens(messages, sum(len(part) for part in system))
-        return Context(system=system, messages=tuple(messages), raw_estimate=raw)
+        return Context(
+            system=system, messages=tuple(messages), raw_estimate=raw, dropped=tuple(dropped)
+        )
 
     def calibrate(self, raw_estimate: int, actual_tokens: int) -> None:
         """Learn how far the estimate is off from the provider's reported input tokens.
@@ -177,8 +183,12 @@ class ContextBuilder:
         self.scale = 0.5 * self.scale + 0.5 * ratio
 
     def _fit_tokens(
-        self, system: tuple[str, ...], messages: list[BaseMessage], pinned: BaseMessage | None
-    ) -> list[BaseMessage]:
+        self,
+        system: tuple[str, ...],
+        messages: list[BaseMessage],
+        pinned: BaseMessage | None,
+        summary: str | None = None,
+    ) -> tuple[list[BaseMessage], list[BaseMessage]]:
         assert self.max_tokens is not None
         system_chars = sum(len(part) for part in system)
 
@@ -186,23 +196,28 @@ class ContextBuilder:
             return int(estimate_tokens(items, system_chars) * self.scale)
 
         if size(messages) <= self.max_tokens:
-            return messages
+            return messages, []
         tool_positions = [i for i, m in enumerate(messages) if isinstance(m, ToolMessage)]
         for i in tool_positions[: max(0, len(tool_positions) - self.keep_tool_results)]:
             messages[i] = _cleared(messages[i])  # type: ignore[arg-type]
         head = [pinned] if pinned is not None and messages and messages[0] is pinned else []
         rest = messages[len(head) :]
         before = len(rest)
-        while len(rest) > 1 and size([*head, *rest]) + _NOTE_TOKENS > self.max_tokens:
+        reserve = max(_NOTE_TOKENS, len(summary or "") // 3)
+        while len(rest) > 1 and size([*head, *rest]) + reserve > self.max_tokens:
             rest = _without_leading_tool_results(rest[1:])
         if len(rest) < before:  # say so: a model that is not told re-plans from scratch
-            note = HumanMessage(
-                content=f"[{before - len(rest)} earlier messages were dropped to fit the context. "
+            gone = before - len(rest)
+            dropped = list(messages[len(head) : len(head) + gone])
+            text = (
+                f"[{gone} earlier messages were dropped to fit the context. "
                 "Your todo list, notes and the files on disk still show your progress; "
                 "check them instead of starting over.]"
             )
-            return [*head, note, *rest]
-        return [*head, *rest]
+            if summary:
+                text += f"\n\nSummary of what happened in them:\n{summary}"
+            return [*head, HumanMessage(content=text), *rest], dropped
+        return [*head, *rest], []
 
     async def compact(self, history: list[BaseMessage]) -> list[BaseMessage]:
         """Compress history longer than ``recent_window``; never raises on its own.

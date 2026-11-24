@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -32,6 +33,12 @@ from agent_stack.tools.executor import ToolExecutionResult, ToolExecutor
 if TYPE_CHECKING:
     from agent_stack.persistence.base import CheckpointStore
 
+
+_LOG = logging.getLogger(__name__)
+
+#: Summarise dropped messages once this many are gone, then again every ``_SUMMARY_REFRESH_EVERY``.
+_SUMMARY_MIN_DROPPED = 6
+_SUMMARY_REFRESH_EVERY = 8
 
 #: Reasoning that says "wait" / "actually" this many times in one step is going in circles.
 SPIRAL_THRESHOLD = 12
@@ -235,6 +242,7 @@ class AgentRuntime:
         step_count = 0
         tool_call_count = 0
         spiral_nudge = False
+        summary_memo: dict[str, Any] = {}
 
         await self._emit(
             EventType.RUN_STARTED,
@@ -256,14 +264,10 @@ class AgentRuntime:
                 if spiral_nudge:
                     spiral_nudge = False
                     new_messages.append(HumanMessage(content=SPIRAL_NUDGE))
-                response = await self._within(
-                    deadline,
-                    lambda: self._model.ainvoke(
-                        self._model_input(
-                            resident=resident, history=history, new_messages=new_messages
-                        )
-                    ),
+                model_input = await self._model_input(
+                    resident=resident, history=history, new_messages=new_messages, memo=summary_memo
                 )
+                response = await self._within(deadline, self._invoker(model_input))
                 if not isinstance(response, AIMessage):
                     raise AgentStackError(
                         f"Model returned {type(response).__name__}, expected AIMessage"
@@ -496,12 +500,17 @@ class AgentRuntime:
             return (self._agent.system_prompt,)
         return await self._system_parts.parts(base_prompt=self._agent.system_prompt)
 
-    def _model_input(
+    def _invoker(self, model_input: list[BaseMessage]) -> Callable[[], Awaitable[Any]]:
+        """A zero-argument call of the model on ``model_input`` (binds it, not the loop variable)."""
+        return lambda: self._model.ainvoke(model_input)
+
+    async def _model_input(
         self,
         *,
         resident: Sequence[str],
         history: Sequence[BaseMessage],
         new_messages: Sequence[BaseMessage],
+        memo: dict[str, Any] | None = None,
     ) -> list[BaseMessage]:
         """Build one model input: system parts plus the (windowed) messages.
 
@@ -511,11 +520,28 @@ class AgentRuntime:
         """
         if self._context_builder is None:
             return [SystemMessage(content=self._agent.system_prompt), *history, *new_messages]
+        everything = [*history, *new_messages]
+        pinned = new_messages[0] if new_messages else None
+        memo = memo if memo is not None else {}
         ctx = self._context_builder.build(
-            system_parts=resident,
-            history=[*history, *new_messages],
-            pinned=new_messages[0] if new_messages else None,
+            system_parts=resident, history=everything, pinned=pinned, summary=memo.get("text")
         )
+        summarizer = self._context_builder.summarizer
+        # Summarise what was dropped, but only when a good many more messages have gone since the
+        # last summary: summarising on every step would cost a model call per step.
+        if (
+            summarizer is not None
+            and len(ctx.dropped) >= _SUMMARY_MIN_DROPPED
+            and len(ctx.dropped) - memo.get("count", 0) >= _SUMMARY_REFRESH_EVERY
+        ):
+            try:
+                memo["text"] = await summarizer.summarize(ctx.dropped)
+                memo["count"] = len(ctx.dropped)
+                ctx = self._context_builder.build(
+                    system_parts=resident, history=everything, pinned=pinned, summary=memo["text"]
+                )
+            except Exception:  # a failed summary must never stop the run
+                _LOG.warning("summarising dropped messages failed", exc_info=True)
         self._last_raw_estimate = ctx.raw_estimate
         return [SystemMessage(content="\n\n".join(ctx.system)), *ctx.messages]
 

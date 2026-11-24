@@ -181,3 +181,17 @@ def test_calibrate_ignores_nonsense_readings() -> None:
     builder.calibrate(500, 0)
     builder.calibrate(1000, 10)  # real lower than estimate: never loosens past 1.0
     assert builder.scale == 1.0
+
+
+def test_dropped_messages_are_returned_and_summary_replaces_the_bare_note() -> None:
+    builder = ContextBuilder(max_tokens=300, recent_window=1000, keep_tool_results=0)
+    first = HumanMessage(content="do the task")
+    history = [first] + [HumanMessage(content=f"step {i} " + "y" * 200) for i in range(20)]
+    plain = builder.build(system_parts=["s"], history=history, pinned=first)
+    assert plain.dropped
+    assert "Summary of what happened" not in str(plain.messages[1].content)
+    with_summary = builder.build(
+        system_parts=["s"], history=history, pinned=first, summary="GOAL: x. DONE: y."
+    )
+    assert with_summary.messages[0] is first
+    assert "GOAL: x. DONE: y." in str(with_summary.messages[1].content)
