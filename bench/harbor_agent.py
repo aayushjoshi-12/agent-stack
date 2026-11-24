@@ -105,6 +105,8 @@ class AgentStackAgent(BaseInstalledAgent):
                 'export AGENT_STACK_WORKSPACE="$PWD"; '
                 f"printf %s {shlex.quote(instruction)} | "
                 f"{_REMOTE}/.venv/bin/agent-stack run --yes - "
-                "2>&1 | tee /logs/agent/agent-stack.txt"
+                "2>&1 | tee /logs/agent/agent-stack.txt; "
+                # keep the full transcript and audit log: harbor deletes the container
+                'mkdir -p /logs/agent/state && cp -r "$PWD/.agent/." /logs/agent/state/ 2>/dev/null; true'
             ),
         )
