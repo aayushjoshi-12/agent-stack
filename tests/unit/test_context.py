@@ -148,12 +148,13 @@ def test_old_tool_results_are_cleared_before_anything_is_dropped() -> None:
 def test_still_over_budget_drops_oldest_but_keeps_the_pin() -> None:
     request = HumanMessage(content="goal")
     messages = [request] + [m for i in range(40) for m in _tool_turn(i, size=200)]
-    builder = ContextBuilder(recent_window=1000, max_tokens=150, keep_tool_results=2)
+    builder = ContextBuilder(recent_window=1000, max_tokens=200, keep_tool_results=2)
 
     ctx = builder.build(system_parts=["base"], history=messages, pinned=request)
 
     assert ctx.messages[0] is request
     assert 3 <= len(ctx.messages) < 12
-    assert estimate_tokens(ctx.messages, len("base")) <= 150
-    assert isinstance(ctx.messages[1], AIMessage)
+    assert "earlier messages were dropped" in str(ctx.messages[1].content)  # the model is told
+    assert estimate_tokens(ctx.messages, len("base")) <= 200
+    assert isinstance(ctx.messages[2], AIMessage)  # no orphaned tool result after the note
     assert ctx.messages[-1] is messages[-1]

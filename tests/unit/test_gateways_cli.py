@@ -155,3 +155,31 @@ async def test_run_once_rejects_gated_tools_unless_approve_all() -> None:
 
         assert code == 0
         assert [d[-1] for d in application.decisions] == [approve_all]
+
+
+def test_text_that_looks_like_markup_never_crashes_the_printer() -> None:
+    from agent_stack.gateways.cli import print_event
+
+    nasty = "x = a[/ SALT)\nH = f(ho, hof:10] [bold"
+    buffer = io.StringIO()
+    console = Console(file=buffer, no_color=True, width=120)
+
+    print_event(console, event(EventType.TOOL_OUTPUT, chunk=nasty))
+    print_event(console, event(EventType.ASSISTANT_MESSAGE, content=nasty, tool_calls=[]))
+    print_event(
+        console,
+        event(EventType.APPROVAL_REQUIRED, approval_id="a", tool="run_command", args={"command": nasty}),
+    )
+
+    assert "a[/ SALT)" in buffer.getvalue()
+
+
+async def test_run_once_tells_the_agent_nobody_is_there() -> None:
+    from agent_stack.gateways.cli import run_once
+
+    application = FakeApplication(events=[event(EventType.RUN_COMPLETED, steps=1, tool_calls=0)])
+
+    await run_once(application, "fix it", out=Console(file=io.StringIO()))  # type: ignore[arg-type]
+
+    sent = application.sent[0][0].text
+    assert "unattended" in sent and sent.endswith("fix it")

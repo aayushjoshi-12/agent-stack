@@ -162,6 +162,8 @@ def build_application(config: AppConfig | None = None) -> Application:
     )
     small = _title_model(resolved.small_model)
     context_builder = ContextBuilder(
+        # the token budget decides what is kept; a 40-message window made long tasks forget
+        recent_window=10_000,
         max_tokens=resolved.context_budget,
         summarizer=LLMSummarizer(small) if small is not None else None,
     )

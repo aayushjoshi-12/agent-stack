@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from langchain_core.messages import BaseMessage, SystemMessage, ToolMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
 from agent_stack.core.errors import ConfigurationError
 
@@ -71,6 +71,10 @@ class SystemPartsProvider(Protocol):
     """
 
     async def parts(self, *, base_prompt: str) -> Sequence[str]: ...
+
+
+#: Room kept for the "earlier messages were dropped" note, so the budget still holds with it.
+_NOTE_TOKENS = 60
 
 
 def estimate_tokens(messages: Sequence[BaseMessage], extra_chars: int = 0) -> int:
@@ -172,8 +176,16 @@ class ContextBuilder:
             messages[i] = _cleared(messages[i])  # type: ignore[arg-type]
         head = [pinned] if pinned is not None and messages and messages[0] is pinned else []
         rest = messages[len(head) :]
-        while len(rest) > 1 and size([*head, *rest]) > self.max_tokens:
+        before = len(rest)
+        while len(rest) > 1 and size([*head, *rest]) + _NOTE_TOKENS > self.max_tokens:
             rest = _without_leading_tool_results(rest[1:])
+        if len(rest) < before:  # say so: a model that is not told re-plans from scratch
+            note = HumanMessage(
+                content=f"[{before - len(rest)} earlier messages were dropped to fit the context. "
+                "Your todo list, notes and the files on disk still show your progress; "
+                "check them instead of starting over.]"
+            )
+            return [*head, note, *rest]
         return [*head, *rest]
 
     async def compact(self, history: list[BaseMessage]) -> list[BaseMessage]:

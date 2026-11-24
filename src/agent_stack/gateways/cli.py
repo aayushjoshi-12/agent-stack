@@ -14,6 +14,8 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TextIO
 
 from rich.console import Console
+from rich.markup import escape
+from rich.text import Text
 
 from agent_stack.app.application import Application, IdentityResolver, SessionResolver
 from agent_stack.core.events import AgentEvent, EventType
@@ -43,14 +45,14 @@ def print_event(console: Console, event: AgentEvent) -> None:
     elif event.type is EventType.TOOL_STARTED:
         console.print(tool_started_block(event))
     elif event.type is EventType.TOOL_OUTPUT:
-        console.print(tool_output_text(event), end="")
+        console.print(Text(tool_output_text(event)), end="")  # raw text: never markup
     elif event.type is EventType.RUN_FAILED:
         console.print(failure_block(event))
     elif event.type is EventType.APPROVAL_REQUIRED:
         tool = str(event.data.get("tool", "tool"))
         args = event.data.get("args")
         detail = tool_detail(args) if tool == "run_command" else tool_args_lines(args)
-        console.print(f"[bold yellow]approval needed:[/] {tool} {detail}")
+        console.print(f"[bold yellow]approval needed:[/] {escape(tool)} {escape(detail)}")
     elif event.type is EventType.SUBAGENT_STARTED:
         console.print(subagent_block(event, done=False))
     elif event.type is EventType.SUBAGENT_COMPLETED:
@@ -92,7 +94,7 @@ class LineGateway:
                         approve=approved,
                     )
                 except Exception as exc:  # e.g. the run was cancelled while we asked
-                    self._out.print(f"[yellow]approval not applied:[/] {exc}")
+                    self._out.print(f"[yellow]approval not applied:[/] {escape(str(exc))}")
             yield event
         await self.print_cost(application, envelope.session)
 
@@ -161,6 +163,16 @@ async def run_cli(
     console.print("[dim]bye[/dim]")
 
 
+#: Prefixed to the task in one-shot mode. Seen in a benchmark: with nobody to answer, the agent
+#: ended a task by listing steps "left for you", and stopped before checking its own work.
+UNATTENDED_NOTICE = (
+    "You are running unattended: nobody can answer questions or do any step for you. Do the whole "
+    "task yourself, including installs and configuration. Before you finish, check the result by "
+    "running it (the tests, a real request, or the exact command the task names) and fix what "
+    "fails. Never end with steps left for the user.\n\nTask:\n"
+)
+
+
 async def run_once(
     application: Application,
     prompt: str,
@@ -179,12 +191,14 @@ async def run_once(
         return approve_all
 
     session = await application.new_session(principal)
-    envelope = MessageEnvelope(principal=principal, session=session, text=prompt)
+    envelope = MessageEnvelope(
+        principal=principal, session=session, text=UNATTENDED_NOTICE + prompt
+    )
     gateway = LineGateway(out=console, approver=decide)
     try:
         async for _event in gateway.handle_message(application, envelope):
             pass
     except Exception as exc:
-        console.print(f"[red]run failed:[/] {type(exc).__name__}: {exc}")
+        console.print(f"[red]run failed:[/] {type(exc).__name__}: {escape(str(exc))}")
         return 1
     return 0
