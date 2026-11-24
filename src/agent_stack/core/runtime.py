@@ -485,7 +485,11 @@ class AgentRuntime:
         """
         if self._context_builder is None:
             return [SystemMessage(content=self._agent.system_prompt), *history, *new_messages]
-        ctx = self._context_builder.build(system_parts=resident, history=[*history, *new_messages])
+        ctx = self._context_builder.build(
+            system_parts=resident,
+            history=[*history, *new_messages],
+            pinned=new_messages[0] if new_messages else None,
+        )
         return [SystemMessage(content="\n\n".join(ctx.system)), *ctx.messages]
 
     async def _save_session(self, session: Session, stored_version: int) -> None:

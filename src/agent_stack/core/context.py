@@ -73,16 +73,38 @@ class SystemPartsProvider(Protocol):
     async def parts(self, *, base_prompt: str) -> Sequence[str]: ...
 
 
+def estimate_tokens(messages: Sequence[BaseMessage], extra_chars: int = 0) -> int:
+    """A cheap token estimate (about four characters per token), tool-call arguments included."""
+    chars = extra_chars
+    for message in messages:
+        chars += len(str(message.content))
+        for call in getattr(message, "tool_calls", None) or ():
+            chars += len(str(call.get("args", "")))
+    return chars // 4
+
+
+def _cleared(message: ToolMessage) -> ToolMessage:
+    """A stand-in for an old tool result: same call id (the pair stays valid), no payload."""
+    size = len(str(message.content))
+    note = f"[output cleared to save context ({size} chars); run the tool again if you need it]"
+    return ToolMessage(content=note, tool_call_id=message.tool_call_id, name=message.name)
+
+
+def _without_leading_tool_results(messages: Sequence[BaseMessage]) -> list[BaseMessage]:
+    """Drop tool results at the front whose tool call is no longer in the window."""
+    rest = list(messages)
+    while rest and isinstance(rest[0], ToolMessage):
+        rest.pop(0)
+    return rest
+
+
 def _recent(history: Sequence[BaseMessage], window: int) -> list[BaseMessage]:
     """The last ``window`` messages, never starting on an orphaned tool result.
 
     A cut that lands between an assistant message and its tool results would leave
     ToolMessages whose tool call the model can no longer see, which providers reject.
     """
-    recent = list(history[-window:])
-    while recent and isinstance(recent[0], ToolMessage):
-        recent.pop(0)
-    return recent
+    return _without_leading_tool_results(history[-window:])
 
 
 class ContextBuilder:
@@ -99,6 +121,8 @@ class ContextBuilder:
         recent_window: int = 40,
         summarizer: Summarizer | None = None,
         max_system_bytes: int = 64_000,
+        max_tokens: int | None = None,
+        keep_tool_results: int = 6,
     ) -> None:
         if recent_window < 1:
             raise ConfigurationError("recent_window must be at least 1")
@@ -107,25 +131,63 @@ class ContextBuilder:
         self.recent_window = recent_window
         self.summarizer = summarizer
         self.max_system_bytes = max_system_bytes
+        self.max_tokens = max_tokens
+        self.keep_tool_results = keep_tool_results
 
-    def build(self, *, system_parts: Sequence[str], history: Sequence[BaseMessage]) -> Context:
-        """Build a context: budget-fit system parts plus the last ``recent_window`` messages."""
+    def build(
+        self,
+        *,
+        system_parts: Sequence[str],
+        history: Sequence[BaseMessage],
+        pinned: BaseMessage | None = None,
+    ) -> Context:
+        """Build a context: budget-fit system parts plus a bounded message window.
+
+        ``pinned`` (the request this run is working on) always stays first, however long the
+        run gets. With ``max_tokens`` set, an over-budget window first clears the payload of
+        old tool results (keeping the newest ``keep_tool_results``), and only then drops the
+        oldest messages. Stored messages are never changed; the model sees copies.
+        """
         system = tuple(self._fit_system_parts(system_parts))
-        messages = tuple(_recent(history, self.recent_window))
-        return Context(system=system, messages=messages)
+        messages = _recent(history, self.recent_window)
+        if pinned is not None and pinned not in messages:
+            messages = [pinned, *_without_leading_tool_results(messages)]
+        if self.max_tokens is not None:
+            messages = self._fit_tokens(system, messages, pinned)
+        return Context(system=system, messages=tuple(messages))
+
+    def _fit_tokens(
+        self, system: tuple[str, ...], messages: list[BaseMessage], pinned: BaseMessage | None
+    ) -> list[BaseMessage]:
+        assert self.max_tokens is not None
+        system_chars = sum(len(part) for part in system)
+
+        def size(items: Sequence[BaseMessage]) -> int:
+            return estimate_tokens(items, system_chars)
+
+        if size(messages) <= self.max_tokens:
+            return messages
+        tool_positions = [i for i, m in enumerate(messages) if isinstance(m, ToolMessage)]
+        for i in tool_positions[: max(0, len(tool_positions) - self.keep_tool_results)]:
+            messages[i] = _cleared(messages[i])  # type: ignore[arg-type]
+        head = [pinned] if pinned is not None and messages and messages[0] is pinned else []
+        rest = messages[len(head) :]
+        while len(rest) > 1 and size([*head, *rest]) > self.max_tokens:
+            rest = _without_leading_tool_results(rest[1:])
+        return [*head, *rest]
 
     async def compact(self, history: list[BaseMessage]) -> list[BaseMessage]:
         """Compress history longer than ``recent_window``; never raises on its own.
 
         When a summarizer is configured the old tail becomes a leading
-        ``SystemMessage``; otherwise the old tail is dropped (v1 strategy).
+        ``SystemMessage``; otherwise a one-line note says how many messages were omitted.
         """
         if len(history) <= self.recent_window:
             return history
         recent = _recent(history, self.recent_window)
-        if self.summarizer is None:
-            return recent
         old = history[: len(history) - len(recent)]
+        if self.summarizer is None:
+            return [SystemMessage(content=f"[{len(old)} earlier messages were omitted.]"), *recent]
         summary = await self.summarizer.summarize(old)
         return [SystemMessage(content=summary), *recent]
 

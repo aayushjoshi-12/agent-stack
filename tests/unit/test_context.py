@@ -5,10 +5,16 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 
 from agent_stack.context import InstructionsLoader
-from agent_stack.core.context import ContextBuilder
+from agent_stack.core.context import ContextBuilder, estimate_tokens
 
 
 class FakeSummarizer:
@@ -55,14 +61,15 @@ async def test_large_conversation_is_compacted() -> None:
     assert summarizer.summarized == [history[:-10]]
 
 
-async def test_compact_without_summarizer_drops_old_tail() -> None:
+async def test_compact_without_summarizer_leaves_a_note_about_the_dropped_tail() -> None:
     builder = ContextBuilder(recent_window=10)
     history = _history(50)
 
     compacted = await builder.compact(history)
 
-    assert compacted == history[-10:]
-    assert len(compacted) == 10
+    note, *kept = compacted
+    assert kept == history[-10:]
+    assert isinstance(note, SystemMessage) and "40 earlier messages were omitted" in note.content
 
 
 async def test_compact_short_history_unchanged() -> None:
@@ -100,3 +107,51 @@ async def test_instructions_injected_into_system_prompt(tmp_path: Path) -> None:
         HumanMessage(content="hi"),
         AIMessage(content="hello"),
     )
+
+
+def _tool_turn(i: int, size: int = 10) -> list[BaseMessage]:
+    call = {"name": "read_file", "args": {"path": f"f{i}"}, "id": f"c{i}", "type": "tool_call"}
+    return [
+        AIMessage(content="", tool_calls=[call]),
+        ToolMessage(content="x" * size, tool_call_id=f"c{i}", name="read_file"),
+    ]
+
+
+def test_the_runs_request_survives_a_long_run() -> None:
+    request = HumanMessage(content="THE GOAL")
+    messages = [request] + [m for i in range(30) for m in _tool_turn(i)]  # 61 messages > window 40
+
+    ctx = ContextBuilder(recent_window=40).build(system_parts=["base"], history=messages, pinned=request)
+
+    assert ctx.messages[0] is request
+    assert isinstance(ctx.messages[1], AIMessage)  # no orphaned tool result after the pin
+    assert ctx.messages[-1] is messages[-1]
+
+
+def test_old_tool_results_are_cleared_before_anything_is_dropped() -> None:
+    request = HumanMessage(content="goal")
+    messages = [request] + [m for i in range(12) for m in _tool_turn(i, size=4000)]
+    builder = ContextBuilder(recent_window=100, max_tokens=6000, keep_tool_results=3)
+
+    ctx = builder.build(system_parts=["base"], history=messages, pinned=request)
+
+    tools = [m for m in ctx.messages if isinstance(m, ToolMessage)]
+    assert len(tools) == 12  # every call still has its result: the pairs stay valid
+    assert all("cleared" in str(m.content) for m in tools[:-3])
+    assert all(str(m.content).startswith("x") for m in tools[-3:])
+    assert all(m.tool_call_id == f"c{i}" for i, m in enumerate(tools))
+    assert str(messages[2].content).startswith("x")  # the stored original is untouched
+
+
+def test_still_over_budget_drops_oldest_but_keeps_the_pin() -> None:
+    request = HumanMessage(content="goal")
+    messages = [request] + [m for i in range(40) for m in _tool_turn(i, size=200)]
+    builder = ContextBuilder(recent_window=1000, max_tokens=150, keep_tool_results=2)
+
+    ctx = builder.build(system_parts=["base"], history=messages, pinned=request)
+
+    assert ctx.messages[0] is request
+    assert 3 <= len(ctx.messages) < 12
+    assert estimate_tokens(ctx.messages, len("base")) <= 150
+    assert isinstance(ctx.messages[1], AIMessage)
+    assert ctx.messages[-1] is messages[-1]

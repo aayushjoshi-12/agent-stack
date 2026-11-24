@@ -55,6 +55,10 @@ class AppConfig:
     small_model: str | None = None
     #: Context window (tokens) of ``model``; only used for the TUI's usage meter.
     context_window: int = 1_000_000
+    #: Tokens the model is shown at most (default 120k, far below ``context_window``): past it,
+    #: old tool results are cleared and then the oldest messages dropped. Long contexts cost
+    #: more and make models worse at using what is in them. ``AGENT_STACK_CONTEXT_BUDGET``.
+    context_budget: int = 120_000
     #: Per-conversation spend cap in USD; a conversation at or over it starts no further run.
     #: ``None`` (the default) means no cap.
     budget_usd: float | None = None
@@ -122,6 +126,7 @@ class AppConfig:
             small_model=_small_model(source.get("AGENT_STACK_SMALL_MODEL"), model),
             approval_tools=approval_tools,
             context_window=int(source.get("AGENT_STACK_CONTEXT_WINDOW", defaults.context_window)),
+            context_budget=int(source.get("AGENT_STACK_CONTEXT_BUDGET", defaults.context_budget)),
             budget_usd=budget,
             workspace=workspace,
             home=Path(home_raw).expanduser() if home_raw else _default_home(),

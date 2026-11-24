@@ -10,6 +10,7 @@ from agent_stack.app.config import AppConfig
 from agent_stack.artifacts.local import LocalArtifactStore
 from agent_stack.context.composer import SystemPromptComposer
 from agent_stack.context.instructions import InstructionsLoader
+from agent_stack.context.summarizer import LLMSummarizer
 from agent_stack.core.agent import Agent, SubAgentSpec
 from agent_stack.core.approval import ApprovalBroker, ToolPolicy
 from agent_stack.core.context import ContextBuilder
@@ -157,7 +158,11 @@ def build_application(config: AppConfig | None = None) -> Application:
         memory=memory,
         workspace_root=workspace,
     )
-    context_builder = ContextBuilder()
+    small = _title_model(resolved.small_model)
+    context_builder = ContextBuilder(
+        max_tokens=resolved.context_budget,
+        summarizer=LLMSummarizer(small) if small is not None else None,
+    )
 
     explorer = Agent(
         name="explorer",
@@ -188,7 +193,7 @@ def build_application(config: AppConfig | None = None) -> Application:
         system_prompt=DEFAULT_SYSTEM_PROMPT,
         tool_policy=ToolPolicy(frozenset(resolved.approval_tools)),
     )
-    title_model = _title_model(resolved.small_model)
+    title_model = small
     approvals = ApprovalBroker()
     factory = AgentFactory(
         session_store=session_store,
