@@ -134,6 +134,25 @@ so agent install is slow and wall-clock times are not representative; a handful 
 sample; no repeats (Terminal-Bench's own rules ask for 5 attempts per task for a leaderboard
 entry, so none of this is leaderboard-eligible).
 
+Re-test on the fixed agent (job `tb2-glm53flash-fixed-7b`, commit `e646925`+, the 7 tasks that
+failed in the baseline, all seven at once, no caps; an earlier two-at-a-time attempt was stopped
+after about 10 minutes and discarded):
+
+| Task | Baseline | Fixed agent | Notes |
+|---|---|---|---|
+| cobol-modernization | 0 (1 of 3 tests) | **1** | $0.050, 30 calls; no spiral this time (cause of the improvement not isolated) |
+| cancel-async-tasks | 0 | 0 | still 5 of 6: `test_tasks_cancel_above_max_concurrent` fails; the verify-awkward-cases prompt did not fix it |
+| configure-git-webserver | 0 | 0 | now does the work itself (no hand-back) and tested the push, but then reset the repo to empty and the grader expects `hello.html` |
+| compile-compcert | 0 | 0 | 78 calls, `/tmp/CompCert/ccomp` still not built |
+| build-cython-ext | 0 | 0 | agent timeout |
+| code-from-image | 0 | 0 | agent timeout (no crash this time) |
+| adaptive-rejection-sampler | 0 | n/a | verifier timeout |
+
+**1 of 7**, about $0.5 (the key's remaining limit, US$0.19, was nearly used up by the end). Two
+agent timeouts and one verifier timeout under emulation with seven containers sharing 10 CPUs: this
+run's wall-clock failures are probably load, not the agent. Treat the three timeouts as
+inconclusive and re-run them alone.
+
 ## What these runs found (and fixed)
 
 From the Terminal-Bench transcripts (`agent/agent-stack.txt` per trial; the full session state for
