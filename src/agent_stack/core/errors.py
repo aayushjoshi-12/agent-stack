@@ -7,6 +7,14 @@ distinguish our failures from unrelated exceptions.
 from __future__ import annotations
 
 
+def error_text(exc: BaseException, limit: int = 400) -> str:
+    """``Name: first line of the message`` — what a person reads, not the exception's repr
+    (a provider error's repr carries its headers, cookies and body)."""
+    lines = str(exc).strip().splitlines()
+    text = f"{type(exc).__name__}: {lines[0]}" if lines else type(exc).__name__
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
 class AgentStackError(Exception):
     """Base class for every error raised by agent-stack."""
 

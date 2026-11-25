@@ -189,6 +189,19 @@ async def test_provider_timeout_is_not_mistaken_for_the_run_deadline() -> None:
         await runtime.run(session_id="s1", user_id="u1", message="go")
 
 
+def test_a_run_error_is_the_message_not_the_repr() -> None:
+    from agent_stack.core.errors import error_text
+
+    class ProviderError(Exception):  # shaped like the OpenRouter SDK's errors
+        def __repr__(self) -> str:
+            return "ProviderError(headers={'set-cookie': '__cf_bm=…'}, body='…')"
+
+    text = error_text(ProviderError("Key limit exceeded (total limit).\nbody: {...}"))
+    assert text == "ProviderError: Key limit exceeded (total limit)."
+    assert error_text(RuntimeError()) == "RuntimeError"
+    assert len(error_text(RuntimeError("x" * 1000))) == 400
+
+
 async def test_session_created_on_first_run() -> None:
     store = InMemorySessionStore()
     runtime = _build_runtime(FakeChatModel([ai("hi")]), [], store)

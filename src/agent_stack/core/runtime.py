@@ -29,6 +29,7 @@ from agent_stack.core.errors import (
     RuntimeDeadlineExceeded,
     StepLimitExceeded,
     ToolCallLimitExceeded,
+    error_text,
 )
 from agent_stack.core.event_bus import EventBus
 from agent_stack.core.events import AgentEvent, EventType
@@ -524,7 +525,7 @@ class AgentRuntime:
                 run_id=run_id,
                 session_id=session_id,
                 parent_run_id=parent_run_id,
-                data={"error": repr(exc)},
+                data={"error": error_text(exc)},
             )
             raise
 

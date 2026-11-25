@@ -19,7 +19,7 @@ from uuid import uuid4
 from langchain_core.messages import AIMessage
 
 from agent_stack.core.cancellation import CancellationToken
-from agent_stack.core.errors import RunCancelled
+from agent_stack.core.errors import RunCancelled, error_text
 from agent_stack.core.event_bus import EventBus
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.run_context import RunContext, RunView, SubagentRun, run_context
@@ -255,7 +255,7 @@ class RunManager:
             raise
         except Exception as exc:
             run.status = RunStatus.FAILED
-            run.error = repr(exc)
+            run.error = error_text(exc)
             raise
         finally:
             try:
