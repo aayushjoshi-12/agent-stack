@@ -79,7 +79,10 @@ _SENSITIVE_PATH = re.compile(
     r"|\.zshrc|\.bashrc|\.bash_profile|\.profile|\.zprofile)$"
     r"|(^|/)\.(ssh|aws|gnupg|kube)(/|$)|(^|/)\.git/(hooks|config)(/|$)"
 )
-_SYSTEM_DIRS = ("/etc", "/usr", "/bin", "/sbin", "/System", "/Library", "/boot", "/var/root")
+_SYSTEM_DIRS = (
+    "/etc", "/usr", "/bin", "/sbin", "/System", "/Library", "/boot", "/var/root",
+    "/private/etc", "/private/var/root",
+)  # fmt: skip
 _READ_ONLY = frozenset(
     [
         "ls",

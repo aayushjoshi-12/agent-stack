@@ -704,7 +704,7 @@ class TuiApp(App[None]):
         if self._busy():
             return
         if self._session_id is None:
-            self.notify("Nothing to rewind to yet.")
+            self.notify("Nothing to rewind to: this conversation has no messages yet.")
             return
         try:
             turns = await self.application.timeline.lineage(self._session_id)
@@ -713,7 +713,10 @@ class TuiApp(App[None]):
             return
         turns = [t for t in turns if t.turn.user_text]
         if not turns:
-            self.notify("Nothing to rewind to yet.")
+            self.notify(
+                f"Nothing to rewind to: no earlier messages found for {self._session_id}.",
+                severity="warning",
+            )
             return
         self.push_screen(RewindScreen(turns), self._on_rewind_picked)
 
