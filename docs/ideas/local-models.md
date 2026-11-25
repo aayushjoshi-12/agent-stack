@@ -50,4 +50,4 @@ context), not chat throughput.
 
 - Zero cost: open weights, local inference; free-tier APIs only for the cascade experiment.
 - Disk: models are 2 to 5 GB each; keep two or three at a time.
-- Work on a branch (e.g. `local-models`), not `master`.
+- Work on a branch (e.g. `local-models`), not `main`.

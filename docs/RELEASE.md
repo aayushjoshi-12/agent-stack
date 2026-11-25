@@ -1,6 +1,6 @@
 # Before making the repository public
 
-Checked on 2026-11-24 against commit `HEAD` of `master`. "Done" means verified, not assumed.
+Checked on 2026-11-24 against commit `HEAD` of `main`. "Done" means verified, not assumed.
 
 ## Done
 
