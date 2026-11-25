@@ -31,7 +31,9 @@ export type Item =
       truncated: boolean;
       status: ToolStatus;
       error: string | null;
-      approval: { id: string; state: ApprovalState } | null;
+      approval: { id: string; state: ApprovalState; note?: string } | null;
+      /** What auto mode decided about this call, when it did. */
+      auto: { verdict: string; reason: string } | null;
     }
   | {
       kind: "subagent";
@@ -151,6 +153,7 @@ export function applyEvent(state: LiveState, event: ApiEvent): LiveState {
             status: "running",
             error: null,
             approval: null,
+            auto: null,
           },
         ],
       };
@@ -178,7 +181,11 @@ export function applyEvent(state: LiveState, event: ApiEvent): LiveState {
     }
     case "approval.required": {
       const callId = str(d.tool_call_id);
-      const approval = { id: str(d.approval_id), state: "pending" as ApprovalState };
+      const approval = {
+        id: str(d.approval_id),
+        state: "pending" as ApprovalState,
+        ...(str(d.note) ? { note: str(d.note) } : {}),
+      };
       const items = updateTool(base.items, event.run_id, callId, (t) => ({ ...t, approval }));
       if (items) return { ...base, items };
       return {
@@ -198,9 +205,15 @@ export function applyEvent(state: LiveState, event: ApiEvent): LiveState {
             status: "running",
             error: null,
             approval,
+            auto: null,
           },
         ],
       };
+    }
+    case "approval.auto": {
+      const auto = { verdict: str(d.verdict), reason: str(d.reason) };
+      const items = updateTool(base.items, event.run_id, str(d.tool_call_id), (t) => ({ ...t, auto }));
+      return items ? { ...base, items } : base;
     }
     case "approval.resolved": {
       const raw = str(d.status);

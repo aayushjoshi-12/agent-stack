@@ -19,6 +19,8 @@ export type UsageInfo = {
   summary: string;
 };
 
+export type SlashCommand = { name: string; description: string; kind: "skill" | "builtin" };
+
 export type ChangedFile = { path: string; kind: "created" | "modified"; edits: number; added: number; removed: number };
 export type ChangedFileDetail = ChangedFile & {
   diff: string;
@@ -84,6 +86,10 @@ export const api = {
     call<{ run_id: string }>(c, `/sessions/${encodeURIComponent(id)}/messages`, json({ text })),
   branch: (c: Conn, id: string, eventId: string) =>
     call<{ id: string }>(c, `/sessions/${encodeURIComponent(id)}/branch`, json({ event_id: eventId })),
+  commands: (c: Conn) => call<SlashCommand[]>(c, "/commands"),
+  approvalMode: (c: Conn) => call<{ mode: string; modes: string[] }>(c, "/approval-mode"),
+  setApprovalMode: (c: Conn, mode: string) =>
+    call<{ mode: string }>(c, "/approval-mode", { method: "PUT", body: JSON.stringify({ mode }) }),
   turns: (c: Conn, id: string) => call<TurnInfo[]>(c, `/sessions/${encodeURIComponent(id)}/turns`),
   rewind: (c: Conn, id: string, body: { owner_session_id: string; started_event_id: string; conversation: boolean; code: boolean }) =>
     call<RewindResult>(c, `/sessions/${encodeURIComponent(id)}/rewind`, json(body)),

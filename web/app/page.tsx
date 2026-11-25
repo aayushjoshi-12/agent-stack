@@ -6,7 +6,7 @@ import { Composer } from "@/components/Composer";
 import { Connect } from "@/components/Connect";
 import { Mark } from "@/components/Mark";
 import { Sidebar } from "@/components/Sidebar";
-import { api, ApiError, type ChangedFile, type Conn, type HistoryRow, type RewindResult, type SessionSummary, type UsageInfo } from "@/lib/api";
+import { api, ApiError, type ChangedFile, type Conn, type HistoryRow, type RewindResult, type SessionSummary, type SlashCommand, type UsageInfo } from "@/lib/api";
 import { ChangesPanel } from "@/components/ChangesPanel";
 import { HistoryPanel, type HistoryTab } from "@/components/HistoryPanel";
 import { formatCost, formatTokens } from "@/lib/format";
@@ -50,6 +50,7 @@ function historyTool(row: HistoryRow, index: number): Tool {
     status: row.result?.startsWith("Error") ? "failed" : "ok",
     error: null,
     approval: null,
+    auto: null,
   };
 }
 
@@ -72,6 +73,8 @@ export default function Page() {
   const [historyTab, setHistoryTab] = useState<HistoryTab | null>(null);
   const [draft, setDraft] = useState<{ text: string; n: number } | null>(null);
   const [filesDiffer, setFilesDiffer] = useState(false);
+  const [skills, setSkills] = useState<SlashCommand[]>([]);
+  const [mode, setMode] = useState<string>("ask");
   const [notice, setNotice] = useState("");
   const draftCount = useRef(0);
   const lastEscape = useRef(0);
@@ -213,6 +216,39 @@ export default function Page() {
       current = false;
     };
   }, [conn, activeId, running, changeTick]);
+
+  // The skills a user can type as /name, and the approval mode (ask you, or auto).
+  useEffect(() => {
+    if (!conn) return;
+    api.commands(conn).then(setSkills).catch(() => setSkills([]));
+    api.approvalMode(conn).then((r) => setMode(r.mode)).catch(() => undefined);
+  }, [conn]);
+
+  const toggleMode = useCallback(async () => {
+    if (!conn) return;
+    try {
+      const next = await api.setApprovalMode(conn, mode === "auto" ? "ask" : "auto");
+      setMode(next.mode);
+      setNotice(
+        next.mode === "auto"
+          ? "Auto mode: a classifier decides what is safe; you are asked only when it is unsure."
+          : "Ask mode: you approve every gated action.",
+      );
+    } catch (e) {
+      fail(e);
+    }
+  }, [conn, mode, fail]);
+
+  const builtins: SlashCommand[] = useMemo(
+    () => [
+      { name: "new", description: "start a new conversation", kind: "builtin" },
+      { name: "rewind", description: "go back to an earlier message", kind: "builtin" },
+      { name: "branches", description: "draw this conversation's branches", kind: "builtin" },
+      { name: "share", description: "name this point so another chat can open it", kind: "builtin" },
+      { name: "mode", description: "approval mode: /mode auto or /mode ask", kind: "builtin" },
+    ],
+    [],
+  );
 
   const restored = useRef(false);
   useEffect(() => {
@@ -421,6 +457,15 @@ export default function Page() {
               Files <span className="code tabular-nums">{changes.files.length}</span>
             </button>
           )}
+          <button
+            type="button"
+            className={`btn ${mode === "auto" ? "btn-yellow" : ""}`}
+            onClick={() => void toggleMode()}
+            aria-pressed={mode === "auto"}
+            title="Who approves tool calls: you (ask), or a classifier that asks you when unsure (auto)"
+          >
+            {mode === "auto" ? "Auto mode" : "Ask mode"}
+          </button>
           {activeId && !running && (
             <button type="button" className="btn" onClick={() => setHistoryTab("rewind")} aria-label="History: rewind, branches, share">
               History
@@ -529,7 +574,26 @@ export default function Page() {
 
         <div className="border-t-2 border-line bg-paper px-4 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
           <div className="mx-auto max-w-3xl">
-            <Composer running={running} stopping={stopping} disabled={false} draft={draft} onSend={(t) => void send(t)} onStop={() => void stop()} />
+            <Composer
+              running={running}
+              stopping={stopping}
+              disabled={false}
+              draft={draft}
+              commands={[...builtins, ...skills.filter((s) => !builtins.some((b) => b.name === s.name))]}
+              onCommand={(name, argument) => {
+                if (name === "new") newConversation();
+                else if (name === "rewind" && activeId) setHistoryTab("rewind");
+                else if (name === "branches" && activeId) setHistoryTab("branches");
+                else if (name === "share" && activeId) setHistoryTab("share");
+                else if (name === "mode") {
+                  if (argument === "auto" || argument === "ask") {
+                    void api.setApprovalMode(conn, argument).then((r) => setMode(r.mode)).catch(fail);
+                  } else void toggleMode();
+                } else setNotice("Open a conversation first.");
+              }}
+              onSend={(t) => void send(t)}
+              onStop={() => void stop()}
+            />
           </div>
         </div>
       </main>

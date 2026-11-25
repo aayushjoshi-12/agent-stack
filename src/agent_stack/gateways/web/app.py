@@ -28,7 +28,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from agent_stack.app.application import Application, parse_ref
-from agent_stack.core.errors import BudgetExceededError, PersistenceError
+from agent_stack.core.errors import ApprovalError, BudgetExceededError, PersistenceError
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.run import Run
 from agent_stack.gateways.base import HistoryItem, MessageEnvelope, model_breakdown, usage_summary
@@ -114,6 +114,10 @@ class ReferenceBody(BaseModel):
     reference: str = Field(min_length=1, max_length=1000)
 
 
+class ModeBody(BaseModel):
+    mode: str = Field(min_length=1, max_length=20)
+
+
 class PointBody(BaseModel):
     point: str | None = Field(default=None, max_length=100)  # a turn number or event id
 
@@ -157,7 +161,7 @@ def create_app(application: Application, settings: WebSettings) -> FastAPI:
     api.add_middleware(
         CORSMiddleware,
         allow_origins=list(settings.origins),
-        allow_methods=["GET", "POST", "PATCH", "DELETE"],
+        allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
         allow_headers=["Authorization", "Content-Type", "Last-Event-ID"],
     )
     principal = settings.principal
@@ -309,6 +313,26 @@ def create_app(application: Application, settings: WebSettings) -> FastAPI:
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND, "no such event in this session"
             ) from None
+
+    # ── slash commands and approval mode ─────────────────────────────────────
+    @api.get("/commands", dependencies=auth)
+    async def commands() -> list[dict[str, str]]:
+        """The skills a user can invoke by typing ``/name`` (the page adds its own built-ins)."""
+        return [
+            {"name": c.name, "description": c.description, "kind": c.kind}
+            for c in application.slash_commands()
+        ]
+
+    @api.get("/approval-mode", dependencies=auth)
+    async def get_mode() -> dict[str, Any]:
+        return {"mode": application.get_approval_mode(), "modes": list(application.approval_modes)}
+
+    @api.put("/approval-mode", dependencies=auth)
+    async def set_mode(body: ModeBody) -> dict[str, str]:
+        try:
+            return {"mode": application.set_approval_mode(body.mode)}
+        except (ApprovalError, RuntimeError) as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
 
     # ── history: rewind, branches, references ────────────────────────────────
     @api.get("/sessions/{session_id}/turns", dependencies=auth)

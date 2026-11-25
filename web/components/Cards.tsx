@@ -128,6 +128,14 @@ export function ToolCard({
             </button>
           </div>
         )}
+        {tool.auto && tool.auto.verdict !== "ask" && (
+          <div className={`code border-t-2 border-line px-3 py-1 ${tool.auto.verdict === "deny" ? "text-red" : "text-soft"}`}>
+            auto mode {tool.auto.verdict === "allow" ? "approved" : "blocked"} this: {tool.auto.reason}
+          </div>
+        )}
+        {tool.approval?.note && waiting && (
+          <div className="code border-t-2 border-line px-3 py-1 text-soft">Auto mode left this to you: {tool.approval.note}</div>
+        )}
         {tool.approval && !waiting && (
           <div className="code border-t-2 border-line px-3 py-1 text-soft">
             approval: {tool.approval.state}

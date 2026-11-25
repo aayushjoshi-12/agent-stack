@@ -100,3 +100,31 @@ async def test_history_endpoints_need_the_token_and_a_real_turn(tmp_path: Path) 
         bad = {"owner_session_id": "s1", "started_event_id": "nope"}
         r = await client.post("/sessions/s1/rewind", json=bad, headers=HEADERS)
         assert r.status_code == 404
+
+
+async def test_commands_and_approval_mode_endpoints(tmp_path: Path) -> None:
+    from agent_stack.core.approval import ApprovalMode
+    from agent_stack.skills import SkillLoader, SkillRegistry
+
+    client, w = await _setup(tmp_path)
+    folder = tmp_path / "skills" / "release-notes"
+    folder.mkdir(parents=True)
+    (folder / "SKILL.md").write_text(
+        "---\nname: release-notes\ndescription: Draft release notes.\n---\nGroup the changes.\n"
+    )
+    w.app.skills = SkillRegistry(SkillLoader([tmp_path / "skills"]))
+    w.app.approval_mode = ApprovalMode("ask")
+    async with client:
+        listing = (await client.get("/commands", headers=HEADERS)).json()
+        assert listing == [
+            {"name": "release-notes", "description": "Draft release notes.", "kind": "skill"}
+        ]
+        assert (await client.get("/approval-mode", headers=HEADERS)).json() == {
+            "mode": "ask",
+            "modes": ["ask", "auto"],
+        }
+        put = await client.put("/approval-mode", json={"mode": "auto"}, headers=HEADERS)
+        assert put.json() == {"mode": "auto"} and w.app.get_approval_mode() == "auto"
+        bad = await client.put("/approval-mode", json={"mode": "yolo"}, headers=HEADERS)
+        assert bad.status_code == 400
+        assert (await client.get("/commands")).status_code == 401

@@ -127,3 +127,18 @@ test("a finished write or edit nudges the changed-files list; a failed one or a 
   ]);
   assert.equal(s.changeTick, 1);
 });
+
+test("auto mode's verdict and its reason land on the tool, and an ask carries its note", () => {
+  const s = play([
+    ev("run.started"),
+    ev("tool.started", { tool: "run_command", tool_call_id: "c1", args: { command: "ls" } }),
+    ev("approval.auto", { tool: "run_command", tool_call_id: "c1", verdict: "allow", reason: "read-only" }),
+    ev("tool.started", { tool: "run_command", tool_call_id: "c2", args: { command: "git push" } }),
+    ev("approval.auto", { tool: "run_command", tool_call_id: "c2", verdict: "ask", reason: "it pushes code" }),
+    ev("approval.required", { approval_id: "a1", tool_call_id: "c2", tool: "run_command", args: {}, note: "it pushes code" }),
+  ]);
+  const [one, two] = s.items.filter((i) => i.kind === "tool");
+  assert.ok(one && one.kind === "tool" && two && two.kind === "tool");
+  assert.deepEqual(one.auto, { verdict: "allow", reason: "read-only" });
+  assert.deepEqual(two.approval, { id: "a1", state: "pending", note: "it pushes code" });
+});
