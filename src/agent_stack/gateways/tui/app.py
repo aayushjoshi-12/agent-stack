@@ -820,6 +820,7 @@ class TuiApp(App[None]):
             branch=self._branch,
             state=word,
             cost=usage_summary(self._usage) if self._usage.calls else "",
+            mode=self.application.get_approval_mode(),
         )
 
     def _refresh_sidebar(self) -> None:
