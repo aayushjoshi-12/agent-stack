@@ -203,8 +203,6 @@ class LocalChangeStore:
         return await asyncio.to_thread(read)
 
     async def copy_upto(self, source: str, target: str, upto: str) -> int:
-        from datetime import datetime
-
         limit = datetime.fromisoformat(upto)
         copied = 0
         for entry in await self.entries(source):
