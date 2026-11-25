@@ -1054,6 +1054,43 @@ async def test_tool_arguments_are_redacted_before_they_reach_telegram(
     assert not any(env_secret in t or bearer in t for t in shown)
 
 
+async def test_errors_and_auto_mode_text_are_redacted_before_they_reach_telegram(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "s3cr3t-env-value-456"
+    monkeypatch.setenv("MY_SERVICE_TOKEN", secret)
+    application = FakeApplication(
+        events=[
+            event(EventType.RUN_STARTED),
+            event(EventType.TOOL_STARTED, tool="run_command", tool_call_id="c", args={}),
+            event(
+                EventType.TOOL_COMPLETED,
+                tool="run_command",
+                tool_call_id="c",
+                ok=False,
+                error=f"boom {secret}",
+            ),
+            event(EventType.APPROVAL_AUTO, tool="web_fetch", verdict="deny", reason=secret),
+            event(
+                EventType.APPROVAL_REQUIRED,
+                approval_id="s1",
+                tool="run_command",
+                tool_call_id="d",
+                args={},
+                note=f"unsure about {secret}",
+            ),
+            event(EventType.RUN_FAILED, error=f"provider said {secret}"),
+        ]
+    )
+    gateway, api = _gateway(application)
+    await _say(gateway, "/verbose full")
+    await _say(gateway, "go")
+
+    shown = api.texts() + [text for _, _, text in api.edits]
+    assert any("[redacted]" in t for t in shown)
+    assert not any(secret in t for t in shown)
+
+
 async def test_the_open_conversation_survives_a_restart(tmp_path: Any) -> None:
     state = tmp_path / "state" / "telegram.json"
     application = FakeApplication(events=_reply_events())

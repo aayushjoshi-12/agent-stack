@@ -992,7 +992,7 @@ class TelegramGateway:
             await self._finish_status(chat, "✓ done")
             return True
         elif kind is EventType.RUN_FAILED:
-            error = str(event.data.get("error", "run failed"))
+            error = redact_secrets(str(event.data.get("error", "run failed")))
             await self._finish_status(
                 chat, "■ cancelled" if "RunCancelled" in error else "✗ failed"
             )
@@ -1022,7 +1022,7 @@ class TelegramGateway:
         if chat.mode == "full":
             message_id = chat.full_ids.get(str(event.data.get("tool_call_id", "")))
             if message_id is not None:
-                error = str(event.data.get("error") or "")[:300]
+                error = redact_secrets(str(event.data.get("error") or ""))[:300]
                 mark = "✓ ok" if ok else f"✗ failed{': ' + error if error else ''}"
                 await self._edit(
                     chat.chat_id,
@@ -1040,7 +1040,7 @@ class TelegramGateway:
         """Say what auto mode did, so nothing is approved or blocked silently."""
         verdict = str(event.data.get("verdict"))
         tool = str(event.data.get("tool", "tool"))
-        reason = str(event.data.get("reason", ""))[:160]
+        reason = redact_secrets(str(event.data.get("reason", "")))[:160]
         if verdict == "allow":
             line = f"✓ auto-approved {tool}: {reason}"
         elif verdict == "deny":
@@ -1067,7 +1067,7 @@ class TelegramGateway:
                 ]
             ]
         }
-        note = str(event.data.get("note", ""))
+        note = redact_secrets(str(event.data.get("note", "")))
         why = f"\n<i>Auto mode left this to you: {escape_fit(note, 200)}</i>" if note else ""
         message_id = await self._send_html(
             chat.chat_id,
