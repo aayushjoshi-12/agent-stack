@@ -54,26 +54,36 @@ _DENY = tuple(
         r"\b(shutdown|reboot|halt|poweroff)\b",
     )
 )
-_ASK = tuple(
-    re.compile(p, re.IGNORECASE)
-    for p in (
-        r"\bsudo\b",
-        r"\bsu\s+-?\w",
-        r"\b(curl|wget)\b[^|;&\n]*\|\s*(sudo\s+)?(ba|z|da|k)?sh\b",
-        r"\bgit\s+push\b",
+_ASK_RULES = (
+    (r"\bsudo\b", "it runs with administrator rights"),
+    (r"\bsu\s+-?\w", "it switches user"),
+    (r"\b(curl|wget)\b[^|;&\n]*\|\s*(sudo\s+)?(ba|z|da|k)?sh\b", "it runs a downloaded script"),
+    (r"\bgit\s+push\b", "it pushes code to a remote"),
+    (
         r"\bgit\s+(reset\s+--hard|clean\s+-\w*f|checkout\s+--|restore\s)",
-        r"\b(npm|pnpm|yarn|cargo|twine|gem|uv)\s+publish\b",
-        r"\b(ssh|scp|sftp|rsync)\b",
+        "it discards local changes",
+    ),
+    (r"\b(npm|pnpm|yarn|cargo|twine|gem|uv)\s+publish\b", "it publishes a package"),
+    (r"\b(ssh|scp|sftp|rsync)\b", "it connects to another machine"),
+    (
         r"\bdocker\s+(push|login|run\b[^|;&\n]*(-v\s*/|--privileged))",
-        r"\bkubectl\s+(apply|delete|exec)\b",
+        "it pushes images or gives a container host access",
+    ),
+    (r"\bkubectl\s+(apply|delete|exec)\b", "it changes a cluster"),
+    (
         r"\b(brew|apt|apt-get|yum|dnf|pacman)\s+(install|remove|uninstall|upgrade)\b",
-        r"\b(launchctl|systemctl|crontab)\b",
+        "it changes system software",
+    ),
+    (r"\b(launchctl|systemctl|crontab)\b", "it changes background services"),
+    (
         r"~/\.(ssh|aws|gnupg|kube|docker|config/gcloud)|/\.(ssh|aws|gnupg)/",
-        r"\b(id_rsa|id_ed25519|credentials|\.netrc|\.pypirc)\b",
-        r"(^|[\s/=])\.env(\.|\b)",
-        r"\b(printenv|env)\b\s*($|[|;&>])",
-    )
+        "it touches credentials or keys",
+    ),
+    (r"\b(id_rsa|id_ed25519|credentials|\.netrc|\.pypirc)\b", "it touches credentials"),
+    (r"(^|[\s/=])\.env(\.|\b)", "it touches a .env file"),
+    (r"\b(printenv|env)\b\s*($|[|;&>])", "it prints environment variables, which can hold secrets"),
 )
+_ASK = tuple((re.compile(p, re.IGNORECASE), why) for p, why in _ASK_RULES)
 _SENSITIVE_PATH = re.compile(
     r"(^|/)(\.env(\..*)?|id_rsa|id_ed25519|\.netrc|\.pypirc|\.npmrc|credentials|authorized_keys"
     r"|\.zshrc|\.bashrc|\.bash_profile|\.profile|\.zprofile)$"
@@ -229,11 +239,9 @@ def rule_verdict(tool: str, args: Mapping[str, Any], root: Path) -> Advice | Non
                 return Advice(
                     Verdict.DENY, "it would destroy or overwrite the system or your files"
                 )
-        for pattern in _ASK:
+        for pattern, why in _ASK:
             if pattern.search(command):
-                return Advice(
-                    Verdict.ASK, "it is sudo, pushes or publishes, touches credentials, or installs"
-                )
+                return Advice(Verdict.ASK, why)
         if external_target(tool, args, root) is None and _read_only(command):
             return Advice(Verdict.ALLOW, "a read-only command inside the workspace")
         return None

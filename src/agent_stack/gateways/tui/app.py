@@ -284,8 +284,8 @@ class TuiApp(App[None]):
         popup.add_options(
             [
                 Option(
-                    f"[bold $accent]/{name}[/]  [$foreground-muted]{escape(' '.join(desc.split())[:70])}"
-                    f"{'  (skill)' if kind == 'skill' else ''}[/]",
+                    f"[bold $accent]/{name}[/]  [$foreground-muted]{escape(' '.join(desc.split())[:52])}"
+                    f"{'  ·skill' if kind == 'skill' else ''}[/]",
                     id=name,
                 )
                 for name, desc, kind in matches[:30]

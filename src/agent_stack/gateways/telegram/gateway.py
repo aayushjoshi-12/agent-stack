@@ -18,6 +18,7 @@ import html
 import json
 import logging
 import os
+import re
 import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping
@@ -71,6 +72,7 @@ _COMMANDS = [
     ("branches", "Draw this conversation's branches"),
     ("ref", "Share this point, or open a shared one: /ref [asref://…]"),
     ("files", "Put this conversation's files in the working folder"),
+    ("mode", "Approval mode: /mode auto or /mode ask"),
     ("cost", "What this conversation has cost so far"),
     ("status", "Where you are and what is running"),
     ("cancel", "Stop the current run"),
@@ -89,6 +91,8 @@ _HELP = (
     "/branches  draw this conversation's branches\n"
     "/ref [ref]  make a reference to this point, or open one from another chat\n"
     "/files  put this conversation's files in the working folder\n"
+    "/mode [ask|auto]  who approves tool calls: you, or a classifier that asks you when unsure\n"
+    "/<skill> [request]  run a skill (type / to see them)\n"
     "/cost  what this conversation has cost (tokens and dollars)\n"
     "/status  where you are and what is running\n"
     "/cancel  stop the current run"
@@ -252,10 +256,26 @@ class TelegramGateway:
             pass  # remembering is a convenience; never fail a chat over it
 
     # ── polling loop ─────────────────────────────────────────────────────────
+    def _command_menu(self) -> list[tuple[str, str]]:
+        """The ``/`` menu Telegram shows: the built-ins, then one entry per skill.
+
+        Telegram command names are lower-case letters, digits and underscores (up to 32), so a
+        skill called ``system-data-mapping`` appears as ``/system_data_mapping``; the application
+        reads the underscores as hyphens. Telegram allows 100 commands in all.
+        """
+        menu = list(_COMMANDS)
+        taken = {name for name, _ in menu}
+        for command in self._app.slash_commands():
+            name = re.sub(r"[^a-z0-9_]", "_", command.name.lower())[:32]
+            if name and name not in taken:
+                taken.add(name)
+                menu.append((name, command.description[:200] or "Run this skill"))
+        return menu[:100]
+
     async def run(self) -> None:
         """Poll until :meth:`stop`; transient network errors back off instead of ending it."""
         with contextlib.suppress(TelegramError):
-            await self._api.set_my_commands(_COMMANDS)
+            await self._api.set_my_commands(self._command_menu())
         offset, delay = 0, 1.0
         while not self._stopped:
             try:
@@ -388,6 +408,8 @@ class TelegramGateway:
             await self._cmd_ref(chat, argument)
         elif command == "/files":
             await self._cmd_files(chat)
+        elif command == "/mode":
+            await self._cmd_mode(chat, argument)
         elif command == "/cost":
             await self._cmd_cost(chat)
         elif command == "/status":
@@ -535,6 +557,30 @@ class TelegramGateway:
             f"<code>{html.escape(ref)}</code>",
             raw=ref,
         )
+
+    async def _cmd_mode(self, chat: _Chat, argument: str) -> None:
+        current = self._app.get_approval_mode()
+        wanted = argument.strip().lower()
+        if not wanted:
+            keyboard = {
+                "inline_keyboard": [
+                    [_button("Ask me" + (" ✓" if current == "ask" else ""), "am:ask")],
+                    [_button("Auto" + (" ✓" if current == "auto" else ""), "am:auto")],
+                ]
+            }
+            await self._say(
+                chat,
+                f"Approval mode: {current}.\nask: you approve every gated action.\n"
+                "auto: a classifier decides what is safe and asks you only when unsure.",
+                keyboard,
+            )
+            return
+        try:
+            now = self._app.set_approval_mode(wanted)
+        except Exception:
+            await self._say(chat, "Use /mode ask or /mode auto.")
+            return
+        await self._say(chat, f"Approval mode: {now}.")
 
     async def _cmd_files(self, chat: _Chat) -> None:
         if await self._refuse_if_busy(chat):
@@ -726,6 +772,14 @@ class TelegramGateway:
             await self._on_delete(chat, callback_id, message_id, data)
         elif prefix == "vb":
             await self._on_verbose(chat, callback_id, message_id, data)
+        elif prefix == "am":
+            try:
+                now = self._app.set_approval_mode(data.split(":", 1)[1])
+            except Exception:
+                await self._api.answer_callback_query(callback_id, "No such mode")
+                return
+            await self._api.answer_callback_query(callback_id, f"Mode: {now}")
+            await self._edit(chat.chat_id, message_id, f"Approval mode: {now}.")
         elif prefix in ("rw", "rm"):
             await self._on_rewind(chat, callback_id, message_id, data)
         else:
@@ -912,6 +966,8 @@ class TelegramGateway:
             await self._tool_started(chat, event)
         elif kind is EventType.TOOL_COMPLETED:
             await self._tool_completed(chat, event)
+        elif kind is EventType.APPROVAL_AUTO:
+            await self._auto_decision(chat, event)
         elif kind is EventType.APPROVAL_REQUIRED:
             await self._ask_approval(chat, event)
         elif kind is EventType.RUN_COMPLETED:
@@ -962,6 +1018,23 @@ class TelegramGateway:
             chat.status_lines.append(f"✗ {event.data.get('tool')} failed")
             await self._flush_status(chat)
 
+    async def _auto_decision(self, chat: _Chat, event: AgentEvent) -> None:
+        """Say what auto mode did, so nothing is approved or blocked silently."""
+        verdict = str(event.data.get("verdict"))
+        tool = str(event.data.get("tool", "tool"))
+        reason = str(event.data.get("reason", ""))[:160]
+        if verdict == "allow":
+            line = f"✓ auto-approved {tool}: {reason}"
+        elif verdict == "deny":
+            line = f"⛔ auto mode blocked {tool}: {reason}"
+        else:
+            return  # "ask" is followed by the usual question, which shows the reason
+        if chat.mode != "off":
+            chat.status_lines.append(line)
+            await self._flush_status(chat)
+        if verdict == "deny":
+            await self._say(chat, line)
+
     async def _ask_approval(self, chat: _Chat, event: AgentEvent) -> None:
         approval_id = str(event.data["approval_id"])
         label = _summary(event)
@@ -976,11 +1049,13 @@ class TelegramGateway:
                 ]
             ]
         }
+        note = str(event.data.get("note", ""))
+        why = f"\n<i>Auto mode left this to you: {escape_fit(note, 200)}</i>" if note else ""
         message_id = await self._send_html(
             chat.chat_id,
-            f"<b>Approve?</b>\n{escape_fit(label, 300)}\n<pre>{shown}</pre>",
+            f"<b>Approve?</b>\n{escape_fit(label, 300)}\n<pre>{shown}</pre>{why}",
             keyboard,
-            fallback=f"Approve?\n{label}\n{detail}",
+            fallback=f"Approve?\n{label}\n{detail}" + (f"\nAuto mode: {note}" if note else ""),
         )
         chat.approvals[approval_id] = (event.run_id, event.session_id, message_id, label)
 

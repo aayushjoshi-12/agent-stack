@@ -89,3 +89,38 @@ async def test_bad_input_is_answered_not_raised(tmp_path: Path) -> None:
     assert api.texts()[-1].startswith("Error:")
     await gateway.handle_update(_callback("rw:9"))
     assert api.answers[-1][1].startswith("That list is out of date")
+
+
+async def test_skills_join_the_command_menu_and_run_with_underscores(tmp_path: Path) -> None:
+    from agent_stack.gateways.base import SlashCommand
+    from agent_stack.skills import SkillLoader, SkillRegistry
+
+    gateway, _api, w = await _gateway(tmp_path)
+    folder = tmp_path / "skills" / "release-notes"
+    folder.mkdir(parents=True)
+    (folder / "SKILL.md").write_text(
+        "---\nname: release-notes\ndescription: Draft release notes.\n---\nGroup the changes.\n"
+    )
+    w.app.skills = SkillRegistry(SkillLoader([tmp_path / "skills"]))
+    menu = dict(gateway._command_menu())
+    assert menu["release_notes"] == "Draft release notes." and "rewind" in menu and "mode" in menu
+    assert w.app.slash_commands() == [
+        SlashCommand("release-notes", "Draft release notes.", "skill")
+    ]
+
+
+async def test_mode_command_and_buttons(tmp_path: Path) -> None:
+    gateway, api, w = await _gateway(tmp_path)
+    from agent_stack.core.approval import ApprovalMode
+
+    w.app.approval_mode = ApprovalMode("ask")
+    await gateway.handle_update(_message("/mode"))
+    assert "Approval mode: ask" in api.texts()[-1]
+    labels = [b["text"] for row in api.sent[-1][2]["inline_keyboard"] for b in row]
+    assert labels == ["Ask me ✓", "Auto"]
+    await gateway.handle_update(_callback("am:auto"))
+    assert w.app.get_approval_mode() == "auto" and "auto" in api.edits[-1][2]
+    await gateway.handle_update(_message("/mode ask"))
+    assert w.app.get_approval_mode() == "ask"
+    await gateway.handle_update(_message("/mode nonsense"))
+    assert "Use /mode ask or /mode auto" in api.texts()[-1]
