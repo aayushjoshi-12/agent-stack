@@ -7,11 +7,12 @@ metadata) and the bounded history window. No network, no real LLM.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from agent_stack.context.composer import SystemPromptComposer
 from agent_stack.context.instructions import InstructionsLoader
@@ -154,3 +155,50 @@ async def test_history_summary_reaches_model_prompt() -> None:
     assert isinstance(system, SystemMessage)
     assert "SUMMARY" in system.content
     assert len(model.calls[0][1:]) == 4
+
+
+async def test_concurrent_runs_calibrate_against_their_own_estimate() -> None:
+    """Two interleaved runs on one runtime: each run's reported input tokens are compared
+    with that run's own estimate, not with whichever run built its input last."""
+    long = "long " * 500
+    estimates: dict[str, int] = {}
+    calibrations: list[tuple[int, int]] = []
+
+    class SpyBuilder(ContextBuilder):
+        def build(self, **kwargs: Any) -> Any:
+            ctx = super().build(**kwargs)
+            estimates[str(kwargs["pinned"].content)] = ctx.raw_estimate
+            return ctx
+
+        def calibrate(self, raw_estimate: int, actual_tokens: int, overhead: int = 0) -> None:
+            calibrations.append((raw_estimate, actual_tokens))
+
+    both_called = asyncio.Event()
+    calls = 0
+
+    class BarrierModel:
+        """Holds the first call until the second run has built its input too."""
+
+        def bind_tools(self, tools: Any) -> BarrierModel:
+            return self
+
+        async def ainvoke(self, messages: Any, **kwargs: Any) -> AIMessage:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                both_called.set()
+            await both_called.wait()
+            tokens = 111 if messages[-1].content == "short" else 999
+            return AIMessage(
+                content="ok",
+                usage_metadata={"input_tokens": tokens, "output_tokens": 1, "total_tokens": 0},
+            )
+
+    runtime = _runtime(BarrierModel(), InMemorySessionStore(), context_builder=SpyBuilder())
+    await asyncio.gather(
+        runtime.run(session_id="a", user_id="u1", message="short"),
+        runtime.run(session_id="b", user_id="u1", message=long),
+    )
+
+    assert estimates["short"] != estimates[long]
+    assert sorted(calibrations) == sorted([(estimates["short"], 111), (estimates[long], 999)])

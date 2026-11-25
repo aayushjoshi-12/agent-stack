@@ -169,7 +169,6 @@ class AgentRuntime:
         self._event_bus = event_bus
         self._session_lock = session_lock
         self._context_builder = context_builder
-        self._last_raw_estimate = 0
         #: Tokens the bound tool definitions add to every call (the message estimate omits them).
         self._tool_overhead = tool_schema_tokens(agent.tools)
         self._system_parts = system_parts
@@ -291,7 +290,9 @@ class AgentRuntime:
                 usage = usage_data(response)
                 if usage is not None and self._context_builder is not None:
                     self._context_builder.calibrate(
-                        self._last_raw_estimate, int(usage["input_tokens"]), self._tool_overhead
+                        summary_memo["raw_estimate"],
+                        int(usage["input_tokens"]),
+                        self._tool_overhead,
                     )
                 if usage is not None:
                     await self._emit(
@@ -587,7 +588,7 @@ class AgentRuntime:
                 )
             except Exception:  # a failed summary must never stop the run
                 _LOG.warning("summarising dropped messages failed", exc_info=True)
-        self._last_raw_estimate = ctx.raw_estimate
+        memo["raw_estimate"] = ctx.raw_estimate  # per run: concurrent runs share this runtime
         return [SystemMessage(content="\n\n".join(ctx.system)), *ctx.messages]
 
     async def _save_session(self, session: Session, stored_version: int) -> None:
