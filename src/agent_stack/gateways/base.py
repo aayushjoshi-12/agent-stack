@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from agent_stack.core.events import AgentEvent
@@ -31,6 +32,7 @@ __all__ = [
     "SessionUsage",
     "format_cost",
     "format_tokens",
+    "format_when",
     "model_breakdown",
     "usage_summary",
 ]
@@ -61,6 +63,26 @@ class SessionSummary:
     updated_at: str | None = None  # ISO, UTC: when it was last active
     created_at: str | None = None
     branch_of: str | None = None
+
+
+def format_when(iso: str | None, *, now: datetime | None = None) -> str:
+    """A timestamp for people, in local time: ``today 14:05``, ``yesterday 09:30``, ``14 Nov 07:21``
+    (with the year when it is not this year). Empty for a missing or unreadable one."""
+    if not iso:
+        return ""
+    try:
+        when = datetime.fromisoformat(iso).astimezone()
+    except ValueError:
+        return ""
+    current = (now or datetime.now().astimezone()).astimezone()
+    days = (current.date() - when.date()).days
+    clock = when.strftime("%H:%M")
+    if days == 0:
+        return f"today {clock}"
+    if days == 1:
+        return f"yesterday {clock}"
+    day = when.strftime("%-d %b") + ("" if when.year == current.year else f" {when.year}")
+    return f"{day} {clock}"
 
 
 @dataclass(frozen=True)

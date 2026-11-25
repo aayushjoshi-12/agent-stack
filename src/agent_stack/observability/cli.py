@@ -50,7 +50,10 @@ def _parser() -> argparse.ArgumentParser:
     ideas_show.add_argument("project")
     ideas_show.add_argument("title")
     history_cli.add_parsers(sub)
-    sub.add_parser("tui", help="run the Textual terminal UI gateway")
+    tui = sub.add_parser("tui", help="run the Textual terminal UI gateway")
+    tui.add_argument("--session", default=None, help="continue this conversation")
+    resume = sub.add_parser("resume", help="continue a conversation in the terminal UI")
+    resume.add_argument("session", nargs="?", default=None, help="its id (default: the latest)")
     sub.add_parser("chat", help="run the line REPL gateway")
     sub.add_parser("telegram", help="run the Telegram bot gateway (needs TELEGRAM_BOT_TOKEN)")
     sub.add_parser("web", help="run the web API gateway (needs AGENT_STACK_WEB_TOKEN)")
@@ -77,11 +80,20 @@ def tail(path: Path, *, run_id: str | None = None, from_sequence: int = 0) -> No
                 print(line, end="")
 
 
-def _run_tui() -> int:
+def _run_tui(session_id: str | None = None, *, latest: bool = False) -> int:
+    import asyncio
+
     from agent_stack.app.bootstrap import build_application
     from agent_stack.gateways.tui import run_tui
 
-    run_tui(build_application())
+    application = build_application()
+    if latest:
+        recent = asyncio.run(application.list_sessions("tui:local-user", 1))
+        if not recent:
+            print("No conversations to continue yet.", file=sys.stderr)
+            return 1
+        session_id = recent[0].id
+    run_tui(application, session_id=session_id)
     return 0
 
 
@@ -183,7 +195,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if parsed.command == "ideas":
         return _ideas(parsed)
     if parsed.command == "tui":
-        return _run_tui()
+        return _run_tui(parsed.session)
+    if parsed.command == "resume":
+        return _run_tui(parsed.session, latest=parsed.session is None)
     if parsed.command == "chat":
         return _run_chat()
     if parsed.command == "telegram":

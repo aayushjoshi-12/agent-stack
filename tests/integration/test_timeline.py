@@ -255,3 +255,59 @@ async def test_the_session_list_hides_subagent_sessions_and_has_dates(tmp_path: 
     listing = await w.app.list_sessions("u1")
     assert [s.id for s in listing] == ["s1"]
     assert listing[0].updated_at and listing[0].title == "make a"  # untitled: first words
+
+
+async def test_the_agent_can_find_read_question_and_fork_an_old_chat(tmp_path: Path) -> None:
+    from agent_stack.app.timeline_tools import timeline_tools
+    from agent_stack.core.agent import Agent
+    from agent_stack.core.run_context import RunContext, run_context
+
+    w = await _two_turns(tmp_path)
+    tools = {t.name: t for t in timeline_tools(lambda: w.app)}
+    context = RunContext(
+        run_id="r", session_id="other", user_id="u1", depth=0, parent_run_id=None,
+        agent=Agent(name="a", model="test:m"), services=None,  # type: ignore[arg-type]
+    )  # fmt: skip
+    with run_context(context):
+        found = await tools["find_chats"].ainvoke({"query": "change"})
+        assert found.startswith("s1") and "change a" in found
+        assert await tools["find_chats"].ainvoke({"query": "zebra"}) == "No matching conversations."
+
+        tail = await tools["read_chat"].ainvoke({"session_id": "s1", "count": 3})
+        assert "last 3 of 10 messages" in tail and "AGENT: edited a and wrote b" in tail
+        assert "Digest" in await tools["read_chat"].ainvoke({"session_id": "s1", "mode": "summary"})
+
+        fork = await tools["fork_chat"].ainvoke({"session_id": "s1"})
+        new_id = fork.split("Forked into ")[1].split(".")[0]
+        assert new_id != "s1" and f"agent-stack resume {new_id}" in fork
+        assert len(await w.app.session_store.get_messages(new_id)) == 10  # the whole chat
+
+        # another user's chat is not reachable
+        assert (await tools["read_chat"].ainvoke({"session_id": "nope"})).startswith("Error")
+
+
+async def test_ask_chat_uses_a_separate_model_call(tmp_path: Path) -> None:
+    from agent_stack.core.agent import Agent
+    from agent_stack.core.run_context import RunContext, run_context
+
+    w = await _two_turns(tmp_path)
+    seen: list[str] = []
+
+    class Answerer:
+        async def ainvoke(self, messages: object) -> object:
+            seen.append(str(messages))
+            return ai("It created a.txt and then b.txt.")
+
+    w.app.title_model = Answerer()  # type: ignore[assignment]
+    from agent_stack.app.timeline_tools import timeline_tools
+
+    ask = {t.name: t for t in timeline_tools(lambda: w.app)}["ask_chat"]
+    context = RunContext(
+        run_id="r", session_id="other", user_id="u1", depth=0, parent_run_id=None,
+        agent=Agent(name="a", model="test:m"), services=None,  # type: ignore[arg-type]
+    )  # fmt: skip
+    with run_context(context):
+        answer = await ask.ainvoke({"session_id": "s1", "question": "what files did it make?"})
+    assert answer == "It created a.txt and then b.txt."
+    assert "make a" in seen[0] and "what files did it make?" in seen[0]
+    assert len(await w.app.session_store.get_messages("s1")) == 10  # the old chat is unchanged

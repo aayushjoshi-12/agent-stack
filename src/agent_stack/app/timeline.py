@@ -156,7 +156,9 @@ class Timeline:
         forked_at = await self._fork_time(session) if session is not None else None
         if forked_at is not None:  # a fork's copied lines are its parent's turns, not its own
             logged = [r for r in logged if r.ts > forked_at]
-        if len(top) < sum(1 for r in logged if r.kind == "human"):  # some turns were never logged: use the transcript instead
+        if len(top) < sum(
+            1 for r in logged if r.kind == "human"
+        ):  # some turns were never logged: use the transcript instead
             return self._transcript_turns(logged, entries)
         found: list[Turn] = []
         for number, started in enumerate(top, 1):
@@ -401,6 +403,25 @@ class Timeline:
             when = await self._point_time(session_id, wanted)
             await app.change_store.copy_upto(session_id, branch_id, when.isoformat())
         return branch_id
+
+    async def fork_end(self, session_id: str) -> str:
+        """Fork a conversation at its very end (everything it holds), files included."""
+        turns = await self.turns(session_id)
+        if not turns:
+            raise PersistenceError(f"{session_id} has nothing to fork yet")
+        last = turns[-1]
+        if last.completed_event_id is not None:
+            return await self.fork(session_id, last.completed_event_id)
+        store = self._app.session_store
+        if not hasattr(store, "branch_before_seq"):
+            raise PersistenceError("this session store cannot fork a transcript")
+        records = await self._human_records(session_id)
+        branch = await store.branch_before_seq(session_id, max(r.seq for r in records) + 1)
+        if self._app.change_store is not None:
+            await self._app.change_store.copy_upto(
+                session_id, branch.id, max(r.ts for r in records).isoformat()
+            )
+        return str(branch.id)
 
     async def _resolve(self, session_id: str, point: str) -> str:
         """A turn number (``3`` after it, ``3-`` before it) or an event id, as a point id."""

@@ -27,7 +27,7 @@ from textual.widgets import Markdown, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
 from agent_stack.app.application import FileDiff
-from agent_stack.gateways.base import SessionSummary
+from agent_stack.gateways.base import SessionSummary, format_when
 from agent_stack.gateways.tui.render import diff_kind
 
 if TYPE_CHECKING:
@@ -709,10 +709,22 @@ class SessionPicker(ModalScreen[str | None]):
     _EMPTY = "[$foreground-muted]No conversations yet. esc to close[/]"
 
     def _option(self, session: SessionSummary) -> Option:
+        """Two lines and a gap: the title on one line, its date and kind beneath, muted."""
         here = session.id == self._current
         mark = "[$accent]●[/] " if here else "  "
-        tag = " [$foreground-muted](current)[/]" if here else ""
-        return Option(f"{mark}{escape(session.title)}{tag}", id=session.id)
+        tag = "  [$accent](open now)[/]" if here else ""
+        title = " ".join(session.title.split())
+        shown = title if len(title) <= 60 else title[:59] + "…"
+        facts = [format_when(session.updated_at or session.created_at)]
+        if session.branch_of:
+            facts.append("a branch")
+        meta = "  ·  ".join(f for f in facts if f)
+        lines = [
+            f"{mark}[bold]{escape(shown)}[/]{tag}",
+            f"  [$foreground-muted]{escape(meta)}[/]",
+            "",
+        ]
+        return Option("\n".join(lines), id=session.id)
 
     def on_mount(self) -> None:
         listing = self.query_one(OptionList)
@@ -819,8 +831,14 @@ class RewindScreen(ModalScreen["tuple[LineTurn, str] | None"]):
             tail = (
                 f"  [$foreground-muted]{files} file{'s' if files != 1 else ''}[/]" if files else ""
             )
-            text = escape(" ".join(item.turn.user_text.split())[:58] or "(no text)")
-            rows.append(Option(f"{text}{tail}", id=str(number)))
+            text = escape(" ".join(item.turn.user_text.split())[:60] or "(no text)")
+            when = format_when(item.turn.timestamp.isoformat())
+            rows.append(
+                Option(
+                    f"[bold]{text}[/]\n  [$foreground-muted]{escape(when)}[/]{tail}\n",
+                    id=str(number),
+                )
+            )
         return rows
 
     def on_mount(self) -> None:

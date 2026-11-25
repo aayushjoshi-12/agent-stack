@@ -129,11 +129,13 @@ class TuiApp(App[None]):
         *,
         principal: str = "local-user",
         session_id: str | None = None,
+        resume: bool = False,
     ) -> None:
         super().__init__()
         self.application = application
         self._principal = IdentityResolver().resolve("tui", principal)
         self._session_id = session_id
+        self._resume = resume  # open ``session_id``'s history at startup
 
         for theme in THEMES:
             self.register_theme(theme)
@@ -180,6 +182,28 @@ class TuiApp(App[None]):
         self.set_interval(0.1, self._tick)
         self._refresh_all()
         self._spawn(self._load_branch())
+        if self._resume and self._session_id is not None:  # started with a conversation to continue
+            self._spawn(self._resume_session(self._session_id))
+
+    async def _resume_session(self, session_id: str) -> None:
+        session = await self.application.get_session(session_id)
+        if session is None:
+            self.notify(f"No conversation {session_id}.", severity="error")
+            self._session_id = None
+            return
+        self._titles[session_id] = session.title or ""
+        await self._open_session(session_id)
+
+    @property
+    def session_title(self) -> str | None:
+        return self._task_title
+
+    @property
+    def resume_command(self) -> str | None:
+        """How to come back to this conversation, once it has anything in it."""
+        if self._session_id is None or (self._task_title is None and not self._tokens):
+            return None
+        return f"agent-stack resume {self._session_id}"
 
     def on_unmount(self) -> None:
         for task in list(self._tasks):

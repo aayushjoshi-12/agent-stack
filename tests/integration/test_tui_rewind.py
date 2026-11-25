@@ -142,3 +142,23 @@ async def test_branches_screen_reference_copy_and_pasting_a_reference_opens_it(
         await _settle(pilot)
         assert app._session_id not in (None, "s1")  # a fork of s1 is now open
         assert len(await w.app.session_store.get_messages("s1")) == before  # nothing was sent
+
+
+async def test_the_chats_picker_shows_dates_and_the_exit_hint_names_the_command(
+    tmp_path: Path,
+) -> None:
+    from agent_stack.gateways.tui.widgets import SessionPicker
+
+    w = await _two_turns(tmp_path)
+    app = TuiApp(w.app, session_id="s1", resume=True)
+    app._principal = "tui:p"  # the conversations in this world belong to tui:p
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _settle(pilot)
+        assert app.resume_command == "agent-stack resume s1"
+        await app.action_switch_session()
+        await _settle(pilot)
+        assert isinstance(app.screen, SessionPicker)
+        listing = app.screen.query_one("OptionList")
+        prompt = str(listing.get_option_at_index(0).prompt)
+        assert "make a" in prompt and ("today" in prompt or ":" in prompt)  # title and when
+        assert "::" not in prompt

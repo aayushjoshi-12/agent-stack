@@ -14,7 +14,7 @@ import sqlite3
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
@@ -422,11 +422,13 @@ class SqliteSessionStore:
             raise PersistenceError(f"cannot branch unknown session {session_id}")
         records = await self._conversation.read(session_id)
         at = next((r for r in records if r.seq == seq), None)
-        if at is None:
+        if at is None and not (records and seq > max(r.seq for r in records)):
             raise PersistenceError(f"{session_id} has no transcript line {seq}")
         keep = [r for r in records if r.seq < seq]
         metadata = dict(parent.metadata)
-        metadata["branch_point_ts"] = at.ts.isoformat()
+        # a point past the last line (fork the whole thing) is "just after" that line
+        point = at.ts if at is not None else max(r.ts for r in records) + timedelta(microseconds=1)
+        metadata["branch_point_ts"] = point.isoformat()
         branch = Session(
             id=f"{session_id}-b{uuid4().hex[:6]}",
             owner_id=parent.owner_id,

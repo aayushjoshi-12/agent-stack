@@ -141,7 +141,7 @@ HelpScreen, ApprovalScreen, SessionPicker, RewindScreen, BranchesScreen {
     background: $surface;
     border-left: thick $primary;
 }
-#picker-card { width: 72; }
+#picker-card { width: 88; }
 #picker-card.wide { width: 120; }
 #changes-card { width: 110; max-height: 94%; }
 #approval-card { border-left: thick $warning; }
@@ -151,7 +151,7 @@ HelpScreen, ApprovalScreen, SessionPicker, RewindScreen, BranchesScreen {
 #picker-foot { margin-top: 1; }
 #picker-list {
     height: auto;
-    max-height: 20;
+    max-height: 30;
     padding: 0;
     border: none;
     background: transparent;
