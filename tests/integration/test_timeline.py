@@ -90,10 +90,41 @@ async def test_a_hand_edited_file_is_a_conflict_unless_forced(tmp_path: Path) ->
 
     assert result.conflicts == ["a.txt"]
     assert (w.workspace / "a.txt").read_text() == "my own edit\n"  # left alone
-    assert not (w.workspace / "b.txt").exists()  # the untouched file still went back
+    assert (w.workspace / "b.txt").exists()  # nothing written: no half-switched folder
     branch, forced = await w.app.timeline.rewind("s1", "1", force=True)
     assert forced.ok and (w.workspace / "a.txt").read_text() == "v1\n"
+    assert not (w.workspace / "b.txt").exists()
     assert branch
+
+
+async def test_a_path_outside_the_workspace_is_a_conflict_and_never_touched(
+    tmp_path: Path,
+) -> None:
+    w = await _two_turns(tmp_path)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("theirs\n")
+    # as recorded for an allowed edit outside the workspace: the full path
+    await w.store.record(
+        session_id="s1", run_id="r", path=str(outside), before="old\n", after="theirs\n"
+    )
+
+    assert await w.app.timeline.files_differ("s1") is False  # folder holds s1: no dry run
+    _, result = await w.app.timeline.rewind("s1", "1")
+    assert result.conflicts == [str(outside)] and result.moved == []
+    assert (w.workspace / "a.txt").read_text() == "v2\n"  # nothing written at all
+
+    branch, forced = await w.app.timeline.rewind("s1", "1", force=True)
+    assert forced.conflicts == [str(outside)]  # force never reaches outside the workspace
+    assert (w.workspace / "a.txt").read_text() == "v1\n" and not (w.workspace / "b.txt").exists()
+    assert outside.read_text() == "theirs\n"
+    assert await w.app.timeline.folder_state() == branch
+    assert await w.app.timeline.files_differ("s1") is True  # dry run reports, does not raise
+
+    await w.app.timeline.switch_files(branch, "s1", force=True)  # back to s1 (but outside)
+    target = (await w.app.timeline.lineage("s1"))[0]  # code-only rewind hits the same path
+    code_only = await w.app.timeline.rewind_to("s1", target, conversation=False)
+    assert code_only.files.conflicts == [str(outside)] and code_only.files.moved == []
+    assert (w.workspace / "a.txt").read_text() == "v2\n" and outside.read_text() == "theirs\n"
 
 
 async def test_rewind_without_files_leaves_the_folder_alone(tmp_path: Path) -> None:

@@ -21,13 +21,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, unquote
 
 from langchain_core.messages import HumanMessage
 
 from agent_stack.core.changes import ChangeEntry, make_diff
-from agent_stack.core.errors import PersistenceError
+from agent_stack.core.errors import PersistenceError, WorkspaceEscapeError
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.session import Session
 from agent_stack.core.workspace import WorkspacePolicy
@@ -137,6 +138,42 @@ def _net(entries: list[ChangeEntry]) -> dict[str, tuple[str | None, str]]:
     return state
 
 
+_Move = tuple[str, Path, str | None, str | None]  # path, file, text now, text wanted
+
+
+def _plan(
+    policy: WorkspacePolicy,
+    have: dict[str, tuple[str | None, str]],
+    want: dict[str, tuple[str | None, str]],
+    force: bool,
+) -> tuple[list[_Move], list[str]]:
+    """The writes that take the folder from ``have`` to ``want``, and the conflicts.
+
+    A conflict is a file not as ``have`` left it (ignored with ``force``) or a path outside the
+    workspace (never touched, even with ``force``). Any conflict without ``force`` means no writes,
+    so the folder is never left half switched.
+    """
+    moves: list[_Move] = []
+    conflicts: list[str] = []
+    for path in sorted(set(have) | set(want)):
+        pristine = (have.get(path) or want[path])[0]
+        expected = have[path][1] if path in have else pristine
+        desired = want[path][1] if path in want else pristine
+        if expected == desired:
+            continue
+        try:
+            file = policy.resolve(path)
+        except WorkspaceEscapeError:
+            conflicts.append(path)
+            continue
+        actual = file.read_text(encoding="utf-8", errors="replace") if file.is_file() else None
+        if actual != expected and not force:
+            conflicts.append(path)
+            continue
+        moves.append((path, file, actual, desired))
+    return ([] if conflicts and not force else moves), conflicts
+
+
 class Timeline:
     """The history operations of an :class:`Application`."""
 
@@ -241,19 +278,9 @@ class Timeline:
             ]
         )
         have = _net(await app.change_store.entries(current))
-        policy = WorkspacePolicy(app.config.workspace)
-        result = SwitchResult()
-        for path in sorted(set(have) | set(wanted)):
-            pristine = (have.get(path) or wanted[path])[0]
-            expected = have[path][1] if path in have else pristine
-            desired = wanted[path][1] if path in wanted else pristine
-            if expected == desired:
-                continue
-            file = policy.resolve(path)
-            actual = file.read_text(encoding="utf-8", errors="replace") if file.is_file() else None
-            if actual != expected and not force:
-                result.conflicts.append(path)
-                continue
+        moves, conflicts = _plan(WorkspacePolicy(app.config.workspace), have, wanted, force)
+        result = SwitchResult(conflicts=conflicts)
+        for path, file, actual, desired in moves:
             if desired is None:
                 file.unlink(missing_ok=True)
                 result.moved.append(FileMove(path, "deleted"))
@@ -353,27 +380,19 @@ class Timeline:
         """Make the working folder match ``to_session`` after it matched ``from_session``.
 
         Only files either conversation edited are touched. A file whose current content is not
-        what ``from_session`` left (somebody edited it by hand) is reported as a conflict and left
-        alone, unless ``force``. With ``dry_run`` nothing is written; the result says what would be.
+        what ``from_session`` left (somebody edited it by hand), or that lies outside the workspace,
+        is a conflict; any conflict means nothing is written, unless ``force`` (which still never
+        touches paths outside the workspace). With ``dry_run`` nothing is written; the result says
+        what would be.
         """
         app = self._app
         if app.change_store is None:
             raise PersistenceError("this application does not record file changes")
         source = _net(await app.change_store.entries(from_session))
         target = _net(await app.change_store.entries(to_session))
-        policy = WorkspacePolicy(app.config.workspace)
-        result = SwitchResult()
-        for path in sorted(set(source) | set(target)):
-            pristine = (source.get(path) or target[path])[0]
-            expected = source[path][1] if path in source else pristine
-            desired = target[path][1] if path in target else pristine
-            if expected == desired:
-                continue
-            file = policy.resolve(path)
-            actual = file.read_text(encoding="utf-8", errors="replace") if file.is_file() else None
-            if actual != expected and not force:
-                result.conflicts.append(path)
-                continue
+        moves, conflicts = _plan(WorkspacePolicy(app.config.workspace), source, target, force)
+        result = SwitchResult(conflicts=conflicts)
+        for path, file, _, desired in moves:
             if desired is None:
                 if not dry_run:
                     file.unlink(missing_ok=True)
@@ -383,7 +402,7 @@ class Timeline:
                     file.parent.mkdir(parents=True, exist_ok=True)
                     file.write_text(desired, encoding="utf-8")
                 result.moved.append(FileMove(path, "wrote"))
-        if not dry_run and not result.conflicts:
+        if not dry_run and (force or not result.conflicts):  # forced: only outside paths differ
             await app.change_store.set_folder_state(to_session)
         return result
 
