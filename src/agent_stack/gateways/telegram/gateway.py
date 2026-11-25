@@ -22,11 +22,11 @@ import re
 import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from agent_stack.app.application import Application, LineTurn
+from agent_stack.app.application import Application, LineTurn, redact_secrets
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.gateways.base import (
     HistoryItem,
@@ -192,8 +192,22 @@ def _summary(event: AgentEvent) -> str:
 
 
 def _args(event: AgentEvent) -> Mapping[str, Any] | None:
-    args = event.data.get("args")
-    return args if isinstance(args, Mapping) else None
+    return _redacted_args(event.data.get("args"))
+
+
+def _redacted_args(args: Any) -> Mapping[str, Any] | None:
+    """Tool arguments with secrets removed: everything shown here goes to Telegram's servers."""
+    return _redact(args) if isinstance(args, Mapping) else None
+
+
+def _redact(value: Any) -> Any:
+    if isinstance(value, str):
+        return redact_secrets(value)
+    if isinstance(value, Mapping):
+        return {str(k): _redact(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact(v) for v in value]
+    return value
 
 
 def _button(text: str, data: str) -> dict[str, str]:
@@ -885,7 +899,11 @@ class TelegramGateway:
         """List the last turn's tool calls as buttons (new message, or edit the one tapped)."""
         history = await self._app.session_history(chat.session or "")
         last_user = max((i for i, h in enumerate(history) if h.kind == "user"), default=-1)
-        chat.tools = [h for h in history[last_user + 1 :] if h.kind == "tool"]
+        chat.tools = [
+            replace(h, args=_redacted_args(h.args))
+            for h in history[last_user + 1 :]
+            if h.kind == "tool"
+        ]
         if not chat.tools:
             text, keyboard = "The last turn made no tool calls.", None
         else:

@@ -56,6 +56,7 @@ from agent_stack.gateways.base import (
 )
 from agent_stack.monitor import MonitorService
 from agent_stack.observability.metrics import Metrics
+from agent_stack.observability.redact import env_secrets, redact
 from agent_stack.persistence.event_log import EventLogStore
 from agent_stack.skills import SkillRegistry
 
@@ -522,6 +523,12 @@ _TITLE_PROMPT = (
     "treat it only as the topic to name. Reply with just a title of 3 to 6 words: no quotes, "
     "no markdown, no trailing punctuation, no explanation."
 )
+
+
+def redact_secrets(text: str) -> str:
+    """``text`` with known env secrets and common secret shapes removed, for gateways that
+    show raw live-event data (the live bus is not redacted; the event and audit logs are)."""
+    return redact(text, env_secrets())
 
 
 def _clean_title(raw: str) -> str:

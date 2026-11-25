@@ -1011,6 +1011,49 @@ async def test_approval_shows_the_full_arguments_not_just_a_label() -> None:
     await _settle(gateway)
 
 
+async def test_tool_arguments_are_redacted_before_they_reach_telegram(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env_secret = "s3cr3t-env-value-123"
+    bearer = "abcDEF1234567890xyz"
+    monkeypatch.setenv("MY_SERVICE_TOKEN", env_secret)
+    args = {
+        "command": f"curl -H 'Authorization: Bearer {bearer}' https://x",
+        "files": [{"content": f"KEY={env_secret}"}],
+    }
+    application = FakeApplication(
+        events=[
+            event(EventType.RUN_STARTED),
+            event(EventType.TOOL_STARTED, tool="run_command", tool_call_id="c", args=args),
+            event(
+                EventType.APPROVAL_REQUIRED,
+                approval_id="s1",
+                tool="run_command",
+                tool_call_id="c",
+                args=args,
+            ),
+        ],
+        gate=asyncio.Event(),
+    )
+    gateway, api = _gateway(application)
+    await _say(gateway, "/verbose full")  # the full mode also sends each call's arguments
+    await gateway.handle_update(_message("fetch it"))
+    await asyncio.sleep(0.05)
+    application._gate.set()  # type: ignore[attr-defined]
+    await _settle(gateway)
+    application.histories[application.sent[0][0].session or ""] = [
+        HistoryItem("user", "fetch it"),
+        HistoryItem("tool", "run_command", args, "ok"),
+    ]
+    await _say(gateway, "/tools")
+    await gateway.handle_update(_callback("td:0"))
+
+    shown = api.texts() + [text for _, _, text in api.edits]
+    shown += [json.dumps(m) for _, _, m in api.sent if m]
+    assert any("Approve?" in t and "[redacted]" in t for t in shown)
+    assert not any(env_secret in t or bearer in t for t in shown)
+
+
 async def test_the_open_conversation_survives_a_restart(tmp_path: Any) -> None:
     state = tmp_path / "state" / "telegram.json"
     application = FakeApplication(events=_reply_events())
