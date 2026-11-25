@@ -30,6 +30,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent_stack.core.approval import Advice, Verdict
+from agent_stack.observability.redact import env_secrets, redact
 from agent_stack.tools.builtins.terminal import outside_paths
 
 __all__ = ["AutoApprover", "external_target", "rule_verdict"]
@@ -45,7 +46,7 @@ _WRITE_TOOLS = frozenset({"write_file", "edit_file"})
 _DENY = tuple(
     re.compile(p)
     for p in (
-        r"\brm\s+(-\w+\s+)*-\w*[rR]\w*\s+(-\w+\s+)*(/|~|\$HOME|/\*|~/\*)(\s|$)",
+        r"\brm\s+(-[-\w]+\s+)*(-\w*[rR]\w*|--recursive)\s+(-[-\w]+\s+)*(/|~/?|\$HOME/?|/\*|~/\*)(\s|$)",
         r"\bmkfs(\.\w+)?\b",
         r"\bdd\b[^|;&]*\bof=/dev/",
         r":\(\)\s*\{[^}]*\};\s*:",
@@ -147,8 +148,12 @@ _GIT_READ = frozenset(
         "shortlog",
     ]
 )
-_SEGMENT = re.compile(r"\s*(?:\|\||&&|\||;)\s*")
-_ACTIVE = re.compile(r"[<>`]|\$\(|\bexec\b|\beval\b|-exec\b|-execdir\b|-delete\b|-ok\b")
+_SEGMENT = re.compile(r"\s*(?:\|\||&&|[|;&\n\r])\s*")
+_ACTIVE = re.compile(
+    r"[<>`]|\$\(|\bexec\b|\beval\b|-exec\b|-execdir\b|-delete\b|-ok\b|-fprint|-fls\b|--output\b"
+)
+#: The only flags ``git branch``/``git tag`` may carry to count as a read: listing ones.
+_GIT_LIST_FLAG = re.compile(r"-[arvl]+|--(all|remotes|verbose|list|show-current)")
 
 _SYSTEM_PROMPT = """\
 You review actions that an autonomous coding agent wants to run on the user's computer and \
@@ -221,12 +226,23 @@ def _read_only(command: str) -> bool:
             sub = next((w for w in words[1:] if not w.startswith("-")), "")
             if sub not in _GIT_READ:
                 return False
-            if sub in ("branch", "remote", "tag") and any(
-                w in words for w in ("-d", "-D", "-m", "-M", "add", "remove", "rm", "set-url")
+            rest = words[words.index(sub) + 1 :]
+            # Any name creates/moves a branch or tag, so only bare listing forms are reads.
+            if sub in ("branch", "tag") and not all(_GIT_LIST_FLAG.fullmatch(w) for w in rest):
+                return False
+            if sub == "remote" and any(
+                w in rest
+                for w in ("add", "remove", "rm", "rename", "set-url", "set-head", "prune", "update")
             ):
                 return False
         elif head not in _READ_ONLY:
             return False
+        elif head in ("sort", "tree") and any(
+            w.startswith("--o") or (w[:1] == "-" and w[1:2] != "-" and "o" in w) for w in words[1:]
+        ):
+            return False  # `-o FILE` writes the result to a file
+        elif head == "uniq" and len([w for w in words[1:] if not w.startswith("-")]) > 1:
+            return False  # `uniq IN OUT` writes OUT
     return True
 
 
@@ -255,12 +271,6 @@ def rule_verdict(tool: str, args: Mapping[str, Any], root: Path) -> Advice | Non
             return Advice(Verdict.ASK, "it touches a credentials, shell or git-config file")
         if full.is_relative_to(root.resolve()):
             return Advice(Verdict.ALLOW, "an ordinary file inside the workspace")
-        return None
-    if tool == "web_fetch":
-        url = str(args.get("url", ""))
-        if len(url) <= 200 and "?" not in url and "@" not in url:
-            return Advice(Verdict.ALLOW, "a plain page fetch")
-        return None
     return None
 
 
@@ -270,6 +280,7 @@ class AutoApprover:
     def __init__(self, model: BaseChatModel | None, workspace: Path) -> None:
         self._model = model
         self._root = workspace
+        self._secrets = env_secrets()  # never send a known secret to the classifier's provider
         self.calls = 0  # model calls made, to see what auto mode costs
         self.rule_decisions = 0
 
@@ -287,9 +298,9 @@ class AutoApprover:
         brief = json.dumps(
             {
                 "workspace": str(self._root),
-                "user_request": (request or "(not available)")[:1500],
+                "user_request": redact(request or "(not available)", self._secrets)[:1500],
                 "tool": tool,
-                "arguments": {k: str(v)[:1500] for k, v in args.items()},
+                "arguments": {k: redact(str(v), self._secrets)[:1500] for k, v in args.items()},
             },
             ensure_ascii=False,
         )
