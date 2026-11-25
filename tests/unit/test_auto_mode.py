@@ -143,7 +143,7 @@ async def test_the_model_is_only_asked_when_rules_cannot_decide() -> None:
     )
     assert approver.calls == 0 and approver.rule_decisions == 1
     advice = await approver.advise("run_command", {"command": "pytest -q"}, request="run tests")
-    assert advice == Advice(Verdict.ALLOW, "runs the tests") and approver.calls == 1
+    assert advice == Advice(Verdict.ALLOW, "[jev] runs the tests") and approver.calls == 1
     assert "run tests" in model.seen[0] and "pytest -q" in model.seen[0]
 
 
@@ -292,3 +292,16 @@ def test_the_policy_can_gate_by_arguments() -> None:
     assert policy.needs_approval("read_file", {"path": "/etc/hosts"})
     assert not policy.needs_approval("read_file", {"path": "a.txt"})
     assert not policy.needs_approval("read_file")
+
+
+async def test_advice_says_who_decided(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+    from agent_stack.approval.auto import AutoApprover
+
+    model = FakeListChatModel(responses=['{"verdict": "allow", "reason": "fine"}'])
+    approver = AutoApprover(model, tmp_path)
+    ruled = await approver.advise("run_command", {"command": "git push"}, request="x")
+    assert ruled.reason.startswith("[rule]")
+    judged = await approver.advise("run_command", {"command": "frobnicate --now"}, request="x")
+    assert judged.reason == "[jev] fine" and approver.calls == 1

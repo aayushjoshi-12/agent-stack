@@ -277,11 +277,11 @@ class AutoApprover:
         settled = rule_verdict(tool, args, self._root)
         if settled is not None:
             self.rule_decisions += 1
-            return settled
+            return _labelled("rule", settled)
         if self._model is None:
             return Advice(Verdict.ASK, "no classifier model is configured")
         self.calls += 1
-        return await self._classify(tool, args, request)
+        return _labelled("jev", await self._classify(tool, args, request))
 
     async def _classify(self, tool: str, args: Mapping[str, Any], request: str | None) -> Advice:
         brief = json.dumps(
@@ -302,6 +302,11 @@ class AutoApprover:
             _LOG.warning("auto-mode classifier failed: %s", type(exc).__name__)
             return Advice(Verdict.ASK, f"the classifier did not answer ({type(exc).__name__})")
         return parse_verdict(_text(reply.content))
+
+
+def _labelled(source: str, advice: Advice) -> Advice:
+    """Say who decided, so the user can see when the classifier model was (not) used."""
+    return Advice(advice.verdict, f"[{source}] {advice.reason}")
 
 
 def _text(content: object) -> str:
