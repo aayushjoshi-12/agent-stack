@@ -30,6 +30,7 @@ from langchain_core.messages import HumanMessage
 from agent_stack.core.changes import ChangeEntry, make_diff
 from agent_stack.core.errors import PersistenceError, WorkspaceEscapeError
 from agent_stack.core.events import AgentEvent, EventType
+from agent_stack.core.runtime import SPIRAL_NUDGE
 from agent_stack.core.session import Session
 from agent_stack.core.workspace import WorkspacePolicy
 from agent_stack.monitor.service import NOTES_HEADER
@@ -344,7 +345,7 @@ class Timeline:
         """The last ``count`` user messages: a fork's own turns are the tail of its transcript."""
         messages = await self._app.session_store.get_messages(session_id)
         humans = [str(m.content) for m in messages if isinstance(m, HumanMessage)]
-        humans = [h for h in humans if not h.startswith(NOTES_HEADER)]  # notes are not turns
+        humans = [h for h in humans if _users_words(h)]  # notes and the nudge are not turns
         return humans[len(humans) - count :] if count else []
 
     async def event(self, session_id: str, point: str) -> AgentEvent:
@@ -634,5 +635,10 @@ def render_mermaid(root: TreeNode, *, current: str | None = None) -> str:
 
 
 def _is_turn(record: Any) -> bool:
-    """A transcript line that starts a turn: the user's own message, not a monitor-notes one."""
-    return bool(record.kind == "human" and not str(record.content).startswith(NOTES_HEADER))
+    """A transcript line that starts a turn: the user's own message."""
+    return bool(record.kind == "human" and _users_words(str(record.content)))
+
+
+def _users_words(text: str) -> bool:
+    """False for the human-role messages the runtime adds itself (monitor notes, the nudge)."""
+    return not text.startswith(NOTES_HEADER) and text != SPIRAL_NUDGE

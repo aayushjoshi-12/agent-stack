@@ -58,6 +58,19 @@ async def test_a_monitor_notes_message_is_not_a_turn(tmp_path: Path) -> None:
     assert [t.user_text for t in turns] == ["first", "second"]
 
 
+async def test_the_spiral_nudge_is_not_a_turn(tmp_path: Path) -> None:
+    from langchain_core.messages import HumanMessage
+
+    from agent_stack.core.runtime import SPIRAL_NUDGE
+
+    w = _world(tmp_path, FakeChatModel([ai("ok"), ai("ok again")]))
+    await _say(w, "s1", "first")
+    await w.app.session_store.append_messages("s1", [HumanMessage(content=SPIRAL_NUDGE)])
+    await _say(w, "s1", "second")
+    turns = await w.app.timeline.turns("s1")
+    assert [t.user_text for t in turns] == ["first", "second"]
+
+
 async def test_rewind_undoes_later_files_and_keeps_the_original_to_come_back_to(
     tmp_path: Path,
 ) -> None:
