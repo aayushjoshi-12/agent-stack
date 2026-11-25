@@ -184,3 +184,16 @@ Screen.-short .user-message, Screen.-short .agent-message, Screen.-short Disclos
 /* the explicit ctrl+b override wins over the width default (declared last) */
 Screen.-show-sidebar #sidebar { display: block; width: 30; }
 Screen.-hide-sidebar #sidebar { display: none; }
+
+/* ── slash-command completions, above the prompt ───────────────────────── */
+#completions {
+    display: none;
+    height: auto;
+    max-height: 12;
+    padding: 0;
+    margin-bottom: 1;
+    border: none;
+    background: $surface;
+}
+#completions > .option-list--option-highlighted { background: $panel; text-style: bold; }
+#approval-note { margin-bottom: 1; }

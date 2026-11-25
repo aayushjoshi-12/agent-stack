@@ -95,6 +95,18 @@ class FakeHandle:
 class FakeApplication:
     """A duck-typed Application: records calls, returns canned event streams."""
 
+    def get_approval_mode(self) -> str:
+        return self.approval_mode
+
+    def set_approval_mode(self, mode: str) -> str:
+        if mode not in ("ask", "auto"):
+            raise ValueError("approval mode must be ask or auto")
+        self.approval_mode = mode
+        return mode
+
+    def slash_commands(self) -> list[Any]:
+        return list(self.skill_commands)
+
     def __init__(
         self,
         *,
@@ -122,6 +134,8 @@ class FakeApplication:
         self.usages: dict[str, list[SessionUsage]] = {}  # per session: successive answers
         self.file_diffs: dict[str, list[FileDiff]] = {}  # session -> net diff per changed file
         self.latest_diffs: dict[tuple[str, str], FileDiff] = {}  # (session, path) -> last edit
+        self.approval_mode = "ask"
+        self.skill_commands: list[Any] = []
         self.diff_lookups: list[tuple[str, str, bool]] = []
 
     async def send_message(self, envelope: Any, *, parent_run_id: str | None = None) -> FakeHandle:

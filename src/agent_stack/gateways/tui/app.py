@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -25,7 +26,9 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.command import Hit, Hits, Provider
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.widgets import Footer, Static
+from textual.markup import escape
+from textual.widgets import Footer, OptionList, Static
+from textual.widgets.option_list import Option
 
 from agent_stack.app.application import Application, IdentityResolver
 from agent_stack.core.events import AgentEvent, EventType
@@ -60,6 +63,9 @@ __all__ = ["TuiApp", "TuiCommands"]
 
 _QUIT_WORDS = frozenset({"exit", "quit"})
 
+#: ``/name`` or ``/name args``, but not a path such as ``/etc/hosts``.
+_COMMAND_RE = re.compile(r"^/[A-Za-z][\w-]*(\s|$)")
+
 #: Two Escapes within this many seconds count as "esc esc".
 _DOUBLE_ESC_SECONDS = 0.8
 
@@ -78,6 +84,7 @@ class TuiCommands(Provider):
             ("Cancel current run", app.action_cancel_run),
             ("New conversation", app.action_new_session),
             ("Switch conversation…", app.action_switch_session),
+            ("Switch approval mode (ask / auto)", app.action_toggle_approval_mode),
             ("Rewind to an earlier message…", app.action_rewind),
             ("Show conversation branches", app.action_show_branches),
             ("Copy a reference to this point", app.action_make_reference),
@@ -171,6 +178,7 @@ class TuiApp(App[None]):
             with Vertical(id="conversation"):
                 yield VerticalScroll(Welcome(), id="chat")
                 with Vertical(id="composer"):
+                    yield OptionList(id="completions")
                     yield PromptArea(id="prompt")
                 yield Static("", id="hints")
             yield Sidebar(id="sidebar")
@@ -230,6 +238,104 @@ class TuiApp(App[None]):
             self._refresh_sidebar()
 
     # ── input ─────────────────────────────────────────────────────────────────
+    # ── slash commands ────────────────────────────────────────────────────────
+    def _builtins(self) -> dict[str, tuple[str, Any]]:
+        return {
+            "new": ("start a new conversation", self.action_new_session),
+            "sessions": ("open an earlier conversation", self.action_switch_session),
+            "rewind": ("go back to an earlier message", self.action_rewind),
+            "branches": ("draw this conversation's branches", self.action_show_branches),
+            "ref": ("copy a reference to this point (or /ref <reference> to open one)", None),
+            "files": ("put this conversation's files in the folder", self.action_restore_files),
+            "mode": ("approval mode: /mode auto or /mode ask", None),
+            "help": ("keyboard shortcuts", self.action_help),
+            "quit": ("leave (prints how to continue)", self.action_quit_app),
+        }
+
+    def command_entries(self) -> list[tuple[str, str, str]]:
+        """Every ``/command`` as ``(name, description, kind)``: built-ins first, then skills."""
+        builtins = self._builtins()
+        entries = [(name, desc, "builtin") for name, (desc, _) in builtins.items()]
+        entries += [
+            (c.name, c.description, "skill")
+            for c in self.application.slash_commands()
+            if c.name not in builtins
+        ]
+        return entries
+
+    def on_text_area_changed(self, event: Any) -> None:
+        """Show the ``/`` completion list while a command name is being typed."""
+        popup = self.query_one("#completions", OptionList)
+        text = event.text_area.text
+        if (
+            event.text_area.id != "prompt"
+            or not text.startswith("/")
+            or any(c.isspace() for c in text)
+        ):
+            popup.display = False
+            return
+        query = text[1:].lower()
+        matches = [e for e in self.command_entries() if e[0].lower().startswith(query)]
+        matches += [e for e in self.command_entries() if query in e[0].lower() and e not in matches]
+        if not matches:
+            popup.display = False
+            return
+        popup.clear_options()
+        popup.add_options(
+            [
+                Option(
+                    f"[bold $accent]/{name}[/]  [$foreground-muted]{escape(' '.join(desc.split())[:70])}"
+                    f"{'  (skill)' if kind == 'skill' else ''}[/]",
+                    id=name,
+                )
+                for name, desc, kind in matches[:30]
+            ]
+        )
+        popup.highlighted = 0
+        popup.display = True
+
+    async def action_quit_app(self) -> None:
+        self.exit()
+
+    async def _run_slash(self, text: str) -> bool:
+        """Handle ``/name args`` if it is a built-in; True when it was (skills go to the model)."""
+        head, _, argument = text.strip().partition(" ")
+        name, argument = head[1:].lower(), argument.strip()
+        if name == "ref":
+            if argument.startswith("asref://"):
+                await self._open_reference(argument)
+            else:
+                await self.action_make_reference()
+            return True
+        if name == "mode":
+            await self.action_toggle_approval_mode(argument or None)
+            return True
+        entry = self._builtins().get(name)
+        if entry is None:
+            return False
+        outcome = entry[1]()
+        if outcome is not None:  # most actions are coroutines; help is plain
+            await outcome
+        return True
+
+    # ── approval mode ─────────────────────────────────────────────────────────
+    async def action_toggle_approval_mode(self, wanted: str | None = None) -> None:
+        """Flip who answers tool approvals first: you (ask) or the classifier (auto)."""
+        current = self.application.get_approval_mode()
+        target = wanted or ("auto" if current == "ask" else "ask")
+        try:
+            now = self.application.set_approval_mode(target)
+        except Exception as exc:
+            self.notify(f"Cannot switch mode: {exc}", severity="error")
+            return
+        text = (
+            "Auto mode: a classifier decides what is safe; you are asked only when it is unsure."
+            if now == "auto"
+            else "Ask mode: you approve every gated action."
+        )
+        self.notify(text, severity="warning" if now == "auto" else "information", timeout=6)
+        self._refresh_all()
+
     async def on_prompt_area_submitted(self, event: PromptArea.Submitted) -> None:
         text = event.text
         if text in _QUIT_WORDS:
@@ -237,7 +343,17 @@ class TuiApp(App[None]):
             return
         if self._busy():
             return
+        self.query_one("#completions", OptionList).display = False
         self.query_one("#prompt", PromptArea).clear_text()
+        if _COMMAND_RE.match(text.strip()):
+            if await self._run_slash(text):
+                return
+            names = {c.name.lower().replace("_", "-") for c in self.application.slash_commands()}
+            if text.strip()[1:].split()[0].lower().replace("_", "-") not in names:
+                self.notify(
+                    f"Unknown command {text.split()[0]}. Type / to see them.", severity="warning"
+                )
+                return
         if text.strip().startswith("asref://"):  # a pasted reference opens; it is not a prompt
             await self._open_reference(text.strip())
             return
@@ -365,6 +481,8 @@ class TuiApp(App[None]):
             self._on_approval_required(event)  # from any run: a child can be blocked too
         elif event.type is EventType.APPROVAL_RESOLVED:
             self._on_approval_resolved(event)
+        elif event.type is EventType.APPROVAL_AUTO:
+            self._on_approval_auto(event)
         elif event.type is EventType.SUBAGENT_STARTED:
             self._on_subagent_started(event)
         elif event.type is EventType.SUBAGENT_COMPLETED:
@@ -434,8 +552,19 @@ class TuiApp(App[None]):
             except Exception as exc:  # a refused decision must not take the UI down
                 self.notify(str(exc), severity="warning")
 
-        self.push_screen(ApprovalScreen(tool, detail), answer)
+        self.push_screen(ApprovalScreen(tool, detail, str(event.data.get("note", ""))), answer)
         self._refresh_all()
+
+    def _on_approval_auto(self, event: AgentEvent) -> None:
+        """Say what auto mode decided, so nothing is approved or blocked silently."""
+        verdict = str(event.data.get("verdict"))
+        tool = str(event.data.get("tool", "tool"))
+        reason = str(event.data.get("reason", ""))
+        if verdict == "allow":
+            self.notify(f"auto-approved {tool}: {reason}", timeout=3)
+        elif verdict == "deny":
+            self.notify(f"auto mode blocked {tool}: {reason}", severity="error", timeout=10)
+        # "ask" is followed by the usual question, which shows the reason
 
     def _on_approval_resolved(self, event: AgentEvent) -> None:
         self._awaiting = max(0, self._awaiting - 1)
@@ -662,7 +791,12 @@ class TuiApp(App[None]):
         model = self.application.config.model
         state = "esc to cancel" if self._run_active else "ctrl+j for a new line"
         spent = f"  ·  {usage_summary(self._usage)}" if self._usage.calls else ""
-        self.query_one("#hints", Static).update(f"{model}{spent}  ·  {state}")
+        auto = (
+            "[bold $warning]auto mode[/]  ·  "
+            if self.application.get_approval_mode() == "auto"
+            else ""
+        )
+        self.query_one("#hints", Static).update(f"{auto}{model}{spent}  ·  {state}")
         prompt = self.query_one("#prompt", PromptArea)
         prompt.placeholder = "Working…" if self._run_active else "Ask anything…"
 

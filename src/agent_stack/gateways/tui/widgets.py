@@ -393,9 +393,54 @@ class PromptArea(TextArea):
         self._cursor = 0  # == len(history) when editing a fresh message
         self._draft = ""
 
+    def _completions(self) -> OptionList | None:
+        """The ``/`` completion list, when it is showing."""
+        found = self.app.query("#completions")
+        popup = found.first(OptionList) if found else None
+        return popup if popup is not None and popup.display else None
+
+    def accept_completion(self) -> bool:
+        """Replace what is typed with the highlighted ``/command``; False when none is showing."""
+        popup = self._completions()
+        if popup is None or popup.highlighted is None:
+            return False
+        name = popup.get_option_at_index(popup.highlighted).id
+        self.load_text(f"/{name} ")
+        self.move_cursor(self.document.end)
+        popup.display = False
+        return True
+
     async def _on_key(self, event: events.Key) -> None:
         key = event.key
-        if key == "enter":
+        popup = self._completions()
+        if popup is not None:
+            if key in ("down", "up"):
+                event.stop()
+                event.prevent_default()
+                popup.action_cursor_down() if key == "down" else popup.action_cursor_up()
+                return
+            if key == "tab":
+                event.stop()
+                event.prevent_default()
+                self.accept_completion()
+                return
+            if key == "escape":
+                event.stop()
+                event.prevent_default()
+                popup.display = False
+                return
+            if key == "enter" and popup.highlighted is not None:
+                chosen = popup.get_option_at_index(popup.highlighted).id
+                if self.text.strip() != f"/{chosen}":  # still typing it: finish it first
+                    event.stop()
+                    event.prevent_default()
+                    self.accept_completion()
+                    return
+        if key == "shift+tab":  # in the prompt this switches approval mode (tab still moves focus)
+            event.stop()
+            event.prevent_default()
+            await self.app.run_action("toggle_approval_mode")
+        elif key == "enter":
             event.stop()
             event.prevent_default()
             self._submit()
@@ -563,6 +608,11 @@ HELP = (
             ("pageup / pagedown", "scroll the conversation"),
             ("esc", "cancel the run, or return to the prompt"),
             ("esc esc", "rewind: go back to an earlier message (clears typed text first)"),
+            ("/", "commands and skills: type / for a list, tab completes"),
+            (
+                "shift+tab",
+                "in the prompt: switch approval mode, ask you or auto (a classifier decides)",
+            ),
             ("tab / shift+tab", "move between prompt and tool cards"),
             ("enter / click", "expand or collapse a focused card"),
         ),
@@ -890,10 +940,11 @@ class ApprovalScreen(ModalScreen[bool]):
         Binding("n,escape", "answer(False)", "reject"),
     ]
 
-    def __init__(self, tool: str, detail: str) -> None:
+    def __init__(self, tool: str, detail: str, note: str = "") -> None:
         super().__init__()
         self._tool = tool
         self._detail = detail
+        self._note = note  # why auto mode left this one to you
 
     def compose(self):  # type: ignore[no-untyped-def]
         with Vertical(id="approval-card"):
@@ -903,6 +954,11 @@ class ApprovalScreen(ModalScreen[bool]):
                 id="approval-what",
             )
             yield Static(escape(self._detail) or "(no arguments)", id="approval-detail")
+            if self._note:
+                yield Static(
+                    f"[$foreground-muted]Auto mode left this to you:[/] {escape(self._note)}",
+                    id="approval-note",
+                )
             yield Static(
                 "[bold $success]y[/] approve    [bold $error]n[/] / esc reject",
                 id="approval-foot",
