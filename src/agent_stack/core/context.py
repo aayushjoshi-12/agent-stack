@@ -11,9 +11,10 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
@@ -91,6 +92,16 @@ def estimate_tokens(messages: Sequence[BaseMessage], extra_chars: int = 0) -> in
     return chars // 4
 
 
+def tool_schema_tokens(tools: Sequence[Any]) -> int:
+    """Estimated tokens the tool definitions add to every model call (about 4 chars each)."""
+    try:
+        from langchain_core.utils.function_calling import convert_to_openai_tool
+
+        return sum(len(json.dumps(convert_to_openai_tool(tool))) for tool in tools) // 4
+    except Exception:  # an odd tool must never stop the runtime from starting
+        return 0
+
+
 def _cleared(message: ToolMessage) -> ToolMessage:
     """A stand-in for an old tool result: same call id (the pair stays valid), no payload."""
     size = len(str(message.content))
@@ -151,6 +162,7 @@ class ContextBuilder:
         history: Sequence[BaseMessage],
         pinned: BaseMessage | None = None,
         summary: str | None = None,
+        overhead: int = 0,
     ) -> Context:
         """Build a context: budget-fit system parts plus a bounded message window.
 
@@ -165,18 +177,20 @@ class ContextBuilder:
             messages = [pinned, *_without_leading_tool_results(messages)]
         dropped: list[BaseMessage] = []
         if self.max_tokens is not None:
-            messages, dropped = self._fit_tokens(system, messages, pinned, summary)
-        raw = estimate_tokens(messages, sum(len(part) for part in system))
+            messages, dropped = self._fit_tokens(system, messages, pinned, summary, overhead)
+        raw = estimate_tokens(messages, sum(len(part) for part in system)) + overhead
         return Context(
             system=system, messages=tuple(messages), raw_estimate=raw, dropped=tuple(dropped)
         )
 
-    def calibrate(self, raw_estimate: int, actual_tokens: int) -> None:
+    def calibrate(self, raw_estimate: int, actual_tokens: int, overhead: int = 0) -> None:
         """Learn how far the estimate is off from the provider's reported input tokens.
 
         The ratio is smoothed and kept between 1 and 3: it only ever makes the budget more
         careful, and one odd reading cannot swing it.
         """
+        raw_estimate -= overhead  # tool schemas are counted exactly; only the rest is guessed
+        actual_tokens -= overhead
         if raw_estimate <= 0 or actual_tokens <= 0:
             return
         ratio = min(3.0, max(1.0, actual_tokens / raw_estimate))
@@ -188,12 +202,13 @@ class ContextBuilder:
         messages: list[BaseMessage],
         pinned: BaseMessage | None,
         summary: str | None = None,
+        overhead: int = 0,
     ) -> tuple[list[BaseMessage], list[BaseMessage]]:
         assert self.max_tokens is not None
         system_chars = sum(len(part) for part in system)
 
         def size(items: Sequence[BaseMessage]) -> int:
-            return int(estimate_tokens(items, system_chars) * self.scale)
+            return int(estimate_tokens(items, system_chars) * self.scale) + overhead
 
         if size(messages) <= self.max_tokens:
             return messages, []

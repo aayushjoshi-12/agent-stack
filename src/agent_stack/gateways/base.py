@@ -106,6 +106,8 @@ class SessionUsage:
     calls: int = 0
     priced_calls: int = 0
     input_tokens: int = 0
+    #: Input tokens of the most recent call: the size of the context the model last saw.
+    last_input_tokens: int = 0
     output_tokens: int = 0
     reasoning_tokens: int = 0
     cost_usd: float = 0.0
@@ -120,6 +122,7 @@ class SessionUsage:
             calls=self.calls + 1,
             priced_calls=self.priced_calls + (1 if priced else 0),
             input_tokens=self.input_tokens + int(data.get("input_tokens", 0) or 0),
+            last_input_tokens=int(data.get("input_tokens", 0) or 0),
             output_tokens=self.output_tokens + int(data.get("output_tokens", 0) or 0),
             reasoning_tokens=self.reasoning_tokens + int(data.get("reasoning_tokens", 0) or 0),
             cost_usd=self.cost_usd + (float(cost) if isinstance(cost, (int, float)) else 0.0),
@@ -172,6 +175,7 @@ def usage_summary(usage: SessionUsage) -> str:
     return (
         f"{cost} · {format_tokens(usage.input_tokens)} in · "
         f"{format_tokens(usage.output_tokens)} out · {usage.calls} calls"
+        + (f" · context {format_tokens(usage.last_input_tokens)}" if usage.last_input_tokens else "")
     )
 
 

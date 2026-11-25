@@ -23,7 +23,7 @@ from agent_stack.core.approval import (
     Verdict,
 )
 from agent_stack.core.cancellation import CancellationToken
-from agent_stack.core.context import ContextBuilder, SystemPartsProvider
+from agent_stack.core.context import ContextBuilder, SystemPartsProvider, tool_schema_tokens
 from agent_stack.core.errors import (
     AgentStackError,
     RuntimeDeadlineExceeded,
@@ -170,6 +170,8 @@ class AgentRuntime:
         self._session_lock = session_lock
         self._context_builder = context_builder
         self._last_raw_estimate = 0
+        #: Tokens the bound tool definitions add to every call (the message estimate omits them).
+        self._tool_overhead = tool_schema_tokens(agent.tools)
         self._system_parts = system_parts
         self._approvals = approvals
         self._advisor = advisor
@@ -289,7 +291,7 @@ class AgentRuntime:
                 usage = usage_data(response)
                 if usage is not None and self._context_builder is not None:
                     self._context_builder.calibrate(
-                        self._last_raw_estimate, int(usage["input_tokens"])
+                        self._last_raw_estimate, int(usage["input_tokens"]), self._tool_overhead
                     )
                 if usage is not None:
                     await self._emit(
@@ -559,7 +561,11 @@ class AgentRuntime:
         pinned = new_messages[0] if new_messages else None
         memo = memo if memo is not None else {}
         ctx = self._context_builder.build(
-            system_parts=resident, history=everything, pinned=pinned, summary=memo.get("text")
+            system_parts=resident,
+            history=everything,
+            pinned=pinned,
+            summary=memo.get("text"),
+            overhead=self._tool_overhead,
         )
         summarizer = self._context_builder.summarizer
         # Summarise what was dropped, but only when a good many more messages have gone since the
@@ -573,7 +579,11 @@ class AgentRuntime:
                 memo["text"] = await summarizer.summarize(ctx.dropped)
                 memo["count"] = len(ctx.dropped)
                 ctx = self._context_builder.build(
-                    system_parts=resident, history=everything, pinned=pinned, summary=memo["text"]
+                    system_parts=resident,
+                    history=everything,
+                    pinned=pinned,
+                    summary=memo["text"],
+                    overhead=self._tool_overhead,
                 )
             except Exception:  # a failed summary must never stop the run
                 _LOG.warning("summarising dropped messages failed", exc_info=True)
