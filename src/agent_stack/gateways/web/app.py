@@ -196,9 +196,12 @@ def create_app(application: Application, settings: WebSettings) -> FastAPI:
     @api.get("/sessions", dependencies=auth)
     async def list_sessions(
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, str | None]]:
         sessions = await application.list_sessions(principal, limit)
-        return [{"id": s.id, "title": s.title} for s in sessions]
+        return [
+            {"id": s.id, "title": s.title, "updated_at": s.updated_at, "branch_of": s.branch_of}
+            for s in sessions
+        ]
 
     @api.post("/sessions", dependencies=auth, status_code=status.HTTP_201_CREATED)
     async def new_session() -> dict[str, str]:

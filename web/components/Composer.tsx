@@ -95,8 +95,8 @@ export function Composer({
                 }}
               >
                 <span className="code font-bold">/{c.name}</span>
-                <span className="min-w-0 flex-1 truncate text-soft">{c.description}</span>
-                {c.kind === "skill" && <span className="code text-soft">skill</span>}
+                <span className={`min-w-0 flex-1 truncate ${i === picked ? "" : "text-soft"}`}>{c.description}</span>
+                {c.kind === "skill" && <span className={`code ${i === picked ? "" : "text-soft"}`}>skill</span>}
               </button>
             </li>
           ))}

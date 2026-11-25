@@ -89,6 +89,25 @@ tool call, so only use it in a container. See `docs/BENCHMARKS.md` for how it wa
   `read_reference` or open with `ref open`. Only `write_file`/`edit_file` changes are tracked,
   not files changed by shell commands.
 
+## Slash commands and auto mode
+
+- Type `/` in the TUI prompt, the web composer or Telegram for a list: built-ins (`/new`,
+  `/rewind`, `/branches`, `/ref`, `/files`, `/mode`) and every skill. `/skill-name your request`
+  runs the skill with its instructions attached; the chat shows only what you typed. Tab or enter
+  completes.
+- **Auto mode** (`shift+tab` in the TUI prompt, `/mode auto`, the header button on the web). A tool
+  call that would ask you is first judged by rules (catastrophic: refused; sudo, pushes,
+  credentials, installs: always asked; plain reads and ordinary edits inside the workspace:
+  allowed) and then by a classifier model (`AGENT_STACK_AUTO_MODEL`, default Jev Router). The
+  classifier sees only your request and the call, never tool output or web pages, and anything it
+  is unsure about, or any failure, comes back to you with its reason. Every decision is shown.
+  It is a guard against accidents and prompt injection, not a sandbox.
+- **Outside the workspace:** by default (`AGENT_STACK_EXTERNAL_ACCESS=ask`) any tool may reach
+  outside the folder, but each such call needs your approval or an auto-mode verdict.
+- `agent-stack resume [id]` continues a conversation; the TUI prints the command when you quit.
+  The agent can also look back itself: `find_chats`, `read_chat` (tail or summary), `ask_chat`
+  (a question answered from an old chat in a separate call) and `fork_chat`.
+
 ## Layout
 
 ```text

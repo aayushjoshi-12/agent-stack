@@ -1,5 +1,6 @@
 "use client";
 
+import { formatWhen } from "@/lib/format";
 import { useState } from "react";
 import type { SessionSummary } from "@/lib/api";
 
@@ -87,11 +88,19 @@ export function Sidebar({
                     type="button"
                     onClick={() => onSelect(s.id)}
                     aria-current={active ? "page" : undefined}
-                    className="min-w-0 flex-1 truncate px-3 py-2 text-left"
+                    className="min-w-0 flex-1 px-3 py-2 text-left"
                     title={s.title}
                   >
-                    {busyIds.has(s.id) && <span className="mr-2 inline-block h-2.5 w-2.5 rounded-full bg-yellow align-middle pulse" aria-label="running" />}
-                    {s.title}
+                    <span className="block truncate">
+                      {busyIds.has(s.id) && <span className="mr-2 inline-block h-2.5 w-2.5 rounded-full bg-yellow align-middle pulse" aria-label="running" />}
+                      {s.title}
+                    </span>
+                    {(s.updated_at || s.branch_of) && (
+                      <span className="code block truncate text-xs opacity-70">
+                        {formatWhen(s.updated_at)}
+                        {s.branch_of ? " · branch" : ""}
+                      </span>
+                    )}
                   </button>
                   <button
                     type="button"
