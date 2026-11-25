@@ -29,7 +29,7 @@ HeaderBar {
 #conversation { width: 1fr; height: 1fr; }
 #chat {
     height: 1fr;
-    padding: 0 2;
+    padding: 1 4;
     background: $background;
     scrollbar-size-vertical: 1;
     scrollbar-background: $background;
@@ -38,27 +38,27 @@ HeaderBar {
 /* ── conversation rows ──────────────────────────────────────────────────── */
 .user-message {
     margin: 1 0 0 0;
-    padding: 0 1;
+    padding: 1 2;
     background: $panel;
-    border-left: thick $primary;
+    border-left: wide $primary;
     color: $text;
 }
-.agent-message { margin: 1 0 0 0; padding: 0 0 0 2; }
+.agent-message { margin: 1 0 0 0; padding: 0 0 0 3; }
 .subagent-row { height: 1; margin: 0; }
 
 .notice {
     margin: 1 0 0 0;
-    padding: 0 1;
+    padding: 1 2;
     background: $error-muted;
-    border-left: thick $error;
+    border-left: wide $error;
     color: $text;
 }
 
 #welcome {
     margin: 2 0 0 0;
-    padding: 1 2;
+    padding: 1 3;
     background: $surface;
-    border-left: thick $primary;
+    border-left: wide $primary;
 }
 
 /* Markdown: headings colour-coded by level, code on a raised surface */
@@ -82,29 +82,29 @@ MarkdownFence {
     margin: 0 0 1 0;
     padding: 0 2;
 }
-MarkdownBlockQuote { background: transparent; border-left: thick $secondary; padding: 0 1; }
+MarkdownBlockQuote { background: transparent; border-left: wide $secondary; padding: 0 1; }
 
 /* ── tool / thinking cards ──────────────────────────────────────────────── */
 Disclosure { height: auto; margin: 1 0 0 0; background: $surface; }
 Disclosure.-think { background: transparent; margin-top: 1; }
-Disclosure.-failed { border-left: thick $error; }
-DisclosureHeader { height: 1; padding: 0 1; }
+Disclosure.-failed { border-left: wide $error; }
+DisclosureHeader { height: 1; padding: 0 2; }
 DisclosureHeader:hover { background: $panel; }
 DisclosureHeader:focus { background: $panel; text-style: bold; }
 .dh-main { width: 1fr; text-wrap: nowrap; text-overflow: ellipsis; }
 .dh-meta { width: auto; padding-left: 2; }
-.dh-body { display: none; height: auto; padding: 0 2 1 3; }
+.dh-body { display: none; height: auto; padding: 0 2 1 4; }
 Disclosure.-open .dh-body { display: block; }
 
 /* ── composer ───────────────────────────────────────────────────────────── */
 #composer {
     height: auto;
-    margin: 1 2 0 2;
-    padding: 0 1;
+    margin: 1 4 0 4;
+    padding: 1 2;
     background: $panel;
-    border-left: thick $primary;
+    border-left: wide $primary;
 }
-#composer:focus-within { border-left: thick $accent; }
+#composer:focus-within { border-left: wide $accent; }
 PromptArea {
     height: auto;
     min-height: 1;
@@ -116,10 +116,10 @@ PromptArea {
 }
 PromptArea:focus { border: none; background: transparent; }
 PromptArea > .text-area--placeholder { color: $text-muted; }
-#hints { height: 1; padding: 0 4; color: $text-muted; }
+#hints { height: 1; margin-top: 1; padding: 0 7; color: $text-muted; }
 
 /* ── sidebar ────────────────────────────────────────────────────────────── */
-#sidebar { width: 34; height: 1fr; padding: 1 2; background: $surface; }
+#sidebar { width: 36; height: 1fr; padding: 1 3; background: $surface; }
 .sb-section { height: auto; margin-bottom: 1; }
 #sb-spacer { height: 1fr; }
 
@@ -139,12 +139,12 @@ HelpScreen, ApprovalScreen, SessionPicker, RewindScreen, BranchesScreen {
     max-height: 90%;
     padding: 1 2;
     background: $surface;
-    border-left: thick $primary;
+    border-left: wide $primary;
 }
 #picker-card { width: 88; }
 #picker-card.wide { width: 120; }
 #changes-card { width: 110; max-height: 94%; }
-#approval-card { border-left: thick $warning; }
+#approval-card { border-left: wide $warning; }
 #approval-what { margin-top: 1; }
 #approval-detail { margin: 1 0; padding: 0 1; background: $panel; }
 #picker-title { margin-bottom: 1; }
@@ -172,13 +172,14 @@ HelpScreen, ApprovalScreen, SessionPicker, RewindScreen, BranchesScreen {
 .help-group { margin-bottom: 1; }
 
 /* ── responsive: classes come from the app's breakpoints ────────────────── */
-Screen.-wide #sidebar { width: 40; }
+Screen.-wide #sidebar { width: 42; }
 Screen.-narrow #sidebar { display: none; }
 Screen.-narrow #model { display: none; }
-Screen.-narrow #chat { padding: 0 1; }
-Screen.-narrow #composer { margin: 1 1 0 1; }
-Screen.-narrow #hints { padding: 0 2; }
+Screen.-narrow #chat { padding: 1 2; }
+Screen.-narrow #composer { margin: 1 2 0 2; padding: 0 1; }
+Screen.-narrow #hints { padding: 0 4; }
 Screen.-short #hints { display: none; }
+Screen.-short #composer { padding: 0 2; }
 Screen.-short #welcome { display: none; }
 Screen.-short .user-message, Screen.-short .agent-message, Screen.-short Disclosure { margin-top: 0; }
 /* the explicit ctrl+b override wins over the width default (declared last) */

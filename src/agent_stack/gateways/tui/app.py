@@ -22,6 +22,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, ClassVar, cast
 
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.command import Hit, Hits, Provider
@@ -192,6 +193,29 @@ class TuiApp(App[None]):
         self._spawn(self._load_branch())
         if self._resume and self._session_id is not None:  # started with a conversation to continue
             self._spawn(self._resume_session(self._session_id))
+
+    # ── the prompt keeps the keyboard ─────────────────────────────────────────
+    def on_mouse_down(self) -> None:
+        """A click on the conversation, a card or the sidebar hands the keyboard back to the
+        prompt once the click has done its job (dialogs keep their own focus)."""
+        self.call_after_refresh(self._refocus_prompt)
+
+    def _refocus_prompt(self) -> None:
+        if len(self.screen_stack) == 1 and not isinstance(self.focused, PromptArea | OptionList):
+            self.query_one("#prompt", PromptArea).focus()
+
+    def on_key(self, event: events.Key) -> None:
+        """Typing while something else has focus goes into the prompt."""
+        prompt = self.query_one("#prompt", PromptArea)
+        if (
+            len(self.screen_stack) == 1
+            and self.focused is not prompt
+            and event.is_printable
+            and event.character
+        ):
+            prompt.focus()
+            prompt.insert(event.character)
+            event.stop()
 
     async def _resume_session(self, session_id: str) -> None:
         session = await self.application.get_session(session_id)

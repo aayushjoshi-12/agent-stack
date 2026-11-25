@@ -120,3 +120,35 @@ async def test_shift_tab_and_slash_mode_switch_auto_mode_and_show_it() -> None:
         await pilot.press("enter")
         await _settle(pilot)
         assert fake.get_approval_mode() == "ask"
+
+
+async def test_the_prompt_keeps_the_keyboard_after_clicks_and_stray_typing() -> None:
+    app, _ = _app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        prompt = app.query_one("#prompt", PromptArea)
+        app.query_one("#chat").focus()
+        await _settle(pilot)
+        await pilot.press("h", "i")
+        await _settle(pilot)
+        assert app.focused is prompt and prompt.text == "hi"
+
+        await pilot.click("#chat")
+        await _settle(pilot)
+        assert app.focused is prompt
+
+        await pilot.press("f1")  # a dialog keeps its own keys
+        await _settle(pilot)
+        await pilot.press("x")
+        await _settle(pilot)
+        assert prompt.text == "hi"
+
+
+async def test_model_command_shows_and_switches_the_model() -> None:
+    app, fake = _app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        prompt = app.query_one("#prompt", PromptArea)
+        prompt.load_text("/model openrouter:other/model")
+        await pilot.press("enter")
+        await _settle(pilot)
+        assert fake.get_model() == "openrouter:other/model"
+        assert fake.sent == []  # a built-in, not a message
