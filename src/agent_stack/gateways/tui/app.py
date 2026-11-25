@@ -831,15 +831,10 @@ class TuiApp(App[None]):
     def _refresh_hints(self) -> None:
         if len(self.query("#hints")) == 0:
             return
-        model = self.application.get_model()
-        state = "esc to cancel" if self._run_active else "ctrl+j for a new line"
-        spent = f"  ·  {usage_summary(self._usage)}" if self._usage.calls else ""
-        auto = (
-            "[bold $warning]auto mode[/]  ·  "
-            if self.application.get_approval_mode() == "auto"
-            else ""
-        )
-        self.query_one("#hints", Static).update(f"{auto}{model}{spent}  ·  {state}")
+        # only the auto-mode flag: model, cost and keys are in the header, sidebar and footer
+        hints = self.query_one("#hints", Static)
+        hints.update("[bold $warning]auto mode[/]")
+        hints.display = self.application.get_approval_mode() == "auto"
         prompt = self.query_one("#prompt", PromptArea)
         prompt.placeholder = "Working…" if self._run_active else "Ask anything…"
 

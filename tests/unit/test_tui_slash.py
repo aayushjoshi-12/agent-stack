@@ -113,13 +113,14 @@ async def test_shift_tab_and_slash_mode_switch_auto_mode_and_show_it() -> None:
         await pilot.press("shift+tab")
         await _settle(pilot)
         assert fake.get_approval_mode() == "auto"
-        hints = str(app.query_one("#hints").render())
-        assert "auto mode" in hints
+        hints = app.query_one("#hints")
+        assert "auto mode" in str(hints.render()) and hints.display
         prompt = app.query_one("#prompt", PromptArea)
         prompt.load_text("/mode ask")
         await pilot.press("enter")
         await _settle(pilot)
         assert fake.get_approval_mode() == "ask"
+        assert not app.query_one("#hints").display  # ask mode: no line at all
 
 
 async def test_the_prompt_keeps_the_keyboard_after_clicks_and_stray_typing() -> None:

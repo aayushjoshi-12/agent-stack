@@ -968,8 +968,8 @@ async def test_default_theme_is_dark_and_ctrl_t_toggles_dark_and_light() -> None
 from agent_stack.gateways.base import SessionUsage  # noqa: E402
 
 
-def _hints_text(app: TuiApp) -> str:
-    return str(app.query_one("#hints").render())
+def _spent_text(app: TuiApp) -> str:
+    return str(app.query_one("#sb-activity").render())
 
 
 async def test_tui_shows_the_conversation_cost_live_and_reconciles_it_after_the_run() -> None:
@@ -994,14 +994,13 @@ async def test_tui_shows_the_conversation_cost_live_and_reconciles_it_after_the_
     app = _app(application)
 
     async with app.run_test(size=(140, 40)) as pilot:
-        assert "calls" not in _hints_text(app)  # nothing spent yet: no cost shown
+        assert "spent" not in _spent_text(app)  # nothing spent yet: no cost shown
         await _submit(pilot, "hello")
         await pilot.pause(0.3)
-        hints = _hints_text(app)
-        sidebar = " ".join(str(w.render()) for w in app.query("#sb-activity"))
+        sidebar = _spent_text(app)
 
-    assert "$0.0071 · 5k in · 300 out · 3 calls" in hints  # reconciled from the durable log
-    assert "spent" in sidebar and "$0.0071" in sidebar
+    assert "$0.0071 · 5k in · 300 out · 3 calls" in sidebar  # reconciled from the durable log
+    assert "spent" in sidebar
 
 
 async def test_tui_a_live_usage_event_updates_the_total_before_the_run_ends() -> None:
@@ -1018,7 +1017,7 @@ async def test_tui_a_live_usage_event_updates_the_total_before_the_run_ends() ->
     async with app.run_test(size=(140, 40)) as pilot:
         await _submit(pilot, "go")
         await pilot.pause(0.2)
-        live = _hints_text(app)
+        live = _spent_text(app)
         gate.set()
 
     assert "$0.0040 · 1k in · 100 out · 1 calls" in live
