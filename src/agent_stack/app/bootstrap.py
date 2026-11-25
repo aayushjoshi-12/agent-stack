@@ -8,12 +8,13 @@ from langchain_core.language_models import BaseChatModel
 from agent_stack.app.application import Application
 from agent_stack.app.config import AppConfig
 from agent_stack.app.timeline_tools import timeline_tools
+from agent_stack.approval import AutoApprover, external_target
 from agent_stack.artifacts.local import LocalArtifactStore
 from agent_stack.context.composer import SystemPromptComposer
 from agent_stack.context.instructions import InstructionsLoader
 from agent_stack.context.summarizer import LLMSummarizer
 from agent_stack.core.agent import Agent, SubAgentSpec
-from agent_stack.core.approval import ApprovalBroker, ToolPolicy
+from agent_stack.core.approval import ApprovalBroker, ApprovalMode, ToolPolicy
 from agent_stack.core.context import ContextBuilder
 from agent_stack.core.errors import ConfigurationError
 from agent_stack.core.factory import AgentFactory
@@ -119,6 +120,11 @@ file paths that justify them. You cannot modify anything.
 _READ_ONLY_TOOLS = frozenset({"list_directory", "read_file", "search_files", "grep_files"})
 
 
+def _optional_model(name: str | None) -> BaseChatModel | None:
+    """A side model by name, or ``None`` (failing to build it never stops the app)."""
+    return _title_model(name)
+
+
 def _title_model(name: str | None) -> BaseChatModel | None:
     """The small model that names conversations, or ``None`` (titles then stay the first message).
 
@@ -159,7 +165,7 @@ def build_application(config: AppConfig | None = None) -> Application:
     event_bus = EventStoreBus(event_log, audit=FanoutSink(audit, EventLogger(), metrics))
     locks = SessionLockManager()
 
-    policy = WorkspacePolicy(root=workspace)
+    policy = WorkspacePolicy(root=workspace, allow_external=resolved.external_access != "deny")
     artifacts = LocalArtifactStore(workspace / ".agent" / "artifacts")
     change_store = LocalChangeStore(db, workspace / ".agent" / "changes")
     instructions = InstructionsLoader(global_dir=resolved.home)
@@ -214,7 +220,7 @@ def build_application(config: AppConfig | None = None) -> Application:
         model=resolved.model,
         tools=(
             *fs_tools,
-            run_command_tool(policy, confine=resolved.shell_confined),
+            run_command_tool(policy, confine=resolved.external_access == "deny"),
             *control_tools(),
             *skill_tools(skills),
             *memory_tools(memory),
@@ -223,7 +229,7 @@ def build_application(config: AppConfig | None = None) -> Application:
             *todo_tools(todo_store),
             *web_tools(mode=resolved.fetch_mode),
             *timeline_tools(lambda: app_holder[0] if app_holder else None),
-            *monitor_tools(monitors, workspace, confine=resolved.shell_confined),
+            *monitor_tools(monitors, workspace, confine=resolved.external_access == "deny"),
             *artifact_tools(artifacts),
         ),
         subagents=(
@@ -239,10 +245,18 @@ def build_application(config: AppConfig | None = None) -> Application:
             max_tool_calls=2 * resolved.max_steps,
             max_runtime_seconds=resolved.max_runtime_seconds,
         ),
-        tool_policy=ToolPolicy(frozenset(resolved.approval_tools)),
+        tool_policy=ToolPolicy(
+            frozenset(resolved.approval_tools),
+            dynamic=(
+                (lambda tool, args: external_target(tool, args, workspace) is not None)
+                if resolved.external_access == "ask"
+                else None
+            ),
+        ),
     )
     title_model = small
     approvals = ApprovalBroker()
+    approval_mode = ApprovalMode(resolved.approval_mode)
     factory = AgentFactory(
         session_store=session_store,
         event_bus=event_bus,
@@ -251,6 +265,8 @@ def build_application(config: AppConfig | None = None) -> Application:
         system_parts=composer,
         approvals=approvals,
         artifacts=artifacts,
+        advisor=AutoApprover(_optional_model(resolved.auto_model), workspace),
+        approval_mode=approval_mode,
     )
     runtime = factory.create(agent)
     run_manager = RunManager(
@@ -274,6 +290,7 @@ def build_application(config: AppConfig | None = None) -> Application:
         change_store=change_store,
         title_model=title_model,
         monitors=monitors,
+        approval_mode=approval_mode,
     )
     app_holder.append(application)
     return application

@@ -34,7 +34,7 @@ from agent_stack.app.timeline import SwitchResult as SwitchResult
 from agent_stack.app.timeline import Timeline
 from agent_stack.app.timeline import parse_ref as parse_ref
 from agent_stack.core.agent import Agent
-from agent_stack.core.approval import ApprovalBroker
+from agent_stack.core.approval import APPROVAL_MODES, ApprovalBroker, ApprovalMode
 from agent_stack.core.changes import ChangeStore
 from agent_stack.core.changes import FileDiff as FileDiff  # re-exported for gateways
 from agent_stack.core.errors import BudgetExceededError, SessionVersionConflictError
@@ -77,6 +77,8 @@ class Application:
     title_model: BaseChatModel | None = None
     #: Background pollers; their notes are put in front of the session's next message.
     monitors: MonitorService | None = None
+    #: Who answers a gated tool call first: you (``ask``) or the auto-mode classifier (``auto``).
+    approval_mode: ApprovalMode | None = None
     _background: set[asyncio.Task[None]] = field(default_factory=set, repr=False)
 
     async def send_message(
@@ -111,6 +113,21 @@ class Application:
         if first:
             self._spawn(self._autotitle(envelope.session, handle.run_id, envelope.text))
         return handle
+
+    def get_approval_mode(self) -> str:
+        """``ask`` or ``auto``."""
+        return "ask" if self.approval_mode is None else self.approval_mode.value
+
+    def set_approval_mode(self, mode: str) -> str:
+        """Switch who answers gated calls first; takes effect on the next gated call."""
+        if self.approval_mode is None:
+            raise RuntimeError("this application has no approval modes")
+        self.approval_mode.set(mode)
+        return self.approval_mode.value
+
+    @property
+    def approval_modes(self) -> tuple[str, ...]:
+        return APPROVAL_MODES
 
     @property
     def timeline(self) -> Timeline:
@@ -227,8 +244,32 @@ class Application:
 
     async def list_sessions(self, principal: str, limit: int = 30) -> list[SessionSummary]:
         """The principal's sessions, most recently active first, for a picker."""
-        sessions = await self.session_store.list_for_owner(principal, limit)
-        return [SessionSummary(id=s.id, title=s.title or "Untitled") for s in sessions]
+        # Subagent runs keep their own sessions (ids with "::"); they are not conversations.
+        sessions = [
+            s
+            for s in await self.session_store.list_for_owner(principal, limit * 2)
+            if "::" not in s.id
+        ][:limit]
+        return [
+            SessionSummary(
+                id=s.id,
+                title=s.title or await self._first_words(s.id),
+                updated_at=s.updated_at,
+                created_at=s.created_at,
+                branch_of=s.branch_of,
+            )
+            for s in sessions
+        ]
+
+    async def _first_words(self, session_id: str) -> str:
+        """A name for a conversation that never got a title: what the user first said."""
+        try:
+            for message in await self.session_store.get_messages(session_id):
+                if isinstance(message, HumanMessage) and str(message.content).strip():
+                    return " ".join(str(message.content).split())[:80]
+        except Exception:
+            pass
+        return "Untitled"
 
     async def delete_session(self, session_id: str) -> None:
         """Permanently delete a session and its stored conversation (idempotent)."""

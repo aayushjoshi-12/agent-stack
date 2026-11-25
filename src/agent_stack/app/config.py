@@ -38,6 +38,29 @@ def _default_home() -> Path:
     return Path(raw).expanduser() if raw else Path.home() / ".agent-stack"
 
 
+def _external_access(source: Mapping[str, str]) -> str:
+    raw = source.get("AGENT_STACK_EXTERNAL_ACCESS")
+    if raw is None:  # the older switch: SHELL_CONFINED=0 meant "no confinement"
+        legacy = source.get("AGENT_STACK_SHELL_CONFINED", "1").strip().lower()
+        return "allow" if legacy in ("0", "false", "no", "off") else "ask"
+    mode = raw.strip().lower()
+    if mode not in ("deny", "ask", "allow"):
+        raise ConfigurationError("AGENT_STACK_EXTERNAL_ACCESS must be 'deny', 'ask' or 'allow'")
+    return mode
+
+
+def _approval_mode(raw: str) -> str:
+    mode = raw.strip().lower()
+    if mode not in ("ask", "auto"):
+        raise ConfigurationError("AGENT_STACK_APPROVAL_MODE must be 'ask' or 'auto'")
+    return mode
+
+
+def _auto_model(raw: str) -> str | None:
+    value = raw.strip()
+    return None if value.lower() in ("", "off", "none") else value
+
+
 def _fetch_mode(raw: str) -> str:
     mode = raw.strip().lower()
     if mode not in ("reader", "direct"):
@@ -75,10 +98,18 @@ class AppConfig:
     #: never connects to arbitrary hosts, but that service sees the URL) or ``direct``.
     #: ``AGENT_STACK_FETCH_MODE``.
     fetch_mode: str = "reader"
-    #: Refuse shell commands that name paths outside the workspace (``find /``, a sibling repo).
-    #: A guard against accidents, not a sandbox. Turn off (``AGENT_STACK_SHELL_CONFINED=0``)
-    #: only inside a container that is the sandbox.
-    shell_confined: bool = True
+    #: What the agent may do outside the workspace folder (``AGENT_STACK_EXTERNAL_ACCESS``):
+    #: ``ask`` (the default) lets any tool reach outside but each such call needs approval (or an
+    #: auto-mode verdict); ``deny`` refuses it; ``allow`` lets it through unasked, for use inside
+    #: a container that is the sandbox. The old ``AGENT_STACK_SHELL_CONFINED=0`` means ``allow``.
+    external_access: str = "ask"
+    #: Who answers a gated call first: ``ask`` (you) or ``auto`` (a classifier model, then you when
+    #: it is unsure). Switchable while running. ``AGENT_STACK_APPROVAL_MODE``.
+    approval_mode: str = "ask"
+    #: The classifier model for auto mode (``AGENT_STACK_AUTO_MODEL``; ``off`` disables the model
+    #: so only the built-in rules decide and everything else is asked). Jev Router picks a model
+    #: per request and its price varies, so the rules settle the obvious cases without it.
+    auto_model: str | None = "openrouter:typesafe/jev-router"
     #: Per-conversation spend cap in USD; a conversation at or over it starts no further run.
     #: ``None`` (the default) means no cap.
     budget_usd: float | None = None
@@ -160,8 +191,9 @@ class AppConfig:
             max_runtime_seconds=float(
                 source.get("AGENT_STACK_MAX_RUNTIME", defaults.max_runtime_seconds)
             ),
-            shell_confined=source.get("AGENT_STACK_SHELL_CONFINED", "1").strip().lower()
-            not in ("0", "false", "no", "off"),
+            external_access=_external_access(source),
+            approval_mode=_approval_mode(source.get("AGENT_STACK_APPROVAL_MODE", "ask")),
+            auto_model=_auto_model(source.get("AGENT_STACK_AUTO_MODEL", defaults.auto_model or "")),
             budget_usd=budget,
             workspace=workspace,
             home=Path(home_raw).expanduser() if home_raw else _default_home(),

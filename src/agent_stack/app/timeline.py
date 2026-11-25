@@ -20,8 +20,8 @@ tracked, so they are neither undone nor restored.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import TYPE_CHECKING
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, unquote
 
 from langchain_core.messages import HumanMessage
@@ -151,6 +151,13 @@ class Timeline:
         done = {e.run_id: e for e in events if e.type is EventType.RUN_COMPLETED}
         texts = await self._user_texts(session_id, len(top))
         entries = await app.change_store.entries(session_id) if app.change_store else []
+        logged = await self._human_records(session_id)
+        session = await app.get_session(session_id)
+        forked_at = await self._fork_time(session) if session is not None else None
+        if forked_at is not None:  # a fork's copied lines are its parent's turns, not its own
+            logged = [r for r in logged if r.ts > forked_at]
+        if len(top) < sum(1 for r in logged if r.kind == "human"):  # some turns were never logged: use the transcript instead
+            return self._transcript_turns(logged, entries)
         found: list[Turn] = []
         for number, started in enumerate(top, 1):
             end = done.get(started.run_id)
@@ -179,15 +186,21 @@ class Timeline:
         own = [LineTurn(turn, session_id) for turn in await self.turns(session_id)]
         if session is None or not session.branch_of or not session.branch_point_event_id:
             return own
-        point = await app.event_log.get(session.branch_point_event_id) if app.event_log else None
-        if point is None:
+        when = await self._fork_time(session)
+        if when is None:
             return own
-        earlier = [
-            lt
-            for lt in await self.lineage(session.branch_of)
-            if lt.turn.timestamp < point.timestamp
-        ]
+        earlier = [lt for lt in await self.lineage(session.branch_of) if lt.turn.timestamp < when]
         return [*earlier, *own]
+
+    async def _fork_time(self, session: Session) -> datetime | None:
+        """When a fork's point was (an event's time, or the time kept for a transcript fork)."""
+        raw = session.metadata.get("branch_point_ts")
+        if raw:
+            return datetime.fromisoformat(str(raw))
+        if session.branch_point_event_id and self._app.event_log is not None:
+            point = await self._app.event_log.get(session.branch_point_event_id)
+            return point.timestamp if point else None
+        return None
 
     async def rewind_to(
         self,
@@ -216,7 +229,7 @@ class Timeline:
             return RewindOutcome(branch, moved, prompt)
         if not code or app.change_store is None:
             return RewindOutcome(current, SwitchResult(), prompt)
-        stamp = (await self.event(target.session_id, event)).timestamp
+        stamp = await self._point_time(target.session_id, event)
         wanted = _net(
             [
                 e
@@ -250,6 +263,53 @@ class Timeline:
             )
         return RewindOutcome(current, result, prompt)
 
+    async def _human_records(self, session_id: str) -> list[Any]:
+        """The transcript's lines (all kinds) when the store keeps them, else ``[]``."""
+        store = self._app.session_store
+        return list(await store.records(session_id)) if hasattr(store, "records") else []
+
+    @staticmethod
+    def _transcript_turns(records: list[Any], entries: list[ChangeEntry]) -> list[Turn]:
+        """Turns read straight from the transcript, for conversations the event log misses.
+
+        A turn starts at each user line. Points are ``seq:<line>``: a fork there keeps every line
+        before it. Only "before this message" is available (that is what a rewind needs).
+        """
+        by_seq = {r.seq: r for r in records}
+        found: list[Turn] = []
+        for record in records:
+            if record.kind != "human":
+                continue
+            previous = by_seq.get(record.seq - 1)
+            start = previous.ts if previous is not None else None
+            touched = {
+                e.path
+                for e in entries
+                if (start is None or _as_time(e.created_at) > start)
+                and _as_time(e.created_at) <= record.ts
+            }
+            found.append(
+                Turn(
+                    index=len(found) + 1,
+                    run_id=record.run_id,
+                    started_event_id=f"seq:{record.seq}",
+                    completed_event_id=None,
+                    timestamp=record.ts,
+                    user_text=record.content,
+                    files_changed=len(touched),
+                )
+            )
+        return found
+
+    async def _point_time(self, session_id: str, point: str) -> datetime:
+        """When a point was: an event's time, or for ``seq:`` the end of the line before it."""
+        if point.startswith("seq:"):
+            seq = int(point[4:])
+            records = await self._human_records(session_id)
+            before = [r.ts for r in records if r.seq < seq]
+            return max(before) if before else datetime.fromtimestamp(0, tz=UTC)
+        return (await self.event(session_id, point)).timestamp
+
     async def _user_texts(self, session_id: str, count: int) -> list[str]:
         """The last ``count`` user messages: a fork's own turns are the tail of its transcript."""
         messages = await self._app.session_store.get_messages(session_id)
@@ -258,18 +318,7 @@ class Timeline:
 
     async def event(self, session_id: str, point: str) -> AgentEvent:
         """Resolve an event id, or a turn number (``3`` = after turn 3, ``3-`` = before it)."""
-        text = point.strip()
-        number = text.rstrip("-")
-        if number.isdigit():
-            turns = await self.turns(session_id)
-            index = int(number)
-            if not 1 <= index <= len(turns):
-                raise PersistenceError(f"{session_id} has {len(turns)} turn(s), not {index}")
-            turn = turns[index - 1]
-            wanted = turn.started_event_id if text.endswith("-") else turn.completed_event_id
-            if wanted is None:
-                raise PersistenceError(f"turn {index} has not finished; use '{index}-'")
-            text = wanted
+        text = await self._resolve(session_id, point)
         event = await self._app.event_log.get(text) if self._app.event_log else None
         if event is None or event.session_id != session_id:
             raise PersistenceError(f"event {text} is not in session {session_id}")
@@ -338,11 +387,36 @@ class Timeline:
     async def fork(self, session_id: str, point: str) -> str:
         """Fork at a point (event id or turn number) with its file history; no file moves."""
         app = self._app
-        event = await self.event(session_id, point)
-        branch_id = await app.branch_session(session_id, event.id)
+        wanted = await self._resolve(session_id, point)
+        if wanted.startswith("seq:"):
+            store = app.session_store
+            if not hasattr(store, "branch_before_seq"):
+                raise PersistenceError("this session store cannot fork a transcript")
+            branch = await store.branch_before_seq(session_id, int(wanted[4:]))
+            branch_id = str(branch.id)
+        else:
+            event = await self.event(session_id, wanted)
+            branch_id = await app.branch_session(session_id, event.id)
         if app.change_store is not None:
-            await app.change_store.copy_upto(session_id, branch_id, event.timestamp.isoformat())
+            when = await self._point_time(session_id, wanted)
+            await app.change_store.copy_upto(session_id, branch_id, when.isoformat())
         return branch_id
+
+    async def _resolve(self, session_id: str, point: str) -> str:
+        """A turn number (``3`` after it, ``3-`` before it) or an event id, as a point id."""
+        text = point.strip()
+        number = text.rstrip("-")
+        if not number.isdigit():
+            return text
+        turns = await self.turns(session_id)
+        index = int(number)
+        if not 1 <= index <= len(turns):
+            raise PersistenceError(f"{session_id} has {len(turns)} turn(s), not {index}")
+        turn = turns[index - 1]
+        wanted = turn.started_event_id if text.endswith("-") else turn.completed_event_id
+        if wanted is None:
+            raise PersistenceError(f"turn {index} has no 'after' point; use '{index}-'")
+        return wanted
 
     async def rewind(
         self, session_id: str, point: str, *, restore_files: bool = True, force: bool = False
@@ -382,9 +456,8 @@ class Timeline:
                     diff = await app.change_store.file_diff(session.id, path)
                     if diff is not None:
                         node.files.append((path, diff.added, diff.removed))
-            if session.branch_point_event_id and app.event_log is not None:
-                point = await app.event_log.get(session.branch_point_event_id)
-                node.point_time = point.timestamp.isoformat(timespec="seconds") if point else None
+            when = await self._fork_time(session)
+            node.point_time = when.isoformat(timespec="seconds") if when else None
             for child in sorted(children.get(session.id, []), key=lambda s: s.id):
                 node.children.append(await build(child))
             return node

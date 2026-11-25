@@ -27,6 +27,9 @@ class Session:
     # Set on a branch (P30): the session it was forked from and the event it was forked at.
     branch_of: str | None = None
     branch_point_event_id: str | None = None
+    # When it was created and last saved (ISO, UTC); None for a store that does not keep them.
+    created_at: str | None = field(default=None, compare=False)
+    updated_at: str | None = field(default=None, compare=False)
 
 
 class SessionStore(Protocol):

@@ -227,3 +227,31 @@ async def test_conversation_only_rewind_leaves_the_files(tmp_path: Path) -> None
     out = await w.app.timeline.rewind_to("s1", target, code=False)
     assert out.session_id != "s1" and out.files.moved == []
     assert (w.workspace / "a.txt").read_text() == "v2\n"
+
+
+async def test_a_conversation_without_logged_events_can_still_be_rewound(tmp_path: Path) -> None:
+    w = await _two_turns(tmp_path)
+    await w.db.execute("DELETE FROM event_log")  # as for a chat from before events were logged
+
+    turns = await w.app.timeline.turns("s1")
+    assert [t.user_text for t in turns] == ["make a", "change a, add b"]
+    assert turns[0].started_event_id.startswith("seq:") and turns[1].files_changed == 2
+
+    out = await w.app.timeline.rewind_to("s1", (await w.app.timeline.lineage("s1"))[1])
+    assert out.prompt == "change a, add b" and out.files.ok
+    assert (w.workspace / "a.txt").read_text() == "v1\n"  # code back to after turn 1
+    fork = await w.app.get_session(out.session_id)
+    assert fork is not None and fork.branch_of == "s1"
+    assert [lt.turn.user_text for lt in await w.app.timeline.lineage(out.session_id)] == ["make a"]
+    assert len(await w.app.session_store.get_messages(out.session_id)) == 4  # turn 1 only
+
+
+async def test_the_session_list_hides_subagent_sessions_and_has_dates(tmp_path: Path) -> None:
+    w = await _two_turns(tmp_path)
+    handle = await w.app.send_message(
+        MessageEnvelope(principal="u1", session="s1::explorer::x", text="hi")
+    )
+    del handle
+    listing = await w.app.list_sessions("u1")
+    assert [s.id for s in listing] == ["s1"]
+    assert listing[0].updated_at and listing[0].title == "make a"  # untitled: first words

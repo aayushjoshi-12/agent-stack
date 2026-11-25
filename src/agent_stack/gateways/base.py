@@ -58,6 +58,9 @@ class SessionSummary:
 
     id: str
     title: str
+    updated_at: str | None = None  # ISO, UTC: when it was last active
+    created_at: str | None = None
+    branch_of: str | None = None
 
 
 @dataclass(frozen=True)

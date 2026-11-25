@@ -411,6 +411,35 @@ class SqliteSessionStore:
         await self.save(branch)
         return branch
 
+    async def branch_before_seq(self, session_id: str, seq: int) -> Session:
+        """Fork ``session_id`` just before transcript line ``seq`` (no event log needed).
+
+        For conversations whose turns were never logged as events: the branch gets every line
+        before ``seq``. The fork point's time is kept in ``metadata["branch_point_ts"]``.
+        """
+        parent = await self.get(session_id)
+        if parent is None:
+            raise PersistenceError(f"cannot branch unknown session {session_id}")
+        records = await self._conversation.read(session_id)
+        at = next((r for r in records if r.seq == seq), None)
+        if at is None:
+            raise PersistenceError(f"{session_id} has no transcript line {seq}")
+        keep = [r for r in records if r.seq < seq]
+        metadata = dict(parent.metadata)
+        metadata["branch_point_ts"] = at.ts.isoformat()
+        branch = Session(
+            id=f"{session_id}-b{uuid4().hex[:6]}",
+            owner_id=parent.owner_id,
+            agent_name=parent.agent_name,
+            title=f"{parent.title or 'Untitled'} (branch)",
+            metadata=metadata,
+            branch_of=session_id,
+            branch_point_event_id=f"seq:{seq}",
+        )
+        await self._conversation.append(branch.id, keep)
+        await self.save(branch)
+        return branch
+
     async def get(self, session_id: str) -> Session | None:
         rows = await self._db.query("SELECT * FROM sessions WHERE id = ?", (session_id,))
         return _row_to_session(rows[0]) if rows else None
@@ -567,6 +596,8 @@ def _row_to_session(row: sqlite3.Row) -> Session:
         metadata=dict(metadata) if isinstance(metadata, dict) else {},
         branch_of=row["branch_of"],
         branch_point_event_id=row["branch_point_event_id"],
+        created_at=None if row["created_at"] is None else str(row["created_at"]),
+        updated_at=None if row["updated_at"] is None else str(row["updated_at"]),
     )
 
 

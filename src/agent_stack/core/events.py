@@ -39,6 +39,10 @@ class EventType(StrEnum):
     # Neither is terminal; the run continues (or rejects the call) once resolved.
     APPROVAL_REQUIRED = "approval.required"
     APPROVAL_RESOLVED = "approval.resolved"
+    # Auto mode (the advisor answered a gated call itself): data has tool, tool_call_id,
+    # verdict (allow/deny/ask) and a one-line reason. ``ask`` is followed by the usual
+    # ``approval.required`` for the human. Not terminal.
+    APPROVAL_AUTO = "approval.auto"
     # Subagent lifecycle, published on the *parent's* run scope (Phase 20). Neither is
     # terminal for any stream — a child finishing must never end its parent's stream.
     SUBAGENT_STARTED = "subagent.started"

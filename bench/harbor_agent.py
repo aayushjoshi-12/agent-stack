@@ -93,7 +93,7 @@ class AgentStackAgent(BaseInstalledAgent):
             "OPENROUTER_API_KEY": os.environ["OPENROUTER_API_KEY"],
             "AGENT_STACK_APPROVAL_TOOLS": "",
             "AGENT_STACK_MAX_RUNTIME": "86400",  # the task's own timeout is the limit
-            "AGENT_STACK_SHELL_CONFINED": "0",  # the task container is the sandbox
+            "AGENT_STACK_EXTERNAL_ACCESS": "allow",  # the task container is the sandbox
             # no per-trial caps: the step limit is effectively off, the context budget is the
             # default; total spend is bounded by bench/spend_guard.py instead
             "AGENT_STACK_MAX_STEPS": os.environ.get("AGENT_STACK_MAX_STEPS", "500"),

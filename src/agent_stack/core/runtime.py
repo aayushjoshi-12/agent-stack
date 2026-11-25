@@ -14,7 +14,14 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
 from agent_stack.core.agent import Agent
-from agent_stack.core.approval import ApprovalBroker, ApprovalStatus
+from agent_stack.core.approval import (
+    Advice,
+    ApprovalAdvisor,
+    ApprovalBroker,
+    ApprovalMode,
+    ApprovalStatus,
+    Verdict,
+)
 from agent_stack.core.cancellation import CancellationToken
 from agent_stack.core.context import ContextBuilder, SystemPartsProvider
 from agent_stack.core.errors import (
@@ -152,6 +159,8 @@ class AgentRuntime:
         context_builder: ContextBuilder | None = None,
         system_parts: SystemPartsProvider | None = None,
         approvals: ApprovalBroker | None = None,
+        advisor: ApprovalAdvisor | None = None,
+        approval_mode: ApprovalMode | None = None,
     ) -> None:
         self._agent = agent
         self._model = model
@@ -163,6 +172,8 @@ class AgentRuntime:
         self._last_raw_estimate = 0
         self._system_parts = system_parts
         self._approvals = approvals
+        self._advisor = advisor
+        self._approval_mode = approval_mode
 
     @property
     def agent(self) -> Agent:
@@ -371,8 +382,31 @@ class AgentRuntime:
                 rejected: dict[str, ToolExecutionResult] = {}
                 asked = time.monotonic()
                 for gated in pending:
-                    if not self._agent.tool_policy.needs_approval(str(gated["name"])):
+                    if not self._agent.tool_policy.needs_approval(
+                        str(gated["name"]), gated["args"]
+                    ):
                         continue
+                    note: str | None = None
+                    if self._advisor is not None and (
+                        self._approval_mode is not None and self._approval_mode.value == "auto"
+                    ):
+                        advice = await self._advise(
+                            gated,
+                            request=_request_text(new_messages),
+                            run_id=run_id,
+                            session_id=session_id,
+                            parent_run_id=parent_run_id,
+                        )
+                        if advice.verdict is Verdict.ALLOW:
+                            continue
+                        if advice.verdict is Verdict.DENY:
+                            rejected[str(gated["id"])] = _rejected_result(
+                                gated,
+                                f"auto mode blocked this call: {advice.reason}. "
+                                "Do not retry it unchanged; do something safer or ask the user.",
+                            )
+                            continue
+                        note = advice.reason  # ASK: the human decides, told why
                     if self._approvals is None:
                         # Fail closed: a gated tool with nobody to ask must not run.
                         rejected[str(gated["id"])] = _rejected_result(
@@ -385,6 +419,7 @@ class AgentRuntime:
                         session_id=session_id,
                         user_id=user_id,
                         parent_run_id=parent_run_id,
+                        note=note,
                     )
                     if status is not ApprovalStatus.APPROVED:
                         rejected[str(gated["id"])] = _rejected_result(gated)
@@ -580,6 +615,41 @@ class AgentRuntime:
             session.version += 1
             await self._save_session(session, stored_version)
 
+    async def _advise(
+        self,
+        tool_call: Mapping[str, Any],
+        *,
+        request: str | None,
+        run_id: str,
+        session_id: str,
+        parent_run_id: str | None,
+    ) -> Advice:
+        """Ask the advisor about a gated call and announce its verdict. Never raises: an advisor
+        that fails or hangs leaves the decision to the human."""
+        assert self._advisor is not None
+        try:
+            advice = await asyncio.wait_for(
+                self._advisor.advise(
+                    str(tool_call["name"]), dict(tool_call["args"]), request=request
+                ),
+                timeout=_ADVISOR_SECONDS,
+            )
+        except Exception as exc:
+            advice = Advice(Verdict.ASK, f"auto mode could not decide ({type(exc).__name__})")
+        await self._emit(
+            EventType.APPROVAL_AUTO,
+            run_id=run_id,
+            session_id=session_id,
+            parent_run_id=parent_run_id,
+            data={
+                "tool": str(tool_call["name"]),
+                "tool_call_id": str(tool_call["id"]),
+                "verdict": advice.verdict.value,
+                "reason": advice.reason,
+            },
+        )
+        return advice
+
     async def _await_approval(
         self,
         tool_call: Mapping[str, Any],
@@ -588,6 +658,7 @@ class AgentRuntime:
         session_id: str,
         user_id: str,
         parent_run_id: str | None,
+        note: str | None = None,
     ) -> ApprovalStatus:
         """Announce a gated call, wait for its decision, and announce the outcome."""
         assert self._approvals is not None
@@ -609,6 +680,7 @@ class AgentRuntime:
                 "tool": request.tool,
                 "tool_call_id": request.tool_call_id,
                 "args": dict(request.args),
+                **({"note": note} if note else {}),
             },
         )
         status = await self._approvals.wait(request.id)
@@ -734,6 +806,18 @@ class AgentRuntime:
                 created_at=datetime.now(UTC).isoformat(),
             )
         )
+
+
+#: An advisor slower than this counts as "could not decide" and the human is asked.
+_ADVISOR_SECONDS = 45.0
+
+
+def _request_text(messages: Sequence[BaseMessage]) -> str | None:
+    """What the user asked for in this run (its first message), shortened for an advisor."""
+    for message in messages:
+        if isinstance(message, HumanMessage):
+            return str(message.content)[:2000]
+    return None
 
 
 def _rejected_result(

@@ -52,5 +52,7 @@ class WorkspacePolicy:
 
     def relative(self, path: Path) -> str:
         """Return ``path`` as a POSIX string relative to the root."""
-        target = path if path.is_absolute() else self.root / path
-        return target.resolve().relative_to(self.root).as_posix()
+        target = (path if path.is_absolute() else self.root / path).resolve()
+        if self.allow_external and not target.is_relative_to(self.root):
+            return str(target)  # outside the workspace: shown as its full path
+        return target.relative_to(self.root).as_posix()

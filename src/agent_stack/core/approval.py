@@ -10,15 +10,27 @@ exactly once, so an approval cannot be replayed against another run or a second 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol
 from uuid import uuid4
 
 from agent_stack.core.errors import ApprovalError
 
-__all__ = ["ApprovalBroker", "ApprovalRequest", "ApprovalStatus", "ToolPolicy"]
+__all__ = [
+    "APPROVAL_MODES",
+    "Advice",
+    "ApprovalAdvisor",
+    "ApprovalBroker",
+    "ApprovalMode",
+    "ApprovalRequest",
+    "ApprovalStatus",
+    "ToolPolicy",
+    "Verdict",
+]
+
+APPROVAL_MODES = ("ask", "auto")
 
 
 class ApprovalStatus(StrEnum):
@@ -30,12 +42,62 @@ class ApprovalStatus(StrEnum):
 
 @dataclass(frozen=True)
 class ToolPolicy:
-    """Which tools need a human's approval. A plain name set: no command classification."""
+    """Which tool calls need approval: named tools, plus calls a rule flags by their arguments.
+
+    ``dynamic`` sees the tool name and its arguments and answers True for a call that must be
+    approved even though the tool is not gated by name (a read of a file outside the workspace).
+    """
 
     requires_approval: frozenset[str] = frozenset()
+    dynamic: Callable[[str, Mapping[str, Any]], bool] | None = None
 
-    def needs_approval(self, tool_name: str) -> bool:
-        return tool_name in self.requires_approval
+    def needs_approval(self, tool_name: str, args: Mapping[str, Any] | None = None) -> bool:
+        if tool_name in self.requires_approval:
+            return True
+        return self.dynamic is not None and args is not None and self.dynamic(tool_name, args)
+
+
+class Verdict(StrEnum):
+    """What an advisor says about a gated call: run it, refuse it, or leave it to the human."""
+
+    ALLOW = "allow"
+    DENY = "deny"
+    ASK = "ask"
+
+
+@dataclass(frozen=True)
+class Advice:
+    verdict: Verdict
+    reason: str = ""
+
+
+class ApprovalAdvisor(Protocol):
+    """Decides gated calls on the user's behalf (auto mode). It never has the last word on
+    ``ASK``: that goes to the human exactly as without an advisor."""
+
+    async def advise(
+        self, tool: str, args: Mapping[str, Any], *, request: str | None
+    ) -> Advice: ...
+
+
+class ApprovalMode:
+    """Who answers a gated call first: ``ask`` is always the human, ``auto`` the advisor.
+
+    A tiny shared switch, so a gateway can flip it while a conversation is running.
+    """
+
+    def __init__(self, mode: str = "ask") -> None:
+        self._mode = "ask"
+        self.set(mode)
+
+    @property
+    def value(self) -> str:
+        return self._mode
+
+    def set(self, mode: str) -> None:
+        if mode not in APPROVAL_MODES:
+            raise ApprovalError(f"approval mode must be one of {', '.join(APPROVAL_MODES)}")
+        self._mode = mode
 
 
 @dataclass

@@ -6,7 +6,7 @@ from langchain_core.language_models import BaseChatModel
 
 from agent_stack.artifacts.base import ArtifactStore
 from agent_stack.core.agent import Agent
-from agent_stack.core.approval import ApprovalBroker
+from agent_stack.core.approval import ApprovalAdvisor, ApprovalBroker, ApprovalMode
 from agent_stack.core.context import ContextBuilder, SystemPartsProvider
 from agent_stack.core.event_bus import EventBus
 from agent_stack.core.locks import SessionLockManager
@@ -36,6 +36,8 @@ class AgentFactory:
         system_parts: SystemPartsProvider | None = None,
         approvals: ApprovalBroker | None = None,
         artifacts: ArtifactStore | None = None,
+        advisor: ApprovalAdvisor | None = None,
+        approval_mode: ApprovalMode | None = None,
     ) -> None:
         self._session_store = session_store
         self._event_bus = event_bus
@@ -44,6 +46,8 @@ class AgentFactory:
         self._system_parts = system_parts
         self._approvals = approvals
         self._artifacts = artifacts
+        self._advisor = advisor
+        self._approval_mode = approval_mode
 
     def create(self, agent: Agent) -> AgentRuntime:
         model = build_model(agent.model)
@@ -64,4 +68,6 @@ class AgentFactory:
             context_builder=self._context_builder,
             system_parts=self._system_parts,
             approvals=self._approvals,
+            advisor=self._advisor,
+            approval_mode=self._approval_mode,
         )
