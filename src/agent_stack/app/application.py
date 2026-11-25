@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 from collections.abc import AsyncIterator, Collection, Coroutine
 from dataclasses import dataclass, field
 from typing import Any, cast
@@ -50,11 +51,13 @@ from agent_stack.gateways.base import (
     MessageEnvelope,
     SessionSummary,
     SessionUsage,
+    SlashCommand,
     format_cost,
 )
 from agent_stack.monitor import MonitorService
 from agent_stack.observability.metrics import Metrics
 from agent_stack.persistence.event_log import EventLogStore
+from agent_stack.skills import SkillRegistry
 
 
 @dataclass
@@ -80,6 +83,8 @@ class Application:
     monitors: MonitorService | None = None
     #: Who answers a gated tool call first: you (``ask``) or the auto-mode classifier (``auto``).
     approval_mode: ApprovalMode | None = None
+    #: The skills a user can invoke by typing ``/name``.
+    skills: SkillRegistry | None = None
     _background: set[asyncio.Task[None]] = field(default_factory=set, repr=False)
 
     async def send_message(
@@ -97,6 +102,8 @@ class Application:
         if parent_run_id is None:  # a subagent runs inside its parent's already-checked budget
             await self._check_budget(envelope.session)
         text = envelope.text
+        if parent_run_id is None:
+            text = self.expand_slash(text) or text  # "/skill args" carries the skill with it
         if parent_run_id is None and self.monitors is not None:
             notes = self.monitors.drain(envelope.session)
             if notes:
@@ -114,6 +121,41 @@ class Application:
         if first:
             self._spawn(self._autotitle(envelope.session, handle.run_id, envelope.text))
         return handle
+
+    def slash_commands(self) -> list[SlashCommand]:
+        """The skills a user can invoke with ``/name`` (a gateway adds its own built-ins)."""
+        if self.skills is None:
+            return []
+        return [
+            SlashCommand(m.name, " ".join(m.description.split())[:110], "skill")
+            for m in self.skills.metadata()
+        ]
+
+    def expand_slash(self, text: str) -> str | None:
+        """``/skill args`` as a request that carries the skill's instructions, or ``None``.
+
+        The user's own words come first (that is what the chat shows); the skill body follows in
+        a block that history views hide. Underscores match hyphens, so a Telegram command such as
+        ``/system_data_mapping`` finds ``system-data-mapping``.
+        """
+        match = _SLASH_RE.match(text.strip())
+        if match is None or self.skills is None:
+            return None
+        wanted = match.group(1).lower().replace("_", "-")
+        for meta in self.skills.metadata():
+            if meta.name.lower().replace("_", "-") == wanted:
+                try:
+                    body = self.skills.load(meta.name).body
+                except Exception:
+                    return None
+                task = (match.group(2) or "").strip()
+                return (
+                    f'{text.strip()}\n\n<skill-invocation name="{meta.name}">\n'
+                    f'The user invoked the "{meta.name}" skill'
+                    f"{' with: ' + task if task else ''}. Follow its instructions.\n\n"
+                    f"{body}\n</skill-invocation>"
+                )
+        return None
 
     def get_approval_mode(self) -> str:
         """``ask`` or ``auto``."""
@@ -503,13 +545,17 @@ def _text_of(message: BaseMessage) -> str:
     return "".join(parts)
 
 
+_SLASH_RE = re.compile(r"^/([A-Za-z][\w-]*)(?:\s+(.*))?$", re.DOTALL)
+_SKILL_BLOCK_RE = re.compile(r"\n*<skill-invocation .*?</skill-invocation>", re.DOTALL)
+
+
 def _history_items(
     message: BaseMessage, results: dict[str, str] | None = None
 ) -> list[HistoryItem]:
     """Map one stored message to display rows; a tool row carries its call's result."""
     results = results or {}
     if isinstance(message, HumanMessage):
-        text = _text_of(message)
+        text = _SKILL_BLOCK_RE.sub("", _text_of(message))  # a skill's body is not chat
         return [HistoryItem("user", text)] if text.strip() else []
     if isinstance(message, AIMessage):
         items: list[HistoryItem] = []

@@ -291,6 +291,7 @@ def build_application(config: AppConfig | None = None) -> Application:
         title_model=title_model,
         monitors=monitors,
         approval_mode=approval_mode,
+        skills=skills,
     )
     app_holder.append(application)
     return application

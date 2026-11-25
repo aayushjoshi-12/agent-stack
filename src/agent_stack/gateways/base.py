@@ -30,6 +30,7 @@ __all__ = [
     "MessageEnvelope",
     "SessionSummary",
     "SessionUsage",
+    "SlashCommand",
     "format_cost",
     "format_tokens",
     "format_when",
@@ -63,6 +64,15 @@ class SessionSummary:
     updated_at: str | None = None  # ISO, UTC: when it was last active
     created_at: str | None = None
     branch_of: str | None = None
+
+
+@dataclass(frozen=True)
+class SlashCommand:
+    """One ``/name`` a user can type: a skill, or a built-in action of the gateway."""
+
+    name: str
+    description: str
+    kind: str = "skill"  # "skill" or "builtin"
 
 
 def format_when(iso: str | None, *, now: datetime | None = None) -> str:
