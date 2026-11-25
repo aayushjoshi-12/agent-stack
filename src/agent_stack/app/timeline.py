@@ -31,6 +31,7 @@ from agent_stack.core.errors import PersistenceError
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.session import Session
 from agent_stack.core.workspace import WorkspacePolicy
+from agent_stack.monitor.service import NOTES_HEADER
 
 if TYPE_CHECKING:
     from agent_stack.app.application import Application
@@ -157,7 +158,7 @@ class Timeline:
         if forked_at is not None:  # a fork's copied lines are its parent's turns, not its own
             logged = [r for r in logged if r.ts > forked_at]
         if len(top) < sum(
-            1 for r in logged if r.kind == "human"
+            1 for r in logged if _is_turn(r)
         ):  # some turns were never logged: use the transcript instead
             return self._transcript_turns(logged, entries)
         found: list[Turn] = []
@@ -280,7 +281,7 @@ class Timeline:
         by_seq = {r.seq: r for r in records}
         found: list[Turn] = []
         for record in records:
-            if record.kind != "human":
+            if not _is_turn(record):
                 continue
             previous = by_seq.get(record.seq - 1)
             start = previous.ts if previous is not None else None
@@ -316,6 +317,7 @@ class Timeline:
         """The last ``count`` user messages: a fork's own turns are the tail of its transcript."""
         messages = await self._app.session_store.get_messages(session_id)
         humans = [str(m.content) for m in messages if isinstance(m, HumanMessage)]
+        humans = [h for h in humans if not h.startswith(NOTES_HEADER)]  # notes are not turns
         return humans[len(humans) - count :] if count else []
 
     async def event(self, session_id: str, point: str) -> AgentEvent:
@@ -610,3 +612,8 @@ def render_mermaid(root: TreeNode, *, current: str | None = None) -> str:
 
     walk(root, None)
     return "\n".join(out)
+
+
+def _is_turn(record: Any) -> bool:
+    """A transcript line that starts a turn: the user's own message, not a monitor-notes one."""
+    return bool(record.kind == "human" and not str(record.content).startswith(NOTES_HEADER))

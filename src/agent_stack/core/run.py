@@ -77,6 +77,9 @@ class RunRequest:
     message: str
     parent_run_id: str | None = None
     depth: int = 0
+    #: Tool-made text (monitor notes) the model reads as a message after ``message``. Kept apart
+    #: so ``message`` stays the user's own words, which the auto-mode classifier sees.
+    notes: str | None = None
 
 
 @dataclass
@@ -166,6 +169,8 @@ class RunManager:
         token = CancellationToken()
         self._tokens[run.id] = token
         self._inboxes[run.id] = asyncio.Queue()
+        if request.notes:
+            self._inboxes[run.id].put_nowait(request.notes)  # drained before the first model call
         self._agent_names[run.id] = runtime.agent.name
 
         run.status = RunStatus.RUNNING

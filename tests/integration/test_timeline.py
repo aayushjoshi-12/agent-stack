@@ -8,6 +8,7 @@ import pytest
 
 from agent_stack.app.timeline import parse_ref, render_ascii, render_mermaid
 from agent_stack.core.errors import PersistenceError
+from agent_stack.core.run import RunRequest
 from agent_stack.gateways.base import MessageEnvelope
 from tests.fakes import FakeChatModel, ai, call
 from tests.integration.test_changes import World, _world
@@ -42,6 +43,19 @@ async def test_turns_list_the_points_and_the_files_each_touched(tmp_path: Path) 
     assert [t.user_text for t in turns] == ["make a", "change a, add b"]
     assert [t.files_changed for t in turns] == [1, 2]
     assert all(t.completed_event_id for t in turns)
+
+
+async def test_a_monitor_notes_message_is_not_a_turn(tmp_path: Path) -> None:
+    from agent_stack.monitor.service import NOTES_HEADER
+
+    w = _world(tmp_path, FakeChatModel([ai("ok"), ai("ok again")]))
+    await _say(w, "s1", "first")
+    handle = await w.app.run_manager.start(
+        RunRequest(session_id="s1", user_id="u1", message="second", notes=f"{NOTES_HEADER}\nx")
+    )
+    await handle.result()
+    turns = await w.app.timeline.turns("s1")
+    assert [t.user_text for t in turns] == ["first", "second"]
 
 
 async def test_rewind_undoes_later_files_and_keeps_the_original_to_come_back_to(

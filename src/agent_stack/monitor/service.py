@@ -9,7 +9,8 @@ The point is to spend no model calls while nothing changes. A watch runs a comma
 
 A watch also ends on its own after ``max_seconds`` or ``max_notes`` notes, so a forgotten watch
 cannot run or chatter forever. Notes wait in a per-session queue; ``Application.send_message``
-puts them in front of the next message, so the agent sees them without a poll of its own.
+sends them as a message right after the next one, so the agent sees them without a poll of its
+own (and the auto-mode classifier, which reads only the user's message, never does).
 """
 
 from __future__ import annotations
@@ -34,6 +35,8 @@ MODES = ("change", "match", "exit")
 MIN_INTERVAL = 5.0
 MAX_WATCHES_PER_SESSION = 5
 _NOTE_CHARS = 1_500
+#: Starts every notes message, so history views can tell it from the user's own turns.
+NOTES_HEADER = "[Monitor notes since your last turn]"
 _MAX_PENDING = 50
 
 Runner = Callable[[str, Path], Awaitable[CommandResult]]
@@ -163,7 +166,7 @@ class MonitorService:
             return None
         lines = list(queue)
         queue.clear()
-        return "[Monitor notes since your last turn]\n" + "\n\n".join(lines)
+        return NOTES_HEADER + "\n" + "\n\n".join(lines)
 
     def peek(self, session_id: str) -> int:
         return len(self._pending.get(session_id, ()))

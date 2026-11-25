@@ -80,7 +80,7 @@ class Application:
     change_store: ChangeStore | None = None
     #: The small model that names a conversation after its first message (``None``: no titling).
     title_model: BaseChatModel | None = None
-    #: Background pollers; their notes are put in front of the session's next message.
+    #: Background pollers; their notes go in right after the session's next message.
     monitors: MonitorService | None = None
     #: Who answers a gated tool call first: you (``ask``) or the auto-mode classifier (``auto``).
     approval_mode: ApprovalMode | None = None
@@ -105,15 +105,15 @@ class Application:
         text = envelope.text
         if parent_run_id is None:
             text = self.expand_slash(text) or text  # "/skill args" carries the skill with it
+        notes = None
         if parent_run_id is None and self.monitors is not None:
             notes = self.monitors.drain(envelope.session)
-            if notes:
-                text = f"{notes}\n\n{text}"
         request = RunRequest(
             session_id=envelope.session,
             user_id=envelope.principal,
             message=text,
             parent_run_id=parent_run_id,
+            notes=notes,
         )
         first = parent_run_id is None and self.title_model is not None
         if first:
