@@ -143,6 +143,10 @@ class RunManager:
         self._progress: dict[str, _Progress] = {}
         self._agent_names: dict[str, str] = {}
 
+    def use_runtime(self, runtime: AgentRuntime) -> None:
+        """Start later runs on ``runtime`` (a model switch); running ones keep theirs."""
+        self._runtime = runtime
+
     async def start(
         self,
         request: RunRequest,

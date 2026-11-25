@@ -132,7 +132,7 @@ class ChatLibrary:
         transcript = render(messages, per_message=1500)[-24_000:]
         from agent_stack.models.factory import build_model
 
-        model = self._app.title_model or build_model(self._app.config.model)
+        model = self._app.title_model or build_model(self._app.get_model())
         reply = await model.ainvoke(
             [
                 SystemMessage(

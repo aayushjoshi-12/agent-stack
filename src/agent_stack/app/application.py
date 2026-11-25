@@ -15,7 +15,7 @@ import contextlib
 import logging
 import re
 from collections.abc import AsyncIterator, Collection, Coroutine
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, cast
 from uuid import uuid4
 
@@ -172,6 +172,23 @@ class Application:
     @property
     def approval_modes(self) -> tuple[str, ...]:
         return APPROVAL_MODES
+
+    def get_model(self) -> str:
+        """The main agent's model, as ``provider:model``."""
+        return self.agent.model
+
+    def set_model(self, name: str) -> str:
+        """Switch the main agent's model for runs started from now on (until a restart).
+
+        Raises :class:`~agent_stack.core.errors.ConfigurationError` for a name no provider takes;
+        the current model then stays. Runs already going finish on the model they started with.
+        """
+        name = name.strip()
+        if name and name != self.agent.model:
+            agent = replace(self.agent, model=name)
+            self.run_manager.use_runtime(self.factory.create(agent))
+            self.agent = agent
+        return self.agent.model
 
     @property
     def chats(self) -> ChatLibrary:

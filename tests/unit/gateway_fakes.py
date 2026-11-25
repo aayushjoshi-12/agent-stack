@@ -104,6 +104,15 @@ class FakeApplication:
         self.approval_mode = mode
         return mode
 
+    def get_model(self) -> str:
+        return getattr(self, "model", "test:model")
+
+    def set_model(self, name: str) -> str:
+        if ":" not in name:
+            raise ValueError(f"Failed to build model {name!r}")
+        self.model = name
+        return name
+
     def slash_commands(self) -> list[Any]:
         return list(self.skill_commands)
 

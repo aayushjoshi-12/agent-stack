@@ -128,3 +128,28 @@ async def test_commands_and_approval_mode_endpoints(tmp_path: Path) -> None:
         bad = await client.put("/approval-mode", json={"mode": "yolo"}, headers=HEADERS)
         assert bad.status_code == 400
         assert (await client.get("/commands")).status_code == 401
+
+
+async def test_model_endpoint_switches_the_model_for_the_next_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from agent_stack.core import factory as factory_module
+
+    client, w = await _setup(tmp_path)
+    real_build = factory_module.build_model
+    switched = FakeChatModel([ai("answered by the new model")])
+    monkeypatch.setattr(
+        factory_module,
+        "build_model",
+        lambda name: switched if name == "test:other" else real_build(name),
+    )
+    async with client:
+        assert (await client.get("/model", headers=HEADERS)).json() == {"model": "test:model"}
+        put = await client.put("/model", json={"model": "test:other"}, headers=HEADERS)
+        assert put.json() == {"model": "test:other"} and w.app.get_model() == "test:other"
+        bad = await client.put("/model", json={"model": "no-such-provider"}, headers=HEADERS)
+        assert bad.status_code == 400 and w.app.get_model() == "test:other"
+        assert (await client.get("/model")).status_code == 401
+    handle = await w.app.send_message(MessageEnvelope(principal="u1", session="s1", text="hi"))
+    reply = await handle.result()
+    assert reply.content == "answered by the new model"

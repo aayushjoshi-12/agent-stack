@@ -185,7 +185,7 @@ class TuiApp(App[None]):
         yield Footer()
 
     async def on_mount(self) -> None:
-        self.query_one(HeaderBar).set_model(self.application.config.model)
+        self.query_one(HeaderBar).set_model(self.application.get_model())
         self.query_one("#prompt", PromptArea).focus()
         self.set_interval(0.1, self._tick)
         self._refresh_all()
@@ -248,6 +248,7 @@ class TuiApp(App[None]):
             "ref": ("copy a reference to this point (or /ref <reference> to open one)", None),
             "files": ("put this conversation's files in the folder", self.action_restore_files),
             "mode": ("approval mode: /mode auto or /mode ask", None),
+            "model": ("show or switch the model: /model provider:name", None),
             "help": ("keyboard shortcuts", self.action_help),
             "quit": ("leave (prints how to continue)", self.action_quit_app),
         }
@@ -310,6 +311,9 @@ class TuiApp(App[None]):
         if name == "mode":
             await self.action_toggle_approval_mode(argument or None)
             return True
+        if name == "model":
+            self._switch_model(argument)
+            return True
         entry = self._builtins().get(name)
         if entry is None:
             return False
@@ -317,6 +321,20 @@ class TuiApp(App[None]):
         if outcome is not None:  # most actions are coroutines; help is plain
             await outcome
         return True
+
+    def _switch_model(self, wanted: str) -> None:
+        """``/model`` shows the model; ``/model provider:name`` switches it for the next runs."""
+        if not wanted:
+            self.notify(f"Model: {self.application.get_model()}. Switch: /model provider:name")
+            return
+        try:
+            now = self.application.set_model(wanted)
+        except Exception as exc:
+            self.notify(f"Cannot switch model: {exc}", severity="error")
+            return
+        self.query_one(HeaderBar).set_model(now)
+        self.notify(f"Model: {now} (from the next message on)")
+        self._refresh_all()
 
     # ── approval mode ─────────────────────────────────────────────────────────
     async def action_toggle_approval_mode(self, wanted: str | None = None) -> None:
@@ -788,7 +806,7 @@ class TuiApp(App[None]):
     def _refresh_hints(self) -> None:
         if len(self.query("#hints")) == 0:
             return
-        model = self.application.config.model
+        model = self.application.get_model()
         state = "esc to cancel" if self._run_active else "ctrl+j for a new line"
         spent = f"  ·  {usage_summary(self._usage)}" if self._usage.calls else ""
         auto = (

@@ -246,6 +246,7 @@ export default function Page() {
       { name: "branches", description: "draw this conversation's branches", kind: "builtin" },
       { name: "share", description: "name this point so another chat can open it", kind: "builtin" },
       { name: "mode", description: "approval mode: /mode auto or /mode ask", kind: "builtin" },
+      { name: "model", description: "show or switch the model: /model provider:name", kind: "builtin" },
     ],
     [],
   );
@@ -589,6 +590,11 @@ export default function Page() {
                   if (argument === "auto" || argument === "ask") {
                     void api.setApprovalMode(conn, argument).then((r) => setMode(r.mode)).catch(fail);
                   } else void toggleMode();
+                } else if (name === "model") {
+                  const switching = argument ? api.setModel(conn, argument) : api.model(conn);
+                  void switching
+                    .then((r) => setNotice(argument ? `Model: ${r.model} (from the next message on).` : `Model: ${r.model}. Switch: /model provider:name`))
+                    .catch(fail);
                 } else setNotice("Open a conversation first.");
               }}
               onSend={(t) => void send(t)}

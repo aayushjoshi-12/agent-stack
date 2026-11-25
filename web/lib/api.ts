@@ -90,6 +90,9 @@ export const api = {
   approvalMode: (c: Conn) => call<{ mode: string; modes: string[] }>(c, "/approval-mode"),
   setApprovalMode: (c: Conn, mode: string) =>
     call<{ mode: string }>(c, "/approval-mode", { method: "PUT", body: JSON.stringify({ mode }) }),
+  model: (c: Conn) => call<{ model: string }>(c, "/model"),
+  setModel: (c: Conn, model: string) =>
+    call<{ model: string }>(c, "/model", { method: "PUT", body: JSON.stringify({ model }) }),
   turns: (c: Conn, id: string) => call<TurnInfo[]>(c, `/sessions/${encodeURIComponent(id)}/turns`),
   rewind: (c: Conn, id: string, body: { owner_session_id: string; started_event_id: string; conversation: boolean; code: boolean }) =>
     call<RewindResult>(c, `/sessions/${encodeURIComponent(id)}/rewind`, json(body)),

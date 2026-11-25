@@ -73,6 +73,7 @@ _COMMANDS = [
     ("ref", "Share this point, or open a shared one: /ref [asref://…]"),
     ("files", "Put this conversation's files in the working folder"),
     ("mode", "Approval mode: /mode auto or /mode ask"),
+    ("model", "Show or switch the model: /model provider:name"),
     ("cost", "What this conversation has cost so far"),
     ("status", "Where you are and what is running"),
     ("cancel", "Stop the current run"),
@@ -92,6 +93,7 @@ _HELP = (
     "/ref [ref]  make a reference to this point, or open one from another chat\n"
     "/files  put this conversation's files in the working folder\n"
     "/mode [ask|auto]  who approves tool calls: you, or a classifier that asks you when unsure\n"
+    "/model [provider:name]  show the model, or switch it for the next messages\n"
     "/<skill> [request]  run a skill (type / to see them)\n"
     "/cost  what this conversation has cost (tokens and dollars)\n"
     "/status  where you are and what is running\n"
@@ -424,6 +426,8 @@ class TelegramGateway:
             await self._cmd_files(chat)
         elif command == "/mode":
             await self._cmd_mode(chat, argument)
+        elif command == "/model":
+            await self._cmd_model(chat, argument)
         elif command == "/cost":
             await self._cmd_cost(chat)
         elif command == "/status":
@@ -571,6 +575,17 @@ class TelegramGateway:
             f"<code>{html.escape(ref)}</code>",
             raw=ref,
         )
+
+    async def _cmd_model(self, chat: _Chat, argument: str) -> None:
+        if not argument.strip():
+            await self._say(chat, f"Model: {self._app.get_model()}.\nSwitch: /model provider:name")
+            return
+        try:
+            now = self._app.set_model(argument)
+        except Exception as exc:
+            await self._say(chat, f"Cannot switch model: {redact_secrets(str(exc))[:300]}")
+            return
+        await self._say(chat, f"Model: {now} (from the next message on).")
 
     async def _cmd_mode(self, chat: _Chat, argument: str) -> None:
         current = self._app.get_approval_mode()

@@ -1091,6 +1091,19 @@ async def test_errors_and_auto_mode_text_are_redacted_before_they_reach_telegram
     assert not any(secret in t for t in shown)
 
 
+async def test_model_command_shows_and_switches_the_model() -> None:
+    application = FakeApplication(events=_reply_events())
+    gateway, api = _gateway(application)
+    await _say(gateway, "/model")
+    await _say(gateway, "/model openrouter:other/model")
+    await _say(gateway, "/model nonsense")
+    texts = api.texts()
+    assert any("Model: test:model" in t for t in texts)
+    assert any("Model: openrouter:other/model" in t for t in texts)
+    assert any("Cannot switch model" in t for t in texts)
+    assert application.get_model() == "openrouter:other/model"
+
+
 async def test_the_open_conversation_survives_a_restart(tmp_path: Any) -> None:
     state = tmp_path / "state" / "telegram.json"
     application = FakeApplication(events=_reply_events())

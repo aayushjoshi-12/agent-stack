@@ -92,9 +92,10 @@ tool call, so only use it in a container. See `docs/BENCHMARKS.md` for how it wa
 ## Slash commands and auto mode
 
 - Type `/` in the TUI prompt, the web composer or Telegram for a list: built-ins (`/new`,
-  `/rewind`, `/branches`, `/ref`, `/files`, `/mode`) and every skill. `/skill-name your request`
+  `/rewind`, `/branches`, `/ref`, `/files`, `/mode`, `/model`) and every skill. `/skill-name your request`
   runs the skill with its instructions attached; the chat shows only what you typed. Tab or enter
-  completes.
+  completes. `/model provider:name` switches the model for the next messages (until a restart;
+  `AGENT_STACK_MODEL` stays the default); `/model` alone shows the current one.
 - **Auto mode** (`shift+tab` in the TUI prompt, `/mode auto`, the header button on the web). A tool
   call that would ask you is first judged by rules (catastrophic: refused; sudo, pushes,
   credentials, installs: always asked; plain reads and ordinary edits inside the workspace:

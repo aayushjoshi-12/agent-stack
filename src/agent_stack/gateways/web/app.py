@@ -28,7 +28,12 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from agent_stack.app.application import Application, parse_ref
-from agent_stack.core.errors import ApprovalError, BudgetExceededError, PersistenceError
+from agent_stack.core.errors import (
+    ApprovalError,
+    BudgetExceededError,
+    ConfigurationError,
+    PersistenceError,
+)
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.run import Run
 from agent_stack.gateways.base import HistoryItem, MessageEnvelope, model_breakdown, usage_summary
@@ -116,6 +121,10 @@ class ReferenceBody(BaseModel):
 
 class ModeBody(BaseModel):
     mode: str = Field(min_length=1, max_length=20)
+
+
+class ModelBody(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
 
 
 class PointBody(BaseModel):
@@ -336,6 +345,17 @@ def create_app(application: Application, settings: WebSettings) -> FastAPI:
             return {"mode": application.set_approval_mode(body.mode)}
         except (ApprovalError, RuntimeError) as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
+
+    @api.get("/model", dependencies=auth)
+    async def get_model() -> dict[str, str]:
+        return {"model": application.get_model()}
+
+    @api.put("/model", dependencies=auth)
+    async def set_model(body: ModelBody) -> dict[str, str]:
+        try:
+            return {"model": application.set_model(body.model)}
+        except ConfigurationError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)[:300]) from None
 
     # ── history: rewind, branches, references ────────────────────────────────
     @api.get("/sessions/{session_id}/turns", dependencies=auth)
