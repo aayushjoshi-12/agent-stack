@@ -34,7 +34,7 @@ def test_ask_is_the_default_and_gates_outside_calls_even_for_read_tools(tmp_path
     assert policy.needs_approval("list_directory", {"path": "../sibling"})
     assert not policy.needs_approval("read_file", {"path": "notes.md"})
     assert policy.needs_approval("run_command", {"command": "ls"})  # gated by name as before
-    assert app.get_approval_mode() == "ask"
+    assert app.get_approval_mode() == "auto"
 
 
 async def test_ask_lets_the_file_tools_reach_outside_once_approved(tmp_path: Path) -> None:

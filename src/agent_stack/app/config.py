@@ -105,7 +105,7 @@ class AppConfig:
     external_access: str = "ask"
     #: Who answers a gated call first: ``ask`` (you) or ``auto`` (a classifier model, then you when
     #: it is unsure). Switchable while running. ``AGENT_STACK_APPROVAL_MODE``.
-    approval_mode: str = "ask"
+    approval_mode: str = "auto"
     #: The classifier model for auto mode (``AGENT_STACK_AUTO_MODEL``; ``off`` disables the model
     #: so only the built-in rules decide and everything else is asked). Jev Router picks a model
     #: per request and its price varies, so the rules settle the obvious cases without it.
@@ -192,7 +192,7 @@ class AppConfig:
                 source.get("AGENT_STACK_MAX_RUNTIME", defaults.max_runtime_seconds)
             ),
             external_access=_external_access(source),
-            approval_mode=_approval_mode(source.get("AGENT_STACK_APPROVAL_MODE", "ask")),
+            approval_mode=_approval_mode(source.get("AGENT_STACK_APPROVAL_MODE", defaults.approval_mode)),
             auto_model=_auto_model(source.get("AGENT_STACK_AUTO_MODEL", defaults.auto_model or "")),
             budget_usd=budget,
             workspace=workspace,
