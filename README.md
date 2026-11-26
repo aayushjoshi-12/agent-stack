@@ -96,11 +96,13 @@ tool call, so only use it in a container. See `docs/BENCHMARKS.md` for how it wa
   runs the skill with its instructions attached; the chat shows only what you typed. Tab or enter
   completes. `/model provider:name` switches the model for the next messages (until a restart;
   `AGENT_STACK_MODEL` stays the default); `/model` alone shows the current one.
-- **Compaction.** Past 80% of the context budget (`AGENT_STACK_CONTEXT_BUDGET`, default 120k
-  tokens) the conversation so far is summarised and the summary saved in its place, as Claude
-  Code and opencode do; the model then sees the summary and what follows, while the transcript
-  keeps every message for the UIs, rewind and forks. `/compact [focus]` does it on demand (TUI,
-  line REPL, Telegram, web). The summary model is `AGENT_STACK_SMALL_MODEL`, else the main one.
+- **Compaction.** Past 80% of the context budget (about 96k of the default 120k tokens;
+  `AGENT_STACK_COMPACT_AT`, `off` to disable) the conversation's own model summarises everything
+  so far from exactly the input it was about to see, and the summary is saved in its place, as
+  in Claude Code and opencode. The model then sees the summary, the files it was working on (as
+  they are now) and what follows; the transcript keeps every message for the UIs, rewind and
+  forks, where the compaction shows as its own row. `/compact [focus]` does it on demand (TUI,
+  line REPL, Telegram, web).
 - **Built-in skills.** `/handoff` writes `tmp/handoff/<date>-<title>.md` so a fresh chat can carry
   on cold; `/smoke-test` runs a real smoke test with the `.env` credentials and writes a report in
   `tmp/smoke_tests/`. They ship in `src/agent_stack/skills/builtin/`; a skill of yours with the
@@ -115,7 +117,8 @@ tool call, so only use it in a container. See `docs/BENCHMARKS.md` for how it wa
 - **Outside the workspace:** by default (`AGENT_STACK_EXTERNAL_ACCESS=ask`) any tool may reach
   outside the folder, but each such call needs your approval or an auto-mode verdict.
 - `agent-stack resume [id]` continues a conversation; the TUI prints the command when you quit.
-  The agent can also look back itself: `find_chats`, `read_chat` (tail or summary), `ask_chat`
+  The agent can also look back itself: `find_chats` (full-text search of every chat, ranked with
+  BM25 over a SQLite FTS5 index), `read_chat` (tail or summary), `ask_chat`
   (a question answered from an old chat in a separate call) and `fork_chat`.
 
 ## Layout

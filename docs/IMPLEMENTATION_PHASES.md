@@ -274,6 +274,7 @@ Milestone H — Time travel & branching (later)
 
 Milestone I — Context engineering
  31  Compaction (summarise and continue)  ✅
+ 32  Chat search (FTS5 + BM25)             ✅
 ```
 
 > **Build order one-liner** (keep visible):
@@ -1453,27 +1454,58 @@ was summarised at all.
   summary and the messages after it), `ContextBuilder.over_threshold` (`compact_at`, 0.8 of the
   budget). The old `compact()` (40-message window) and the in-memory dropped-message summary are
   gone; dropping stays as the fallback.
-- `core/runtime.py`: before each model call, past the threshold, the conversation since the last
-  summary (the run's request included) is summarised and the marker appended to the run's
-  messages, so it is saved with them; `context.compacted` is emitted. One failure turns it off
-  for that run. `AgentRuntime.compact(session, focus)` does it on demand under the session lock.
-- `context/summarizer.py`: a Claude Code-style prompt (request, facts, files, errors, every user
-  message, decisions, pending, current work, next step), an optional focus, a 200k-char cap.
+- `core/runtime.py`: before each model call, past the threshold, the conversation's own model
+  (it follows `/model`) gets exactly the input it was about to see plus `COMPACT_PROMPT` at the
+  end (request, facts, files, errors, every user message, decisions, pending, current work, next
+  step); nothing is re-rendered or cut, and a prompt cache can reuse the prefix. The marker is
+  appended to the run's messages, so it is saved with them; `context.compacted` and the call's
+  `model.usage` are emitted. One failure turns it off for that run (dropping is the fallback).
+  `AgentRuntime.compact(session, focus)` does it on demand under the session lock.
+- The files the summarised messages read or edited (up to 5, 12k chars each, inside the
+  workspace only) are stored with the marker as they are at that moment and shown to the model
+  as the first message after it, as Claude Code re-attaches recently read files.
 - `Application.compact_session`; `/compact [focus]` in the TUI, line REPL, Telegram and web
-  (`POST /sessions/{id}/compact`). Auto-compaction shows in the TUI, REPL and Telegram status.
-- The summary model is the small model, else the main model.
+  (`POST /sessions/{id}/compact`). Auto-compaction shows live in every gateway; a saved one is a
+  `compaction` history row when a chat is reopened. `AGENT_STACK_COMPACT_AT` (default 0.8,
+  `off`). The small model is no longer involved (it still writes `read_chat` summaries).
 
 **Acceptance**
-- `test_a_conversation_past_the_threshold_is_compacted_and_the_summary_saved` (one summary call
-  across two runs; the transcript keeps every message)
+- `test_past_the_threshold_the_own_model_summarises_and_the_summary_is_saved` (the real input
+  plus the prompt; files re-attached; one summary across two runs; nothing deleted)
 - `test_a_failed_summary_falls_back_to_dropping_and_is_not_retried`
-- `test_compact_now_summarises_with_the_focus_and_only_once`
+- `test_compact_now_uses_the_focus_records_its_cost_and_runs_once`
+- `test_files_outside_the_workspace_are_never_attached`
 - `test_compaction_marker_hides_everything_before_it`, `test_over_threshold_…`
 - gateway `/compact` tests (TUI, Telegram, web).
 
-**Defer:** re-reading recently used files after a compaction (Claude Code does); showing the
-marker as a row when a conversation is reopened; a live web notice for auto-compaction; a
-setting to turn auto-compaction off; summarising a first compaction of a huge chat in chunks.
+**Defer:** chunked summaries for a conversation whose bounded window still loses its start
+(the window keeps the newest messages that fit the budget, older ones are dropped with a note).
+
+---
+
+## Phase 32 — Chat search (SQLite FTS5 + BM25) ✅
+
+**Goal.** `find_chats` searches the real text of every conversation and ranks it, instead of
+substring-matching the newest 200 chats and listing them newest first.
+
+**Deliverables**
+- `persistence/search.py`: `ChatSearchIndex` over an FTS5 table `chat_fts` (one row per message:
+  `said` = user/agent text, compaction summaries and the title; `tool` = tool calls and output,
+  cut at 4k), porter stemming, BM25 with `tool` weighted 0.3; query words and "quoted phrases"
+  are quoted and OR-ed so FTS5 syntax is never an error; up to 3 snippets per chat.
+- Lazy sync: before a search, each chat whose transcript size/mtime or title changed since it
+  was indexed is re-read (`chat_fts_state`), so appends, rewinds, forks and renames need no
+  write hooks. The transcripts stay the source of truth; the index can be deleted at will.
+- `Application.chat_index` (wired in bootstrap); `ChatLibrary.find` searches all of a user's
+  chats (subagent sessions excluded) through it.
+
+**Acceptance** (`tests/integration/test_chat_search.py`)
+- discussed beats scrolled-past; unrelated chats are left out; snippets bracket the match
+- stems, titles, phrases and FTS5 operator words in a query
+- only changed chats are re-read; another owner's chats are never returned
+
+**Defer:** semantic (embedding) search for queries that share no words with the chat;
+opening a chat at the matched message.
 
 ---
 

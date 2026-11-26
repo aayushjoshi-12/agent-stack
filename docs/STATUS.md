@@ -5,7 +5,7 @@ cold. `git log` has the later truth.
 
 ## State
 
-- 745 tests, `make check` (ruff + strict mypy + pytest) green; web `npm test` and `npm run build`
+- 749 tests, `make check` (ruff + strict mypy + pytest) green; web `npm test` and `npm run build`
   green. Private repo, `main`. `.claude/skills/` is local only (gitignored, removed from history).
 - Run it: `agent-stack` (TUI), `agent-stack chat` (line REPL), `agent-stack telegram`
   (bot), `agent-stack audit tail`. Default model `openrouter:deepseek/deepseek-v4-pro`
@@ -21,6 +21,7 @@ cold. `git log` has the later truth.
 | Large output | 15 | results over 20 KB become artifacts; `read_artifact` pages through them |
 | Web | 24 | FastAPI + resumable SSE, Next.js UI (`web/`) |
 | Context engineering | 16, 16e, 31 | resident parts, calibrated token budget, tool-result clearing, saved compaction + `/compact` |
+| Chat search | 32 | `find_chats`: FTS5 + BM25 over every conversation's full text |
 
 ## Since the phases (unphased work, all in `git log`)
 
@@ -39,9 +40,11 @@ What the model sees each call: the base prompt, then AGENTS.md/CLAUDE.md, skill 
 MEMORY.md index (capped at 64 KB), then the latest compaction summary, then the messages after
 it, with the run's request pinned first. The size estimate counts tool schemas and is calibrated
 against the provider's reported input tokens. Past 80% of `AGENT_STACK_CONTEXT_BUDGET` (120k) the
-conversation is summarised and the summary saved in the transcript (P31); past 100% old tool
-results are cleared and then the oldest messages dropped with a note. Not built: re-reading
-recent files after a compaction, semantic retrieval over old chats, automatic memory extraction.
+conversation's own model summarises it from its real input and the summary is saved in the
+transcript with the files in use (P31; `AGENT_STACK_COMPACT_AT`, `off` disables); past 100% old
+tool results are cleared and then the oldest messages dropped with a note. Old chats are found by
+ranked full-text search (P32). Not built: semantic (embedding) retrieval over old chats,
+automatic memory extraction. Not yet run against a real model: compaction (tests only).
 ## Small model for side work
 
 - `AGENT_STACK_SMALL_MODEL` (ADR 014): the `explorer` subagent and conversation titles use a
