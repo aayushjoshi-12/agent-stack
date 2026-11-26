@@ -33,6 +33,7 @@ from agent_stack.observability.sinks import FanoutSink
 from agent_stack.persistence.changes import LocalChangeStore
 from agent_stack.persistence.conversation import FileConversationStore
 from agent_stack.persistence.event_log import EventStoreBus, SqliteEventLogStore
+from agent_stack.persistence.search import ChatSearchIndex
 from agent_stack.persistence.sqlite import (
     SqliteCheckpointStore,
     SqliteDatabase,
@@ -294,6 +295,7 @@ def build_application(config: AppConfig | None = None) -> Application:
         monitors=monitors,
         approval_mode=approval_mode,
         skills=skills,
+        chat_index=ChatSearchIndex(db, conversation),
     )
     app_holder.append(application)
     return application

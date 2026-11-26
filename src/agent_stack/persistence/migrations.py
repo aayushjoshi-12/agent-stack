@@ -1,8 +1,9 @@
 """SQLite schema bootstrap.
 
-SQLite is the *index*, never the payload: there is deliberately no message-content or
-artifact-bytes column anywhere. The full conversation lives in the per-session transcript
-files (see :mod:`agent_stack.persistence.conversation`).
+SQLite is the *index*, never the payload: the full conversation lives in the per-session
+transcript files (see :mod:`agent_stack.persistence.conversation`). The one copy of message text
+is ``chat_fts``, a disposable search index rebuilt from those files on demand
+(:mod:`agent_stack.persistence.search`).
 """
 
 from __future__ import annotations
@@ -12,6 +13,15 @@ import sqlite3
 SCHEMA_VERSION = 6
 
 _SCHEMA = """
+CREATE VIRTUAL TABLE IF NOT EXISTS chat_fts USING fts5(
+    session_id UNINDEXED, seq UNINDEXED, said, tool, tokenize = 'porter unicode61'
+);
+
+CREATE TABLE IF NOT EXISTS chat_fts_state (
+    session_id TEXT PRIMARY KEY,
+    stamp      TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
     id            TEXT PRIMARY KEY,
     owner_id      TEXT NOT NULL,

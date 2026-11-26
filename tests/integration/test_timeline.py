@@ -328,7 +328,7 @@ async def test_the_agent_can_find_read_question_and_fork_an_old_chat(tmp_path: P
     )  # fmt: skip
     with run_context(context):
         found = await tools["find_chats"].ainvoke({"query": "change"})
-        assert found.startswith("s1") and "change a" in found
+        assert found.startswith("s1") and "[change] a" in found and "make a" in found
         assert await tools["find_chats"].ainvoke({"query": "zebra"}) == "No matching conversations."
 
         tail = await tools["read_chat"].ainvoke({"session_id": "s1", "count": 3})

@@ -59,6 +59,7 @@ from agent_stack.monitor import MonitorService
 from agent_stack.observability.metrics import Metrics
 from agent_stack.observability.redact import env_secrets, redact
 from agent_stack.persistence.event_log import EventLogStore
+from agent_stack.persistence.search import ChatSearchIndex
 from agent_stack.skills import SkillRegistry
 
 
@@ -87,6 +88,8 @@ class Application:
     approval_mode: ApprovalMode | None = None
     #: The skills a user can invoke by typing ``/name``.
     skills: SkillRegistry | None = None
+    #: Ranked full-text search over every conversation (``find_chats``); None: no search.
+    chat_index: ChatSearchIndex | None = None
     _background: set[asyncio.Task[None]] = field(default_factory=set, repr=False)
 
     async def send_message(

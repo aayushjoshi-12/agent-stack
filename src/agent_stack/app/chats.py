@@ -6,7 +6,6 @@ the old chat is not changed and its text does not pile up in the running convers
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -20,7 +19,7 @@ if TYPE_CHECKING:
 
 __all__ = ["ChatHit", "ChatLibrary"]
 
-_SCAN = 200  # most recent conversations a search looks through
+_SCAN = 100_000  # every conversation: the index makes searching them all cheap
 
 
 @dataclass(frozen=True)
@@ -69,33 +68,26 @@ class ChatLibrary:
         return session.title or session_id
 
     async def find(self, principal: str, query: str, limit: int = 6) -> list[ChatHit]:
-        """Conversations whose title or text mentions every word of ``query``, newest first."""
-        words = [w.lower() for w in re.findall(r"\w+", query)]
-        sessions = await self._app.session_store.list_for_owner(principal, _SCAN)
-        hits: list[ChatHit] = []
-        for session in sessions:
-            if "::" in session.id:  # a subagent's own session
-                continue
-            messages = await self._app.session_store.get_messages(session.id)
-            corpus = " ".join([session.title or "", *(_text(m) for m in messages)]).lower()
-            if words and not all(w in corpus for w in words):
-                continue
-            snippet = ""
-            if words:
-                at = corpus.find(words[0])
-                snippet = " ".join(corpus[max(0, at - 60) : at + 100].split())
-            first = next((_text(m) for m in messages if isinstance(m, HumanMessage)), "")
-            hits.append(
-                ChatHit(
-                    id=session.id,
-                    title=session.title or " ".join(first.split())[:70] or "Untitled",
-                    when=format_when(session.updated_at),
-                    snippet=snippet,
-                )
+        """Every conversation's full text, ranked by BM25 (best match first), with snippets."""
+        index = self._app.chat_index
+        if index is None:
+            return []
+        sessions = [
+            s
+            for s in await self._app.session_store.list_for_owner(principal, _SCAN)
+            if "::" not in s.id  # a subagent's own session
+        ]
+        by_id = {s.id: s for s in sessions}
+        hits = await index.search([(s.id, s.title or "") for s in sessions], query, limit)
+        return [
+            ChatHit(
+                id=hit.session_id,
+                title=by_id[hit.session_id].title or await self._app._first_words(hit.session_id),
+                when=format_when(by_id[hit.session_id].updated_at),
+                snippet=" … ".join(" ".join(s.split()) for s in hit.snippets),
             )
-            if len(hits) >= limit:
-                break
-        return hits
+            for hit in hits
+        ]
 
     async def tail(self, principal: str, session_id: str, count: int = 10) -> str:
         """The last ``count`` messages of a conversation as text."""

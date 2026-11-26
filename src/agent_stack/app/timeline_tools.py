@@ -83,11 +83,13 @@ def timeline_tools(get_application: Callable[[], Application | None]) -> tuple[B
 
     @tool
     async def find_chats(query: str, limit: int = 6) -> str:
-        """Search your past conversations by words in their title or text (newest first).
+        """Search the full text of all your past conversations, best match first (BM25).
 
-        Returns each match's id, title, date and a snippet. Use it when the user refers to
-        something you did in an earlier chat. Then read it with ``read_chat`` or question it
-        with ``ask_chat``.
+        Searches titles, messages, tool calls and tool output; any word may match, chats that
+        match more (and rarer) words rank higher; put an exact phrase in "double quotes".
+        Returns each match's id, title, date and passages with the matched words in [brackets].
+        Use it when the user refers to something done in an earlier chat, then read it with
+        ``read_chat`` or question it with ``ask_chat``.
         """
         app, who = get_application(), principal()
         if app is None or who is None:

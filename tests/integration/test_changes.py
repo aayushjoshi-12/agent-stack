@@ -25,6 +25,7 @@ from agent_stack.persistence.changes import LocalChangeStore
 from agent_stack.persistence.conversation import FileConversationStore
 from agent_stack.persistence.event_log import EventStoreBus, SqliteEventLogStore
 from agent_stack.persistence.memory import InMemoryRunStore
+from agent_stack.persistence.search import ChatSearchIndex
 from agent_stack.persistence.sqlite import SqliteDatabase, SqliteSessionStore
 from agent_stack.tools.builtins.filesystem import filesystem_tools
 from agent_stack.tools.executor import ToolExecutor
@@ -47,7 +48,8 @@ def _world(tmp_path: Path, model: FakeChatModel) -> World:
     workspace.mkdir(exist_ok=True)
     db = SqliteDatabase(tmp_path / "index.db")
     log = SqliteEventLogStore(db)
-    sessions = SqliteSessionStore(db, FileConversationStore(tmp_path / "conv"), log)
+    conversations = FileConversationStore(tmp_path / "conv")
+    sessions = SqliteSessionStore(db, conversations, log)
     bus = EventStoreBus(log)
     store = LocalChangeStore(db, tmp_path / "changes")
     tools = list(filesystem_tools(WorkspacePolicy(workspace), store))
@@ -70,6 +72,7 @@ def _world(tmp_path: Path, model: FakeChatModel) -> World:
         metrics=Metrics(),
         event_log=log,
         change_store=store,
+        chat_index=ChatSearchIndex(db, conversations),
     )
     return World(app, workspace, store, db)
 
