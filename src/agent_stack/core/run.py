@@ -143,6 +143,11 @@ class RunManager:
         self._progress: dict[str, _Progress] = {}
         self._agent_names: dict[str, str] = {}
 
+    @property
+    def runtime(self) -> AgentRuntime:
+        """The runtime new runs start on."""
+        return self._runtime
+
     def use_runtime(self, runtime: AgentRuntime) -> None:
         """Start later runs on ``runtime`` (a model switch); running ones keep theirs."""
         self._runtime = runtime

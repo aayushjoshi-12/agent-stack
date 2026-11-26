@@ -5,8 +5,12 @@
 * ``build`` — wrap the last ``recent_window`` messages with an ordered list of
   already-composed system-prompt parts (base prompt, instructions, skills metadata,
   memory summaries), capped to ``max_system_bytes`` (furthest parts dropped first).
-* ``compact`` — shrink oversized history to ``summary + recent messages`` when a
-  :class:`Summarizer` is available, or to just the recent window when it is not.
+* ``over_threshold`` — whether the conversation is big enough to compact (P31): the runtime
+  then has the :class:`Summarizer` replace everything so far with one saved summary message.
+
+Compaction works like Claude Code's and opencode's: the summary is appended to the transcript as
+a marker, and the model sees only the latest marker's summary and the messages after it. The
+transcript keeps every older message, so the UIs, rewind and forks still have them.
 """
 
 from __future__ import annotations
@@ -21,6 +25,29 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, To
 from agent_stack.core.errors import ConfigurationError
 
 TRUNCATION_MARKER = "…[truncated]"
+
+#: The first line of a saved compaction summary; the model never sees messages before it.
+COMPACTION_HEADER = "# Summary of the conversation so far"
+
+
+def compaction_message(summary: str) -> SystemMessage:
+    """The marker saved in the transcript in place of everything before it."""
+    return SystemMessage(
+        content=f"{COMPACTION_HEADER}\n\nEarlier messages were replaced by this summary to save "
+        "context. Carry on from it; the files on disk and your todo list show the rest.\n\n"
+        + summary.strip()
+    )
+
+
+def after_compaction(messages: Sequence[BaseMessage]) -> tuple[str | None, list[BaseMessage]]:
+    """The latest compaction summary (if any) and the messages after it."""
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if isinstance(message, SystemMessage) and str(message.content).startswith(
+            COMPACTION_HEADER
+        ):
+            return str(message.content), list(messages[index + 1 :])
+    return None, list(messages)
 
 
 def truncate_bytes(raw: bytes, limit: int) -> str:
@@ -56,14 +83,12 @@ class Context:
     messages: tuple[BaseMessage, ...]
     #: The builder's own (uncalibrated) token estimate of this context, for ``calibrate``.
     raw_estimate: int = 0
-    #: Messages left out to fit the token budget (oldest first), so a caller can summarise them.
-    dropped: tuple[BaseMessage, ...] = ()
 
 
 class Summarizer(Protocol):
-    """Compresses an old message tail into a summary string."""
+    """Compresses messages into a summary; ``focus`` is what the user wants it to keep."""
 
-    async def summarize(self, messages: Sequence[BaseMessage]) -> str: ...
+    async def summarize(self, messages: Sequence[BaseMessage], focus: str | None = None) -> str: ...
 
 
 class SystemPartsProvider(Protocol):
@@ -142,6 +167,7 @@ class ContextBuilder:
         max_system_bytes: int = 64_000,
         max_tokens: int | None = None,
         keep_tool_results: int = 6,
+        compact_at: float = 0.8,
     ) -> None:
         if recent_window < 1:
             raise ConfigurationError("recent_window must be at least 1")
@@ -152,6 +178,8 @@ class ContextBuilder:
         self.max_system_bytes = max_system_bytes
         self.max_tokens = max_tokens
         self.keep_tool_results = keep_tool_results
+        #: Compact once the context passes this share of ``max_tokens`` (before anything is dropped).
+        self.compact_at = compact_at
         #: Real tokens per estimated token, learned from the provider's reported usage.
         self.scale = 1.0
 
@@ -161,7 +189,6 @@ class ContextBuilder:
         system_parts: Sequence[str],
         history: Sequence[BaseMessage],
         pinned: BaseMessage | None = None,
-        summary: str | None = None,
         overhead: int = 0,
     ) -> Context:
         """Build a context: budget-fit system parts plus a bounded message window.
@@ -175,13 +202,20 @@ class ContextBuilder:
         messages = _recent(history, self.recent_window)
         if pinned is not None and pinned not in messages:
             messages = [pinned, *_without_leading_tool_results(messages)]
-        dropped: list[BaseMessage] = []
         if self.max_tokens is not None:
-            messages, dropped = self._fit_tokens(system, messages, pinned, summary, overhead)
+            messages = self._fit_tokens(system, messages, pinned, overhead)
         raw = estimate_tokens(messages, sum(len(part) for part in system)) + overhead
-        return Context(
-            system=system, messages=tuple(messages), raw_estimate=raw, dropped=tuple(dropped)
-        )
+        return Context(system=system, messages=tuple(messages), raw_estimate=raw)
+
+    def over_threshold(
+        self, system_parts: Sequence[str], messages: Sequence[BaseMessage], overhead: int = 0
+    ) -> bool:
+        """True once the context is past ``compact_at`` of the budget (never without a budget)."""
+        if self.max_tokens is None:
+            return False
+        chars = sum(len(part) for part in system_parts)
+        size = int(estimate_tokens(messages, chars) * self.scale) + overhead
+        return size > self.compact_at * self.max_tokens
 
     def calibrate(self, raw_estimate: int, actual_tokens: int, overhead: int = 0) -> None:
         """Learn how far the estimate is off from the provider's reported input tokens.
@@ -201,9 +235,8 @@ class ContextBuilder:
         system: tuple[str, ...],
         messages: list[BaseMessage],
         pinned: BaseMessage | None,
-        summary: str | None = None,
         overhead: int = 0,
-    ) -> tuple[list[BaseMessage], list[BaseMessage]]:
+    ) -> list[BaseMessage]:
         assert self.max_tokens is not None
         system_chars = sum(len(part) for part in system)
 
@@ -211,43 +244,23 @@ class ContextBuilder:
             return int(estimate_tokens(items, system_chars) * self.scale) + overhead
 
         if size(messages) <= self.max_tokens:
-            return messages, []
+            return messages
         tool_positions = [i for i, m in enumerate(messages) if isinstance(m, ToolMessage)]
         for i in tool_positions[: max(0, len(tool_positions) - self.keep_tool_results)]:
             messages[i] = _cleared(messages[i])  # type: ignore[arg-type]
         head = [pinned] if pinned is not None and messages and messages[0] is pinned else []
         rest = messages[len(head) :]
         before = len(rest)
-        reserve = max(_NOTE_TOKENS, len(summary or "") // 3)
-        while len(rest) > 1 and size([*head, *rest]) + reserve > self.max_tokens:
+        while len(rest) > 1 and size([*head, *rest]) + _NOTE_TOKENS > self.max_tokens:
             rest = _without_leading_tool_results(rest[1:])
         if len(rest) < before:  # say so: a model that is not told re-plans from scratch
-            gone = before - len(rest)
-            dropped = list(messages[len(head) : len(head) + gone])
             text = (
-                f"[{gone} earlier messages were dropped to fit the context. "
+                f"[{before - len(rest)} earlier messages were dropped to fit the context. "
                 "Your todo list, notes and the files on disk still show your progress; "
                 "check them instead of starting over.]"
             )
-            if summary:
-                text += f"\n\nSummary of what happened in them:\n{summary}"
-            return [*head, HumanMessage(content=text), *rest], dropped
-        return [*head, *rest], []
-
-    async def compact(self, history: list[BaseMessage]) -> list[BaseMessage]:
-        """Compress history longer than ``recent_window``; never raises on its own.
-
-        When a summarizer is configured the old tail becomes a leading
-        ``SystemMessage``; otherwise a one-line note says how many messages were omitted.
-        """
-        if len(history) <= self.recent_window:
-            return history
-        recent = _recent(history, self.recent_window)
-        old = history[: len(history) - len(recent)]
-        if self.summarizer is None:
-            return [SystemMessage(content=f"[{len(old)} earlier messages were omitted.]"), *recent]
-        summary = await self.summarizer.summarize(old)
-        return [SystemMessage(content=summary), *recent]
+            return [*head, HumanMessage(content=text), *rest]
+        return [*head, *rest]
 
     def _fit_system_parts(self, parts: Sequence[str]) -> list[str]:
         """Keep nearest parts (base prompt first) within ``max_system_bytes``."""

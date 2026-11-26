@@ -173,6 +173,14 @@ class Application:
     def approval_modes(self) -> tuple[str, ...]:
         return APPROVAL_MODES
 
+    async def compact_session(self, session_id: str, focus: str | None = None) -> int:
+        """Replace the conversation so far with a saved summary (``/compact [focus]``).
+
+        Returns how many messages were summarised (0: nothing new since the last summary).
+        Raises ``ConfigurationError`` when no summarizer is wired.
+        """
+        return await self.run_manager.runtime.compact(session_id, (focus or "").strip() or None)
+
     def get_model(self) -> str:
         """The main agent's model, as ``provider:model``."""
         return self.agent.model

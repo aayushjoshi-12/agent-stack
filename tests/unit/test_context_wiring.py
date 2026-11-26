@@ -12,12 +12,16 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+import pytest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from agent_stack.context.composer import SystemPromptComposer
 from agent_stack.context.instructions import InstructionsLoader
 from agent_stack.core.agent import Agent
-from agent_stack.core.context import ContextBuilder
+from agent_stack.core.context import COMPACTION_HEADER, ContextBuilder
+from agent_stack.core.errors import ConfigurationError
+from agent_stack.core.event_bus import InMemoryEventBus
+from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.runtime import AgentRuntime
 from agent_stack.core.session import InMemorySessionStore
 from agent_stack.memory import MemoryIndex
@@ -28,14 +32,29 @@ from tests.fakes import FakeChatModel, ai
 
 
 class FakeSummarizer:
-    """Records the tail it summarized and returns a fixed summary."""
+    """Records what it summarized (and the focus asked for) and returns a fixed summary."""
 
-    def __init__(self) -> None:
+    def __init__(self, fail: bool = False) -> None:
         self.summarized: list[Sequence[BaseMessage]] = []
+        self.focus: list[str | None] = []
+        self.fail = fail
 
-    async def summarize(self, messages: Sequence[BaseMessage]) -> str:
+    async def summarize(self, messages: Sequence[BaseMessage], focus: str | None = None) -> str:
         self.summarized.append(messages)
+        self.focus.append(focus)
+        if self.fail:
+            raise RuntimeError("summary model is down")
         return "SUMMARY"
+
+
+class RecordingBus(InMemoryEventBus):
+    def __init__(self) -> None:
+        super().__init__()
+        self.published: list[AgentEvent] = []
+
+    async def publish(self, event: AgentEvent) -> None:
+        self.published.append(event)
+        await super().publish(event)
 
 
 def _runtime(
@@ -136,25 +155,80 @@ async def test_history_window_caps_model_input() -> None:
     assert "h0" not in [message.content for message in messages]
 
 
-async def test_history_summary_reaches_model_prompt() -> None:
-    store = InMemorySessionStore()
-    history = [HumanMessage(content=f"h{i}") for i in range(10)]
-    await store.append_messages("s1", history)
+def _big_history(count: int = 30) -> list[BaseMessage]:
+    return [HumanMessage(content=f"h{i} " + "x" * 400) for i in range(count)]
 
+
+async def test_a_conversation_past_the_threshold_is_compacted_and_the_summary_saved() -> None:
+    store = InMemorySessionStore()
+    await store.append_messages("s1", _big_history())  # ~3k tokens against a 2k budget
     summarizer = FakeSummarizer()
-    model = FakeChatModel([ai("ok")])
-    runtime = _runtime(
-        model, store, context_builder=ContextBuilder(recent_window=4, summarizer=summarizer)
+    bus = RecordingBus()
+    model = FakeChatModel([ai("first"), ai("second")])
+    builder = ContextBuilder(recent_window=1000, max_tokens=2000, summarizer=summarizer)
+    agent = Agent(name="assistant", model="test:model", system_prompt="BASE PROMPT")
+    runtime = AgentRuntime(
+        agent=agent,
+        model=model,
+        tool_executor=ToolExecutor(ToolRegistry(())),
+        session_store=store,
+        context_builder=builder,
+        event_bus=bus,
     )
 
     await runtime.run(session_id="s1", user_id="u1", message="new")
 
-    # The old tail was summarized, and the summary survives re-windowing as a system part.
-    assert summarizer.summarized == [history[:-4]]
-    system = model.calls[0][0]
-    assert isinstance(system, SystemMessage)
-    assert "SUMMARY" in system.content
-    assert len(model.calls[0][1:]) == 4
+    # everything so far, the new request included, went to the summarizer once
+    assert len(summarizer.summarized) == 1
+    assert [m.content for m in summarizer.summarized[0]][-1] == "new"
+    system, *sent = model.calls[0]
+    assert "SUMMARY" in str(system.content) and str(system.content).startswith("BASE PROMPT")
+    assert [m.content for m in sent] == ["new"]  # the request stays; older messages do not
+    compacted = [e for e in bus.published if e.type == EventType.CONTEXT_COMPACTED]
+    assert compacted and compacted[0].data == {"messages": 31, "auto": True}
+
+    # the marker is saved: the next run starts from it without summarising again
+    stored = await store.get_messages("s1")
+    assert any(str(m.content).startswith(COMPACTION_HEADER) for m in stored)
+    assert len(stored) == 30 + 3  # nothing is deleted from the transcript
+    await runtime.run(session_id="s1", user_id="u1", message="again")
+    assert len(summarizer.summarized) == 1
+    assert [m.content for m in model.calls[1][1:]] == ["first", "again"]
+
+
+async def test_a_failed_summary_falls_back_to_dropping_and_is_not_retried() -> None:
+    store = InMemorySessionStore()
+    await store.append_messages("s1", _big_history())
+    summarizer = FakeSummarizer(fail=True)
+    model = FakeChatModel([ai("ok")])
+    builder = ContextBuilder(recent_window=1000, max_tokens=2000, summarizer=summarizer)
+    runtime = _runtime(model, store, context_builder=builder)
+
+    result = await runtime.run(session_id="s1", user_id="u1", message="new")
+
+    assert result.content == "ok"
+    assert len(summarizer.summarized) == 1
+    assert "earlier messages were dropped" in str(model.calls[0][1].content)
+
+
+async def test_compact_now_summarises_with_the_focus_and_only_once() -> None:
+    store = InMemorySessionStore()
+    await store.append_messages("s1", [HumanMessage(content="hi"), AIMessage(content="hello")])
+    summarizer = FakeSummarizer()
+    runtime = _runtime(
+        FakeChatModel([]), store, context_builder=ContextBuilder(summarizer=summarizer)
+    )
+
+    assert await runtime.compact("s1", "the API design") == 2
+    assert summarizer.focus == ["the API design"]
+    assert str((await store.get_messages("s1"))[-1].content).startswith(COMPACTION_HEADER)
+    assert await runtime.compact("s1") == 0  # nothing new since the summary
+
+
+async def test_compact_without_a_summarizer_is_a_configuration_error() -> None:
+    runtime = _runtime(FakeChatModel([]), InMemorySessionStore(), context_builder=ContextBuilder())
+    with pytest.raises(ConfigurationError):
+        await runtime.compact("s1")
 
 
 async def test_concurrent_runs_calibrate_against_their_own_estimate() -> None:

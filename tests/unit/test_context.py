@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from pathlib import Path
 
 from langchain_core.messages import (
@@ -14,18 +13,13 @@ from langchain_core.messages import (
 )
 
 from agent_stack.context import InstructionsLoader
-from agent_stack.core.context import ContextBuilder, estimate_tokens
-
-
-class FakeSummarizer:
-    """Records the tail it summarized and returns a fixed summary."""
-
-    def __init__(self) -> None:
-        self.summarized: list[Sequence[BaseMessage]] = []
-
-    async def summarize(self, messages: Sequence[BaseMessage]) -> str:
-        self.summarized.append(messages)
-        return "SUMMARY"
+from agent_stack.core.context import (
+    COMPACTION_HEADER,
+    ContextBuilder,
+    after_compaction,
+    compaction_message,
+    estimate_tokens,
+)
 
 
 def _history(count: int) -> list[BaseMessage]:
@@ -44,42 +38,6 @@ def test_context_builds_system_plus_recent_messages() -> None:
     assert ctx.messages == tuple(history[-10:])
     assert ctx.messages[0].content == "message-40"
     assert ctx.messages[-1].content == "message-49"
-
-
-async def test_large_conversation_is_compacted() -> None:
-    summarizer = FakeSummarizer()
-    builder = ContextBuilder(recent_window=10, summarizer=summarizer)
-    history = _history(50)
-
-    compacted = await builder.compact(history)
-
-    # One summary SystemMessage followed by the recent 10 messages.
-    assert len(compacted) == 11
-    assert isinstance(compacted[0], SystemMessage)
-    assert compacted[0].content == "SUMMARY"
-    assert compacted[1:] == history[-10:]
-    assert summarizer.summarized == [history[:-10]]
-
-
-async def test_compact_without_summarizer_leaves_a_note_about_the_dropped_tail() -> None:
-    builder = ContextBuilder(recent_window=10)
-    history = _history(50)
-
-    compacted = await builder.compact(history)
-
-    note, *kept = compacted
-    assert kept == history[-10:]
-    assert isinstance(note, SystemMessage) and "40 earlier messages were omitted" in note.content
-
-
-async def test_compact_short_history_unchanged() -> None:
-    builder = ContextBuilder(recent_window=10)
-    history = _history(5)
-
-    compacted = await builder.compact(history)
-
-    assert compacted == history
-    assert len(compacted) == 5
 
 
 async def test_instructions_injected_into_system_prompt(tmp_path: Path) -> None:
@@ -183,15 +141,22 @@ def test_calibrate_ignores_nonsense_readings() -> None:
     assert builder.scale == 1.0
 
 
-def test_dropped_messages_are_returned_and_summary_replaces_the_bare_note() -> None:
-    builder = ContextBuilder(max_tokens=300, recent_window=1000, keep_tool_results=0)
-    first = HumanMessage(content="do the task")
-    history = [first] + [HumanMessage(content=f"step {i} " + "y" * 200) for i in range(20)]
-    plain = builder.build(system_parts=["s"], history=history, pinned=first)
-    assert plain.dropped
-    assert "Summary of what happened" not in str(plain.messages[1].content)
-    with_summary = builder.build(
-        system_parts=["s"], history=history, pinned=first, summary="GOAL: x. DONE: y."
-    )
-    assert with_summary.messages[0] is first
-    assert "GOAL: x. DONE: y." in str(with_summary.messages[1].content)
+def test_compaction_marker_hides_everything_before_it() -> None:
+    old, newer = HumanMessage(content="old"), HumanMessage(content="newer")
+    first = compaction_message("GOAL: a")
+    second = compaction_message("GOAL: b")
+
+    summary, rest = after_compaction([old, first, HumanMessage(content="mid"), second, newer])
+
+    assert summary is not None and summary.startswith(COMPACTION_HEADER) and "GOAL: b" in summary
+    assert rest == [newer]
+    assert after_compaction([old, newer]) == (None, [old, newer])
+    # an ordinary system message is not a marker
+    assert after_compaction([SystemMessage(content="x"), old])[0] is None
+
+
+def test_over_threshold_compares_against_the_share_of_the_budget() -> None:
+    builder = ContextBuilder(max_tokens=1000, compact_at=0.5)
+    assert not builder.over_threshold(["s"], [HumanMessage(content="x" * 1900)])  # ~475 tokens
+    assert builder.over_threshold(["s"], [HumanMessage(content="x" * 2100)])  # ~525 tokens
+    assert not ContextBuilder().over_threshold(["s"], [HumanMessage(content="x" * 10**6)])

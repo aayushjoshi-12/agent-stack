@@ -51,6 +51,9 @@ class EventType(StrEnum):
     # new branch's session id. Data: parent_session_id, branch_point_event_id,
     # branch_session_id. Not terminal for any stream.
     SESSION_BRANCHED = "session.branched"
+    # The conversation so far was summarised and the summary saved in its place (P31). Data:
+    # ``messages`` (how many were summarised) and ``auto`` (False for a /compact). Not terminal.
+    CONTEXT_COMPACTED = "context.compacted"
 
 
 @dataclass(frozen=True)

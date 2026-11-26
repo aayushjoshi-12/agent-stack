@@ -307,15 +307,6 @@ def test_the_window_never_starts_on_a_tool_result_whose_call_was_cut_off() -> No
         assert all(m.tool_call_id in called for m in window if isinstance(m, ToolMessage))
 
 
-async def test_compaction_does_not_leave_an_orphaned_tool_result_either() -> None:
-    from agent_stack.core.context import ContextBuilder
-
-    history = _tool_conversation(30)[:114]  # a length whose naive cut lands on a ToolMessage
-    compacted = await ContextBuilder(recent_window=40).compact(history)
-
-    assert not isinstance(compacted[0], ToolMessage)
-
-
 async def test_a_very_long_conversation_reaches_the_model_bounded_and_fast() -> None:
     import time
 

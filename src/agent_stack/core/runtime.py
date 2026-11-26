@@ -23,9 +23,16 @@ from agent_stack.core.approval import (
     Verdict,
 )
 from agent_stack.core.cancellation import CancellationToken
-from agent_stack.core.context import ContextBuilder, SystemPartsProvider, tool_schema_tokens
+from agent_stack.core.context import (
+    ContextBuilder,
+    SystemPartsProvider,
+    after_compaction,
+    compaction_message,
+    tool_schema_tokens,
+)
 from agent_stack.core.errors import (
     AgentStackError,
+    ConfigurationError,
     RuntimeDeadlineExceeded,
     StepLimitExceeded,
     ToolCallLimitExceeded,
@@ -44,9 +51,8 @@ if TYPE_CHECKING:
 
 _LOG = logging.getLogger(__name__)
 
-#: Summarise dropped messages once this many are gone, then again every ``_SUMMARY_REFRESH_EVERY``.
-_SUMMARY_MIN_DROPPED = 6
-_SUMMARY_REFRESH_EVERY = 8
+#: Fewer messages than this since the last summary are not worth a compaction call.
+_MIN_TO_COMPACT = 4
 
 #: Reasoning that says "wait" / "actually" this many times in one step is going in circles.
 SPIRAL_THRESHOLD = 12
@@ -215,6 +221,26 @@ class AgentRuntime:
         async with self._session_lock.lock(session_id):
             return await body()
 
+    async def compact(self, session_id: str, focus: str | None = None) -> int:
+        """Summarise a conversation now (``/compact``) and save the summary in its place.
+
+        Returns how many messages were summarised (0: nothing since the last summary). Waits for
+        a run on the session to finish first, so the marker never lands inside a run.
+        """
+        builder = self._context_builder
+        if builder is None or builder.summarizer is None:
+            raise ConfigurationError("compacting needs a context builder with a summarizer")
+        async with (
+            self._session_lock.lock(session_id) if self._session_lock else contextlib.nullcontext()
+        ):
+            summary, recent = after_compaction(await self._session_store.get_messages(session_id))
+            if not recent:
+                return 0
+            earlier = [SystemMessage(content=summary)] if summary else []
+            text = await builder.summarizer.summarize([*earlier, *recent], focus)
+            await self._session_store.append_messages(session_id, [compaction_message(text)])
+        return len(recent)
+
     async def _run_body(
         self,
         *,
@@ -242,13 +268,6 @@ class AgentRuntime:
         resident: Sequence[str] = ()
         if self._context_builder is not None:
             resident = await self._resident_parts()
-            compacted = await self._context_builder.compact(history)
-            # A summarizer prepends the compaction summary as a SystemMessage; lift it
-            # into the resident parts so re-windowing below cannot drop it.
-            if compacted and isinstance(compacted[0], SystemMessage):
-                resident = (*resident, str(compacted[0].content))
-                compacted = compacted[1:]
-            history = compacted
 
         limits = self._agent.limits
         deadline = time.monotonic() + limits.max_runtime_seconds
@@ -277,6 +296,14 @@ class AgentRuntime:
                 if spiral_nudge:
                     spiral_nudge = False
                     new_messages.append(HumanMessage(content=SPIRAL_NUDGE))
+                await self._maybe_compact(
+                    resident=resident,
+                    messages=[*history, *new_messages],
+                    new_messages=new_messages,
+                    memo=summary_memo,
+                    run_id=run_id,
+                    session_id=session_id,
+                )
                 model_input = await self._model_input(
                     resident=resident, history=history, new_messages=new_messages, memo=summary_memo
                 )
@@ -543,6 +570,45 @@ class AgentRuntime:
         """A zero-argument call of the model on ``model_input`` (binds it, not the loop variable)."""
         return lambda: self._model.ainvoke(model_input)
 
+    async def _maybe_compact(
+        self,
+        *,
+        resident: Sequence[str],
+        messages: Sequence[BaseMessage],
+        new_messages: list[BaseMessage],
+        memo: dict[str, Any],
+        run_id: str,
+        session_id: str,
+    ) -> None:
+        """Past the threshold, replace the conversation so far with one saved summary (P31).
+
+        The summary is appended to ``new_messages`` as a marker, so it is saved with the run; the
+        model sees only the latest marker and what follows. One failure turns it off for the run:
+        dropping old messages (``ContextBuilder.build``) still keeps the context in budget.
+        """
+        builder = self._context_builder
+        if builder is None or builder.summarizer is None or memo.get("compact_failed"):
+            return
+        summary, recent = after_compaction(messages)
+        if len(recent) < _MIN_TO_COMPACT or not builder.over_threshold(
+            _with_summary(resident, summary), recent, self._tool_overhead
+        ):
+            return
+        earlier = [SystemMessage(content=summary)] if summary else []
+        try:
+            text = await builder.summarizer.summarize([*earlier, *recent])
+        except Exception:  # a failed summary must never stop the run
+            memo["compact_failed"] = True
+            _LOG.warning("compacting the conversation failed", exc_info=True)
+            return
+        new_messages.append(compaction_message(text))
+        await self._emit(
+            EventType.CONTEXT_COMPACTED,
+            run_id=run_id,
+            session_id=session_id,
+            data={"messages": len(recent), "auto": True},
+        )
+
     async def _model_input(
         self,
         *,
@@ -553,43 +619,23 @@ class AgentRuntime:
     ) -> list[BaseMessage]:
         """Build one model input: system parts plus the (windowed) messages.
 
-        Unwired (no builder), this is exactly the legacy single ``SystemMessage`` over
-        the raw messages. With a builder the system parts are joined into one
-        ``SystemMessage`` and the messages are the recent window of ``history + new``.
+        Only the latest compaction summary and the messages after it are shown; the summary
+        joins the system parts. Unwired (no builder), the base prompt goes over those messages
+        as they are; with a builder the parts are budgeted and the messages windowed.
         """
+        summary, messages = after_compaction([*history, *new_messages])
         if self._context_builder is None:
-            return [SystemMessage(content=self._agent.system_prompt), *history, *new_messages]
-        everything = [*history, *new_messages]
+            system = "\n\n".join(_with_summary([self._agent.system_prompt], summary))
+            return [SystemMessage(content=system), *messages]
         pinned = new_messages[0] if new_messages else None
-        memo = memo if memo is not None else {}
         ctx = self._context_builder.build(
-            system_parts=resident,
-            history=everything,
+            system_parts=_with_summary(resident, summary),
+            history=messages,
             pinned=pinned,
-            summary=memo.get("text"),
             overhead=self._tool_overhead,
         )
-        summarizer = self._context_builder.summarizer
-        # Summarise what was dropped, but only when a good many more messages have gone since the
-        # last summary: summarising on every step would cost a model call per step.
-        if (
-            summarizer is not None
-            and len(ctx.dropped) >= _SUMMARY_MIN_DROPPED
-            and len(ctx.dropped) - memo.get("count", 0) >= _SUMMARY_REFRESH_EVERY
-        ):
-            try:
-                memo["text"] = await summarizer.summarize(ctx.dropped)
-                memo["count"] = len(ctx.dropped)
-                ctx = self._context_builder.build(
-                    system_parts=resident,
-                    history=everything,
-                    pinned=pinned,
-                    summary=memo["text"],
-                    overhead=self._tool_overhead,
-                )
-            except Exception:  # a failed summary must never stop the run
-                _LOG.warning("summarising dropped messages failed", exc_info=True)
-        memo["raw_estimate"] = ctx.raw_estimate  # per run: concurrent runs share this runtime
+        if memo is not None:
+            memo["raw_estimate"] = ctx.raw_estimate  # per run: concurrent runs share this runtime
         return [SystemMessage(content="\n\n".join(ctx.system)), *ctx.messages]
 
     async def _save_session(self, session: Session, stored_version: int) -> None:
@@ -844,3 +890,10 @@ def _rejected_result(
         success=False,
         error=reason,
     )
+
+
+def _with_summary(parts: Sequence[str], summary: str | None) -> list[str]:
+    """The system parts with a compaction summary right after the base prompt (never cut first)."""
+    if summary is None:
+        return list(parts)
+    return [*parts[:1], summary, *parts[1:]]

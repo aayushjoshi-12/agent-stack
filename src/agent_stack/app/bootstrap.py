@@ -199,11 +199,15 @@ def build_application(config: AppConfig | None = None) -> Application:
         todos=todo_store,
     )
     small = _title_model(resolved.small_model)
+    # Compaction (P31) summarises with the small model, else the main one, as Claude Code does.
+    # shortcut: the fallback stays the startup model after a /model switch; rebuild it on switch
+    # if summaries ever need the newer model.
+    summary_model = small or _optional_model(resolved.model)
     context_builder = ContextBuilder(
         # the token budget decides what is kept; a 40-message window made long tasks forget
         recent_window=10_000,
         max_tokens=resolved.context_budget,
-        summarizer=LLMSummarizer(small) if small is not None else None,
+        summarizer=LLMSummarizer(summary_model) if summary_model is not None else None,
     )
 
     monitors = MonitorService(workspace)
