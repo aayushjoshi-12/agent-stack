@@ -155,11 +155,9 @@ async def test_model_endpoint_switches_the_model_for_the_next_message(
     assert reply.content == "answered by the new model"
 
 
-async def test_compact_endpoint_passes_the_focus_and_needs_a_summarizer(tmp_path: Path) -> None:
+async def test_compact_endpoint_passes_the_focus_for_owned_sessions(tmp_path: Path) -> None:
     client, w = await _setup(tmp_path)
     async with client:
-        refused = await client.post("/sessions/s1/compact", json={}, headers=HEADERS)
-        assert refused.status_code == 400 and "summarizer" in refused.json()["detail"]
         assert (
             await client.post("/sessions/nope/compact", json={}, headers=HEADERS)
         ).status_code == 404

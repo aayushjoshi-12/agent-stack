@@ -30,12 +30,3 @@ async def test_transcript_is_sent_as_data_and_the_result_is_cached() -> None:
     assert body.startswith("<transcript>") and "fix the bug in a.py" in body
     assert "read_file({'path': 'a.py'})" in body and "3800 more chars" in body
 
-
-async def test_a_focus_is_passed_on_and_kept_apart_in_the_cache() -> None:
-    model = FakeChatModel([ai("plain"), ai("focused")])
-    summarizer = LLMSummarizer(model)  # type: ignore[arg-type]
-    history = [HumanMessage(content="hi")]
-
-    assert await summarizer.summarize(history) == "plain"
-    assert await summarizer.summarize(history, "the database") == "focused"
-    assert "focus on: the database" in str(model.calls[1][1].content)

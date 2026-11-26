@@ -365,10 +365,7 @@ def create_app(application: Application, settings: WebSettings) -> FastAPI:
     async def compact(session_id: str, body: CompactBody) -> dict[str, int]:
         """Summarise the conversation so far in place (waits for a running turn to finish)."""
         await owned_session(session_id)
-        try:
-            return {"messages": await application.compact_session(session_id, body.focus)}
-        except ConfigurationError as exc:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)[:300]) from None
+        return {"messages": await application.compact_session(session_id, body.focus)}
 
     # ── history: rewind, branches, references ────────────────────────────────
     @api.get("/sessions/{session_id}/turns", dependencies=auth)

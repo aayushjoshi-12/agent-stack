@@ -176,8 +176,8 @@ class Application:
     async def compact_session(self, session_id: str, focus: str | None = None) -> int:
         """Replace the conversation so far with a saved summary (``/compact [focus]``).
 
-        Returns how many messages were summarised (0: nothing new since the last summary).
-        Raises ``ConfigurationError`` when no summarizer is wired.
+        Returns how many messages were summarised (0: nothing new since the last summary). The
+        conversation's own model writes the summary.
         """
         return await self.run_manager.runtime.compact(session_id, (focus or "").strip() or None)
 

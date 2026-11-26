@@ -49,6 +49,18 @@ def _external_access(source: Mapping[str, str]) -> str:
     return mode
 
 
+def _compact_at(raw: str) -> float | None:
+    if raw.strip().lower() in ("off", "0", "false", "no"):
+        return None
+    try:
+        share = float(raw)
+    except ValueError:
+        share = -1.0
+    if not 0 < share <= 1:
+        raise ConfigurationError("AGENT_STACK_COMPACT_AT must be a number in (0, 1] or 'off'")
+    return share
+
+
 def _approval_mode(raw: str) -> str:
     mode = raw.strip().lower()
     if mode not in ("ask", "auto"):
@@ -89,6 +101,10 @@ class AppConfig:
     #: old tool results are cleared and then the oldest messages dropped. Long contexts cost
     #: more and make models worse at using what is in them. ``AGENT_STACK_CONTEXT_BUDGET``.
     context_budget: int = 120_000
+    #: Compact (summarise the conversation and continue from the summary) once the context passes
+    #: this share of ``context_budget``; None turns automatic compaction off (``/compact`` still
+    #: works). ``AGENT_STACK_COMPACT_AT``: a number in (0, 1], or ``off``.
+    compact_at: float | None = 0.8
     #: Model calls one run may make (tool calls are capped at twice this). The default suits
     #: chat; a long autonomous task needs more. ``AGENT_STACK_MAX_STEPS``.
     max_steps: int = 50
@@ -186,13 +202,16 @@ class AppConfig:
             approval_tools=approval_tools,
             context_window=int(source.get("AGENT_STACK_CONTEXT_WINDOW", defaults.context_window)),
             context_budget=int(source.get("AGENT_STACK_CONTEXT_BUDGET", defaults.context_budget)),
+            compact_at=_compact_at(source.get("AGENT_STACK_COMPACT_AT", "0.8")),
             max_steps=int(source.get("AGENT_STACK_MAX_STEPS", defaults.max_steps)),
             fetch_mode=_fetch_mode(source.get("AGENT_STACK_FETCH_MODE", defaults.fetch_mode)),
             max_runtime_seconds=float(
                 source.get("AGENT_STACK_MAX_RUNTIME", defaults.max_runtime_seconds)
             ),
             external_access=_external_access(source),
-            approval_mode=_approval_mode(source.get("AGENT_STACK_APPROVAL_MODE", defaults.approval_mode)),
+            approval_mode=_approval_mode(
+                source.get("AGENT_STACK_APPROVAL_MODE", defaults.approval_mode)
+            ),
             auto_model=_auto_model(source.get("AGENT_STACK_AUTO_MODEL", defaults.auto_model or "")),
             budget_usd=budget,
             workspace=workspace,

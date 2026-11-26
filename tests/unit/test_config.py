@@ -96,3 +96,12 @@ def test_fetch_mode_defaults_to_reader_and_is_validated() -> None:
 
     with pytest.raises(ConfigurationError):
         AppConfig.from_env({"AGENT_STACK_FETCH_MODE": "proxy"})
+
+
+def test_compact_at_takes_a_share_or_off() -> None:
+    assert AppConfig.from_env({}).compact_at == 0.8
+    assert AppConfig.from_env({"AGENT_STACK_COMPACT_AT": "0.6"}).compact_at == 0.6
+    assert AppConfig.from_env({"AGENT_STACK_COMPACT_AT": "off"}).compact_at is None
+    for bad in ("1.5", "-1", "soon"):
+        with pytest.raises(Exception, match="COMPACT_AT"):
+            AppConfig.from_env({"AGENT_STACK_COMPACT_AT": bad})

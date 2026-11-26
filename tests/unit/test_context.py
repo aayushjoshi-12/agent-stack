@@ -160,3 +160,5 @@ def test_over_threshold_compares_against_the_share_of_the_budget() -> None:
     assert not builder.over_threshold(["s"], [HumanMessage(content="x" * 1900)])  # ~475 tokens
     assert builder.over_threshold(["s"], [HumanMessage(content="x" * 2100)])  # ~525 tokens
     assert not ContextBuilder().over_threshold(["s"], [HumanMessage(content="x" * 10**6)])
+    off = ContextBuilder(max_tokens=1000, compact_at=None)  # AGENT_STACK_COMPACT_AT=off
+    assert not off.over_threshold(["s"], [HumanMessage(content="x" * 10**6)])

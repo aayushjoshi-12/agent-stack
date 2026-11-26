@@ -7,6 +7,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 from uuid import uuid4
 
@@ -24,6 +25,8 @@ from agent_stack.core.approval import (
 )
 from agent_stack.core.cancellation import CancellationToken
 from agent_stack.core.context import (
+    COMPACT_PROMPT,
+    FILES_HEADER,
     ContextBuilder,
     SystemPartsProvider,
     after_compaction,
@@ -32,7 +35,6 @@ from agent_stack.core.context import (
 )
 from agent_stack.core.errors import (
     AgentStackError,
-    ConfigurationError,
     RuntimeDeadlineExceeded,
     StepLimitExceeded,
     ToolCallLimitExceeded,
@@ -43,6 +45,7 @@ from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.locks import SessionLockManager
 from agent_stack.core.session import Session, SessionStore
 from agent_stack.core.state import Checkpoint, CheckpointStatus
+from agent_stack.core.workspace import WorkspacePolicy
 from agent_stack.tools.executor import ToolExecutionResult, ToolExecutor
 
 if TYPE_CHECKING:
@@ -53,6 +56,11 @@ _LOG = logging.getLogger(__name__)
 
 #: Fewer messages than this since the last summary are not worth a compaction call.
 _MIN_TO_COMPACT = 4
+#: After a compaction, the files in use are re-attached: this many, each cut at _FILE_CHARS.
+_FILE_TOOLS = frozenset({"read_file", "write_file", "edit_file"})
+_FILES_KEPT = 5
+_FILE_CHARS = 12_000
+_FILES_CHARS = 40_000
 
 #: Reasoning that says "wait" / "actually" this many times in one step is going in circles.
 SPIRAL_THRESHOLD = 12
@@ -168,8 +176,11 @@ class AgentRuntime:
         approvals: ApprovalBroker | None = None,
         advisor: ApprovalAdvisor | None = None,
         approval_mode: ApprovalMode | None = None,
+        workspace_root: Path | None = None,
     ) -> None:
         self._agent = agent
+        #: Where a compaction re-reads the files in use (None: it attaches none).
+        self._workspace = WorkspacePolicy(workspace_root) if workspace_root else None
         self._model = model
         self._tool_executor = tool_executor
         self._session_store = session_store
@@ -227,18 +238,23 @@ class AgentRuntime:
         Returns how many messages were summarised (0: nothing since the last summary). Waits for
         a run on the session to finish first, so the marker never lands inside a run.
         """
-        builder = self._context_builder
-        if builder is None or builder.summarizer is None:
-            raise ConfigurationError("compacting needs a context builder with a summarizer")
         async with (
             self._session_lock.lock(session_id) if self._session_lock else contextlib.nullcontext()
         ):
-            summary, recent = after_compaction(await self._session_store.get_messages(session_id))
+            history = await self._session_store.get_messages(session_id)
+            recent = after_compaction(history)[1]
             if not recent:
                 return 0
-            earlier = [SystemMessage(content=summary)] if summary else []
-            text = await builder.summarizer.summarize([*earlier, *recent], focus)
-            await self._session_store.append_messages(session_id, [compaction_message(text)])
+            model_input = await self._model_input(
+                resident=await self._resident_parts() if self._context_builder else (),
+                history=history,
+                new_messages=[],
+            )
+            text = await self._summarize(
+                model_input, focus, run_id=f"compact-{uuid4().hex}", session_id=session_id
+            )
+            marker = compaction_message(text, self._files_in_use(recent))
+            await self._session_store.append_messages(session_id, [marker])
         return len(recent)
 
     async def _run_body(
@@ -298,11 +314,13 @@ class AgentRuntime:
                     new_messages.append(HumanMessage(content=SPIRAL_NUDGE))
                 await self._maybe_compact(
                     resident=resident,
-                    messages=[*history, *new_messages],
+                    history=history,
                     new_messages=new_messages,
                     memo=summary_memo,
                     run_id=run_id,
                     session_id=session_id,
+                    parent_run_id=parent_run_id,
+                    deadline=deadline,
                 )
                 model_input = await self._model_input(
                     resident=resident, history=history, new_messages=new_messages, memo=summary_memo
@@ -574,11 +592,13 @@ class AgentRuntime:
         self,
         *,
         resident: Sequence[str],
-        messages: Sequence[BaseMessage],
+        history: Sequence[BaseMessage],
         new_messages: list[BaseMessage],
         memo: dict[str, Any],
         run_id: str,
         session_id: str,
+        parent_run_id: str | None,
+        deadline: float,
     ) -> None:
         """Past the threshold, replace the conversation so far with one saved summary (P31).
 
@@ -587,27 +607,106 @@ class AgentRuntime:
         dropping old messages (``ContextBuilder.build``) still keeps the context in budget.
         """
         builder = self._context_builder
-        if builder is None or builder.summarizer is None or memo.get("compact_failed"):
+        if builder is None or memo.get("compact_failed"):
             return
-        summary, recent = after_compaction(messages)
+        summary, recent = after_compaction([*history, *new_messages])
         if len(recent) < _MIN_TO_COMPACT or not builder.over_threshold(
             _with_summary(resident, summary), recent, self._tool_overhead
         ):
             return
-        earlier = [SystemMessage(content=summary)] if summary else []
+        model_input = await self._model_input(
+            resident=resident, history=history, new_messages=new_messages
+        )
         try:
-            text = await builder.summarizer.summarize([*earlier, *recent])
+            text = await self._within(
+                deadline,
+                lambda: self._summarize(
+                    model_input,
+                    None,
+                    run_id=run_id,
+                    session_id=session_id,
+                    parent_run_id=parent_run_id,
+                ),
+            )
+        except RuntimeDeadlineExceeded:
+            raise
         except Exception:  # a failed summary must never stop the run
             memo["compact_failed"] = True
             _LOG.warning("compacting the conversation failed", exc_info=True)
             return
-        new_messages.append(compaction_message(text))
+        new_messages.append(compaction_message(text, self._files_in_use(recent)))
         await self._emit(
             EventType.CONTEXT_COMPACTED,
             run_id=run_id,
             session_id=session_id,
+            parent_run_id=parent_run_id,
             data={"messages": len(recent), "auto": True},
         )
+
+    async def _summarize(
+        self,
+        model_input: list[BaseMessage],
+        focus: str | None,
+        *,
+        run_id: str,
+        session_id: str,
+        parent_run_id: str | None = None,
+    ) -> str:
+        """Ask this conversation's own model for the summary, the way Claude Code does.
+
+        The model gets exactly what it was about to see (so a prompt cache can reuse it) with
+        :data:`COMPACT_PROMPT` added at the end. Its usage is recorded like any other call.
+        """
+        ask = COMPACT_PROMPT + (
+            f"\n\nThe user asked the summary to focus on: {focus}" if focus else ""
+        )
+        reply = await self._model.ainvoke([*model_input, HumanMessage(content=ask)])
+        if not isinstance(reply, AIMessage):
+            raise AgentStackError(f"Model returned {type(reply).__name__}, expected AIMessage")
+        usage = usage_data(reply)
+        if usage is not None:
+            await self._emit(
+                EventType.MODEL_USAGE,
+                run_id=run_id,
+                session_id=session_id,
+                parent_run_id=parent_run_id,
+                data=usage,
+            )
+        text = str(reply.text).strip()
+        if not text:
+            raise AgentStackError("the model returned no summary")
+        return text
+
+    def _files_in_use(self, messages: Sequence[BaseMessage]) -> str:
+        """The files the summarised messages read or edited, newest first, as they are now.
+
+        Claude Code re-attaches recently read files after a compaction, so the next step does not
+        start by re-reading them. Paths outside the workspace and unreadable files are skipped.
+        """
+        if self._workspace is None:
+            return ""
+        paths: list[str] = []
+        for message in reversed(messages):
+            for call in reversed(getattr(message, "tool_calls", None) or ()):
+                path = (call.get("args") or {}).get("path")
+                if call.get("name") in _FILE_TOOLS and isinstance(path, str) and path not in paths:
+                    paths.append(path)
+        blocks: list[str] = []
+        used = 0
+        for path in paths[:_FILES_KEPT]:
+            try:
+                text = self._workspace.resolve(path).read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError, AgentStackError):
+                continue
+            if len(text) > _FILE_CHARS:
+                text = (
+                    text[:_FILE_CHARS] + f"\n…[{len(text) - _FILE_CHARS} more chars; read_file it]"
+                )
+            if used + len(text) > _FILES_CHARS:
+                break
+            used += len(text)
+            blocks.append(f"## {path}\n```\n{text}\n```")
+        return "\n\n".join(blocks)
 
     async def _model_input(
         self,
@@ -624,6 +723,12 @@ class AgentRuntime:
         as they are; with a builder the parts are budgeted and the messages windowed.
         """
         summary, messages = after_compaction([*history, *new_messages])
+        if summary is not None and FILES_HEADER in summary:
+            # the files ride as the first message: the system part stays small, and under
+            # pressure they are the first thing dropped
+            summary, _, files = summary.partition(FILES_HEADER)
+            messages = [HumanMessage(content=FILES_HEADER + files), *messages]
+            summary = summary.rstrip()
         if self._context_builder is None:
             system = "\n\n".join(_with_summary([self._agent.system_prompt], summary))
             return [SystemMessage(content=system), *messages]

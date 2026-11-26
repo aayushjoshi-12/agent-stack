@@ -112,12 +112,13 @@ class ChatLibrary:
         """A short summary: the small model's when there is one, else the first and last turns."""
         title = await self._owned(principal, session_id)
         messages = await self._app.session_store.get_messages(session_id)
-        summarizer = getattr(
-            getattr(self._app.factory, "_context_builder", None), "summarizer", None
-        )
-        if summarizer is not None and messages:
+        if messages:
             try:
-                summary = str(await summarizer.summarize(messages))
+                from agent_stack.context.summarizer import LLMSummarizer
+                from agent_stack.models.factory import build_model
+
+                model = self._app.title_model or build_model(self._app.get_model())
+                summary = await LLMSummarizer(model).summarize(messages)
                 return f"Summary of {title!r} ({session_id}):\n{summary}"
             except Exception:
                 pass  # fall through to the plain digest

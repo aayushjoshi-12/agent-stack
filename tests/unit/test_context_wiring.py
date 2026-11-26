@@ -8,18 +8,26 @@ metadata) and the bounded history window. No network, no real LLM.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-import pytest
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 
 from agent_stack.context.composer import SystemPromptComposer
 from agent_stack.context.instructions import InstructionsLoader
 from agent_stack.core.agent import Agent
-from agent_stack.core.context import COMPACTION_HEADER, ContextBuilder
-from agent_stack.core.errors import ConfigurationError
+from agent_stack.core.context import (
+    COMPACT_PROMPT,
+    COMPACTION_HEADER,
+    FILES_HEADER,
+    ContextBuilder,
+)
 from agent_stack.core.event_bus import InMemoryEventBus
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.runtime import AgentRuntime
@@ -29,22 +37,6 @@ from agent_stack.skills import SkillLoader, SkillRegistry
 from agent_stack.tools.executor import ToolExecutor
 from agent_stack.tools.registry import ToolRegistry
 from tests.fakes import FakeChatModel, ai
-
-
-class FakeSummarizer:
-    """Records what it summarized (and the focus asked for) and returns a fixed summary."""
-
-    def __init__(self, fail: bool = False) -> None:
-        self.summarized: list[Sequence[BaseMessage]] = []
-        self.focus: list[str | None] = []
-        self.fail = fail
-
-    async def summarize(self, messages: Sequence[BaseMessage], focus: str | None = None) -> str:
-        self.summarized.append(messages)
-        self.focus.append(focus)
-        if self.fail:
-            raise RuntimeError("summary model is down")
-        return "SUMMARY"
 
 
 class RecordingBus(InMemoryEventBus):
@@ -156,79 +148,117 @@ async def test_history_window_caps_model_input() -> None:
 
 
 def _big_history(count: int = 30) -> list[BaseMessage]:
-    return [HumanMessage(content=f"h{i} " + "x" * 400) for i in range(count)]
+    read = AIMessage(
+        content="", tool_calls=[{"name": "read_file", "args": {"path": "a.py"}, "id": "r1"}]
+    )
+    chat = [HumanMessage(content=f"h{i} " + "x" * 400) for i in range(count)]
+    return [*chat, read, ToolMessage(content="print('old')", tool_call_id="r1", name="read_file")]
 
 
-async def test_a_conversation_past_the_threshold_is_compacted_and_the_summary_saved() -> None:
-    store = InMemorySessionStore()
-    await store.append_messages("s1", _big_history())  # ~3k tokens against a 2k budget
-    summarizer = FakeSummarizer()
-    bus = RecordingBus()
-    model = FakeChatModel([ai("first"), ai("second")])
-    builder = ContextBuilder(recent_window=1000, max_tokens=2000, summarizer=summarizer)
+def _compacting_runtime(
+    model: Any, store: InMemorySessionStore, bus: InMemoryEventBus | None = None, **kw: Any
+) -> AgentRuntime:
     agent = Agent(name="assistant", model="test:model", system_prompt="BASE PROMPT")
-    runtime = AgentRuntime(
+    return AgentRuntime(
         agent=agent,
         model=model,
         tool_executor=ToolExecutor(ToolRegistry(())),
         session_store=store,
-        context_builder=builder,
+        context_builder=ContextBuilder(recent_window=1000, max_tokens=2000),
         event_bus=bus,
+        **kw,
     )
+
+
+async def test_past_the_threshold_the_own_model_summarises_and_the_summary_is_saved(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "a.py").write_text("print('now')\n")
+    store = InMemorySessionStore()
+    await store.append_messages("s1", _big_history())  # ~3k tokens against a 2k budget
+    bus = RecordingBus()
+    model = FakeChatModel([ai("SUMMARY"), ai("first"), ai("second")])
+    runtime = _compacting_runtime(model, store, bus, workspace_root=tmp_path)
 
     await runtime.run(session_id="s1", user_id="u1", message="new")
 
-    # everything so far, the new request included, went to the summarizer once
-    assert len(summarizer.summarized) == 1
-    assert [m.content for m in summarizer.summarized[0]][-1] == "new"
-    system, *sent = model.calls[0]
+    # the compaction call: what the model was about to see, with the instructions at the end
+    *seen, ask = model.calls[0]
+    assert str(ask.content).startswith(COMPACT_PROMPT)
+    assert seen[-1].content == "new" and "BASE PROMPT" in str(seen[0].content)
+    # the next call sees the summary, the request and the file as it is now, not the history
+    system, *sent = model.calls[1]
     assert "SUMMARY" in str(system.content) and str(system.content).startswith("BASE PROMPT")
-    assert [m.content for m in sent] == ["new"]  # the request stays; older messages do not
+    assert FILES_HEADER not in str(system.content)
+    assert sent[0].content == "new"
+    assert FILES_HEADER in str(sent[1].content) and "print('now')" in str(sent[1].content)
+    assert len(sent) == 2
     compacted = [e for e in bus.published if e.type == EventType.CONTEXT_COMPACTED]
-    assert compacted and compacted[0].data == {"messages": 31, "auto": True}
+    assert compacted and compacted[0].data == {"messages": 33, "auto": True}
 
     # the marker is saved: the next run starts from it without summarising again
     stored = await store.get_messages("s1")
-    assert any(str(m.content).startswith(COMPACTION_HEADER) for m in stored)
-    assert len(stored) == 30 + 3  # nothing is deleted from the transcript
+    assert len(stored) == 32 + 3  # nothing is deleted from the transcript
     await runtime.run(session_id="s1", user_id="u1", message="again")
-    assert len(summarizer.summarized) == 1
-    assert [m.content for m in model.calls[1][1:]] == ["first", "again"]
+    assert len(model.calls) == 3
+    assert [m.content for m in model.calls[2][2:]] == ["first", "again"]
 
 
 async def test_a_failed_summary_falls_back_to_dropping_and_is_not_retried() -> None:
+    class FailingSummaries(FakeChatModel):
+        async def ainvoke(self, messages: Any, **kwargs: Any) -> AIMessage:
+            if str(messages[-1].content).startswith(COMPACT_PROMPT):
+                self.calls.append(list(messages))
+                raise RuntimeError("provider is down")
+            return await super().ainvoke(messages, **kwargs)
+
     store = InMemorySessionStore()
     await store.append_messages("s1", _big_history())
-    summarizer = FakeSummarizer(fail=True)
-    model = FakeChatModel([ai("ok")])
-    builder = ContextBuilder(recent_window=1000, max_tokens=2000, summarizer=summarizer)
-    runtime = _runtime(model, store, context_builder=builder)
+    model = FailingSummaries([ai("ok")])
+    runtime = _compacting_runtime(model, store)
 
     result = await runtime.run(session_id="s1", user_id="u1", message="new")
 
     assert result.content == "ok"
-    assert len(summarizer.summarized) == 1
-    assert "earlier messages were dropped" in str(model.calls[0][1].content)
+    assert len(model.calls) == 2  # one failed summary, then the answer: no retry
+    assert "earlier messages were dropped" in str(model.calls[1][1].content)
 
 
-async def test_compact_now_summarises_with_the_focus_and_only_once() -> None:
+async def test_compact_now_uses_the_focus_records_its_cost_and_runs_once() -> None:
     store = InMemorySessionStore()
     await store.append_messages("s1", [HumanMessage(content="hi"), AIMessage(content="hello")])
-    summarizer = FakeSummarizer()
-    runtime = _runtime(
-        FakeChatModel([]), store, context_builder=ContextBuilder(summarizer=summarizer)
-    )
+    bus = RecordingBus()
+    usage = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
+    model = FakeChatModel([AIMessage(content="SUM", usage_metadata=usage)])  # type: ignore[arg-type]
+    runtime = _compacting_runtime(model, store, bus)
 
     assert await runtime.compact("s1", "the API design") == 2
-    assert summarizer.focus == ["the API design"]
-    assert str((await store.get_messages("s1"))[-1].content).startswith(COMPACTION_HEADER)
+    assert "focus on: the API design" in str(model.calls[0][-1].content)
+    assert [m.content for m in model.calls[0][1:-1]] == ["hi", "hello"]
+    stored = await store.get_messages("s1")
+    assert str(stored[-1].content).startswith(COMPACTION_HEADER) and "SUM" in str(
+        stored[-1].content
+    )
+    spent = [e for e in bus.published if e.type == EventType.MODEL_USAGE]
+    assert spent and spent[0].session_id == "s1"
     assert await runtime.compact("s1") == 0  # nothing new since the summary
 
 
-async def test_compact_without_a_summarizer_is_a_configuration_error() -> None:
-    runtime = _runtime(FakeChatModel([]), InMemorySessionStore(), context_builder=ContextBuilder())
-    with pytest.raises(ConfigurationError):
-        await runtime.compact("s1")
+async def test_files_outside_the_workspace_are_never_attached(tmp_path: Path) -> None:
+    (tmp_path / "secret.txt").write_text("TOP SECRET")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    store = InMemorySessionStore()
+    calls = [{"name": "read_file", "args": {"path": "../secret.txt"}, "id": "r1"}]
+    await store.append_messages(
+        "s1", [HumanMessage(content="hi"), AIMessage(content="", tool_calls=calls)]
+    )
+    await store.append_messages("s1", [ToolMessage(content="x", tool_call_id="r1")])
+    runtime = _compacting_runtime(FakeChatModel([ai("SUM")]), store, workspace_root=workspace)
+
+    await runtime.compact("s1")
+
+    assert "TOP SECRET" not in str((await store.get_messages("s1"))[-1].content)
 
 
 async def test_concurrent_runs_calibrate_against_their_own_estimate() -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import cast
 
 from langchain_core.language_models import BaseChatModel
@@ -38,6 +39,7 @@ class AgentFactory:
         artifacts: ArtifactStore | None = None,
         advisor: ApprovalAdvisor | None = None,
         approval_mode: ApprovalMode | None = None,
+        workspace_root: Path | None = None,
     ) -> None:
         self._session_store = session_store
         self._event_bus = event_bus
@@ -48,6 +50,7 @@ class AgentFactory:
         self._artifacts = artifacts
         self._advisor = advisor
         self._approval_mode = approval_mode
+        self._workspace_root = workspace_root
 
     def create(self, agent: Agent) -> AgentRuntime:
         model = build_model(agent.model)
@@ -70,4 +73,5 @@ class AgentFactory:
             approvals=self._approvals,
             advisor=self._advisor,
             approval_mode=self._approval_mode,
+            workspace_root=self._workspace_root,
         )
