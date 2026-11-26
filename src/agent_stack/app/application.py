@@ -39,6 +39,7 @@ from agent_stack.core.agent import Agent
 from agent_stack.core.approval import APPROVAL_MODES, ApprovalBroker, ApprovalMode
 from agent_stack.core.changes import ChangeStore
 from agent_stack.core.changes import FileDiff as FileDiff  # re-exported for gateways
+from agent_stack.core.context import COMPACTION_HEADER, FILES_HEADER
 from agent_stack.core.errors import BudgetExceededError, SessionVersionConflictError
 from agent_stack.core.event_bus import EventBus
 from agent_stack.core.events import AgentEvent, EventType
@@ -589,6 +590,10 @@ def _history_items(
     if isinstance(message, HumanMessage):
         text = _SKILL_BLOCK_RE.sub("", _text_of(message))  # a skill's body is not chat
         return [HistoryItem("user", text)] if text.strip() else []
+    if isinstance(message, SystemMessage) and _text_of(message).startswith(COMPACTION_HEADER):
+        # a saved compaction (P31): the summary the model continued from, without its file copies
+        summary = _text_of(message).split(FILES_HEADER)[0][len(COMPACTION_HEADER) :].strip()
+        return [HistoryItem("compaction", summary)]
     if isinstance(message, AIMessage):
         items: list[HistoryItem] = []
         text = _text_of(message)

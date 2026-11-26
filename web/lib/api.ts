@@ -2,7 +2,7 @@ import type { ApiEvent } from "./events.ts";
 
 export type Conn = { base: string; token: string };
 export type SessionSummary = { id: string; title: string; updated_at?: string | null; branch_of?: string | null };
-export type HistoryRow = { kind: "user" | "assistant" | "tool"; text: string; args: Record<string, unknown> | null; result: string | null };
+export type HistoryRow = { kind: "user" | "assistant" | "tool" | "compaction"; text: string; args: Record<string, unknown> | null; result: string | null };
 export type SessionDetail = { id: string; title: string | null; branch_of: string | null; history: HistoryRow[] };
 export type RunInfo = { id: string; session_id: string; status: string; steps: number; tool_calls: number; error: string | null; parent_run_id: string | null };
 

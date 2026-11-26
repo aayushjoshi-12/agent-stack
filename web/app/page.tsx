@@ -530,6 +530,11 @@ export default function Page() {
             {history.map((row, i) =>
               row.kind === "user" ? (
                 <UserBubble key={`h${i}`} text={row.text} />
+              ) : row.kind === "compaction" ? (
+                <details key={`h${i}`} className="code text-soft">
+                  <summary>↺ context compacted: earlier messages were summarised</summary>
+                  <p className="whitespace-pre-wrap">{row.text}</p>
+                </details>
               ) : row.kind === "assistant" ? (
                 <div key={`h${i}`} className="space-y-2">
                   <AssistantBubble text={row.text} />
@@ -568,6 +573,8 @@ export default function Page() {
                   return <SubagentCard key={item.key} item={item} />;
                 case "failure":
                   return <FailureCard key={item.key} text={item.text} />;
+                case "notice":
+                  return <p key={item.key} className="code text-soft">↺ {item.text}</p>;
               }
             })}
             {live.state.phase === "cancelled" && <p className="code text-soft">■ stopped. Nothing is running and no further calls will be made.</p>}

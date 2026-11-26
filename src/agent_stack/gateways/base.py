@@ -183,8 +183,8 @@ def usage_summary(usage: SessionUsage) -> str:
 class HistoryItem:
     """One row of a stored conversation, in a gateway-neutral shape.
 
-    ``kind`` is ``user``, ``assistant`` or ``tool``; ``text`` is the message text or the
-    tool name, ``args`` carries a tool call's arguments and ``result`` its (already scrubbed)
+    ``kind`` is ``user``, ``assistant``, ``tool`` or ``compaction`` (the summary that replaced
+    the messages before it); ``text`` is the message text, the summary or the tool name, ``args`` carries a tool call's arguments and ``result`` its (already scrubbed)
     output, when the call has been answered.
     """
 

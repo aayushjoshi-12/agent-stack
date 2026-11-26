@@ -45,7 +45,8 @@ export type Item =
       steps: number;
       toolCalls: number;
     }
-  | { kind: "failure"; key: string; runId: string; depth: number; text: string };
+  | { kind: "failure"; key: string; runId: string; depth: number; text: string }
+  | { kind: "notice"; key: string; runId: string; depth: number; text: string };
 
 export type RunPhase = "idle" | "running" | "completed" | "failed" | "cancelled";
 
@@ -266,6 +267,13 @@ export function applyEvent(state: LiveState, event: ApiEvent): LiveState {
           : [...base.items, { kind: "failure", key, runId: event.run_id, depth, text: error.slice(0, 600) }],
       };
     }
+    case "context.compacted":
+      return event.parent_run_id === null
+        ? {
+            ...base,
+            items: [...base.items, { kind: "notice", key, runId: event.run_id, depth, text: `context compacted: ${num(d.messages)} messages summarised` }],
+          }
+        : base;
     default:
       return base;
   }

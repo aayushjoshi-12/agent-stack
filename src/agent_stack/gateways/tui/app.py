@@ -1056,6 +1056,10 @@ class TuiApp(App[None]):
                 chat.mount(UserMessage(item.text))
             elif item.kind == "assistant":
                 chat.mount(AgentMessage(item.text))
+            elif item.kind == "compaction":
+                chat.mount(
+                    Disclosure("think", "context compacted", "summary above", body=item.text)
+                )
             elif item.kind == "tool":
                 chat.mount(
                     Disclosure(

@@ -142,3 +142,14 @@ test("auto mode's verdict and its reason land on the tool, and an ask carries it
   assert.deepEqual(one.auto, { verdict: "allow", reason: "read-only" });
   assert.deepEqual(two.approval, { id: "a1", state: "pending", note: "it pushes code" });
 });
+
+test("an auto-compaction shows as a notice, a subagent's does not", () => {
+  const s = play([
+    ev("run.started"),
+    ev("context.compacted", { messages: 31, auto: true }),
+    ev("context.compacted", { messages: 9, auto: true }, "child", "r1"),
+  ]);
+  const notes = s.items.filter((i) => i.kind === "notice");
+  assert.equal(notes.length, 1);
+  assert.match(notes[0]?.text ?? "", /31 messages summarised/);
+});

@@ -51,6 +51,8 @@ def render(messages: list[BaseMessage], *, per_message: int = 600) -> str:
                 lines.append(f"AGENT: {text}" + (f"  [used: {calls}]" if calls else ""))
         elif isinstance(message, ToolMessage):
             lines.append(f"  (tool result: {_text(message).strip()[:160]!r})")
+        elif isinstance(message, SystemMessage):  # a saved compaction summary
+            lines.append(f"(context compacted) {_text(message).strip()[:per_message]}")
     return "\n".join(lines)
 
 

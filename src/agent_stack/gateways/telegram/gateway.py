@@ -700,6 +700,9 @@ class TelegramGateway:
     def _recap_html(items: list[HistoryItem], limit: int) -> str:
         out = []
         for h in items:
+            if h.kind == "compaction":
+                out.append("<i>↺ context compacted: earlier messages were summarised</i>")
+                continue
             who = "<b>You</b>" if h.kind == "user" else "<b>Agent</b>"
             text = h.text if len(h.text) <= limit else h.text[: limit - 1] + "…"
             out.append(f"{who}\n{to_html(text)}")
@@ -877,7 +880,7 @@ class TelegramGateway:
         self._save_state()
         await self._api.answer_callback_query(callback_id, "Switched")
         history = await self._app.session_history(target.id)
-        conversation = [h for h in history if h.kind != "tool"]
+        conversation = [h for h in history if h.kind in ("user", "assistant")]
         calls = sum(1 for h in history if h.kind == "tool")
         recap = [
             f"{'You' if h.kind == 'user' else 'Agent'}: {h.text[:300]}" for h in conversation[-2:]

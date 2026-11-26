@@ -19,6 +19,7 @@ from agent_stack.app.application import Application, IdentityResolver, SessionRe
 from agent_stack.app.config import AppConfig
 from agent_stack.core.agent import Agent
 from agent_stack.core.approval import ApprovalBroker
+from agent_stack.core.context import compaction_message
 from agent_stack.core.event_bus import InMemoryEventBus
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.factory import AgentFactory
@@ -249,16 +250,20 @@ async def test_session_history_maps_messages_to_display_rows() -> None:
             ),
             ToolMessage(content="print(1)", tool_call_id="t1"),
             AIMessage(content=[{"type": "text", "text": "It prints 1."}]),
+            compaction_message("GOAL: read a.py", files="## a.py\nprint(1)"),
         ],
     )
 
     history = await application.session_history(session_id)
 
-    assert [(h.kind, h.text) for h in history] == [
+    assert [(h.kind, h.text) for h in history][:3] == [
         ("user", "read the file"),
         ("tool", "read_file"),
         ("assistant", "It prints 1."),
     ]
+    # a saved compaction is a row of its own: the summary, without the file copies
+    assert history[3].kind == "compaction" and history[3].text.endswith("GOAL: read a.py")
+    assert len(history) == 4
     assert history[1].args == {"path": "a.py"}
     assert history[1].result == "print(1)"  # the tool's answer travels with the call
     assert history[0].result is None
