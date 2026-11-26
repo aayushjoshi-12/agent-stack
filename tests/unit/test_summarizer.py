@@ -29,4 +29,3 @@ async def test_transcript_is_sent_as_data_and_the_result_is_cached() -> None:
     body = str(human.content)
     assert body.startswith("<transcript>") and "fix the bug in a.py" in body
     assert "read_file({'path': 'a.py'})" in body and "3800 more chars" in body
-

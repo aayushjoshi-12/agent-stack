@@ -153,7 +153,7 @@ async def test_open_todos_are_shown_in_the_system_prompt_every_call(
     await store.complete("s1", 1)
     composer = SystemPromptComposer(
         instructions=InstructionsLoader(),
-        skills=SkillRegistry(SkillLoader([tmp_path / 'none'])),
+        skills=SkillRegistry(SkillLoader([tmp_path / "none"])),
         memory=MemoryIndex(tmp_path),
         workspace_root=tmp_path,
         todos=store,

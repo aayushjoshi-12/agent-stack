@@ -175,7 +175,11 @@ def usage_summary(usage: SessionUsage) -> str:
     return (
         f"{cost} · {format_tokens(usage.input_tokens)} in · "
         f"{format_tokens(usage.output_tokens)} out · {usage.calls} calls"
-        + (f" · context {format_tokens(usage.last_input_tokens)}" if usage.last_input_tokens else "")
+        + (
+            f" · context {format_tokens(usage.last_input_tokens)}"
+            if usage.last_input_tokens
+            else ""
+        )
     )
 
 

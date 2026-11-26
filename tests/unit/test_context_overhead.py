@@ -32,7 +32,9 @@ def test_overhead_forces_earlier_dropping() -> None:
 
 def test_calibration_ignores_the_fixed_overhead() -> None:
     builder = ContextBuilder()
-    builder.calibrate(1500, 3500, overhead=1000)  # messages: 500 estimated, 2500 real -> 5x, clamped 3
+    builder.calibrate(
+        1500, 3500, overhead=1000
+    )  # messages: 500 estimated, 2500 real -> 5x, clamped 3
     assert builder.scale == 2.0  # 0.5*1 + 0.5*3
 
 

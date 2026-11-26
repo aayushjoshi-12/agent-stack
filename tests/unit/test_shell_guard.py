@@ -18,9 +18,7 @@ def test_allows_workspace_and_system_paths(tmp_path: Path) -> None:
 
 async def test_tool_refuses_and_can_be_unconfined(tmp_path: Path) -> None:
     policy = WorkspacePolicy(root=tmp_path)
-    refused = await run_command_tool(policy).ainvoke(
-        {"command": "ls /Users", "shell": True}
-    )
+    refused = await run_command_tool(policy).ainvoke({"command": "ls /Users", "shell": True})
     assert refused.startswith("Error: this command touches paths outside the workspace")
     allowed = await run_command_tool(policy, confine=False).ainvoke(
         {"command": "echo ok", "shell": True}

@@ -168,7 +168,12 @@ def test_text_that_looks_like_markup_never_crashes_the_printer() -> None:
     print_event(console, event(EventType.ASSISTANT_MESSAGE, content=nasty, tool_calls=[]))
     print_event(
         console,
-        event(EventType.APPROVAL_REQUIRED, approval_id="a", tool="run_command", args={"command": nasty}),
+        event(
+            EventType.APPROVAL_REQUIRED,
+            approval_id="a",
+            tool="run_command",
+            args={"command": nasty},
+        ),
     )
 
     assert "a[/ SALT)" in buffer.getvalue()
