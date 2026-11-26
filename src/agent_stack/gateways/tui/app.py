@@ -273,6 +273,7 @@ class TuiApp(App[None]):
             "files": ("put this conversation's files in the folder", self.action_restore_files),
             "mode": ("approval mode: /mode auto or /mode ask", None),
             "model": ("show or switch the model: /model provider:name", None),
+            "compact": ("summarise the conversation to free context: /compact [focus]", None),
             "help": ("keyboard shortcuts", self.action_help),
             "quit": ("leave (prints how to continue)", self.action_quit_app),
         }
@@ -338,6 +339,9 @@ class TuiApp(App[None]):
         if name == "model":
             self._switch_model(argument)
             return True
+        if name == "compact":
+            self._spawn(self._compact(argument))  # waits for a running turn; keep the UI live
+            return True
         entry = self._builtins().get(name)
         if entry is None:
             return False
@@ -345,6 +349,23 @@ class TuiApp(App[None]):
         if outcome is not None:  # most actions are coroutines; help is plain
             await outcome
         return True
+
+    async def _compact(self, focus: str) -> None:
+        """``/compact [focus]``: replace the conversation so far with a saved summary."""
+        if self._session_id is None:
+            self.notify("Nothing to compact yet.")
+            return
+        self.notify("Compacting the conversation…")
+        try:
+            count = await self.application.compact_session(self._session_id, focus)
+        except Exception as exc:
+            self.notify(f"Cannot compact: {exc}", severity="error")
+            return
+        self.notify(
+            f"Compacted {count} messages into a summary; the next message starts from it."
+            if count
+            else "Nothing new to compact."
+        )
 
     def _switch_model(self, wanted: str) -> None:
         """``/model`` shows the model; ``/model provider:name`` switches it for the next runs."""
@@ -529,6 +550,10 @@ class TuiApp(App[None]):
             self._on_subagent_started(event)
         elif event.type is EventType.SUBAGENT_COMPLETED:
             self._on_subagent_completed(event)
+        elif event.type is EventType.CONTEXT_COMPACTED and event.parent_run_id is None:
+            self._chat().mount(
+                Notice(f"context compacted: {event.data.get('messages', 0)} messages summarised")
+            )
         elif event.parent_run_id is not None and event.run_id != self._active_run_id:
             pass  # child-run detail stays out of the parent conversation
         else:

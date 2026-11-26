@@ -127,6 +127,10 @@ class ModelBody(BaseModel):
     model: str = Field(min_length=1, max_length=200)
 
 
+class CompactBody(BaseModel):
+    focus: str = Field(default="", max_length=500)
+
+
 class PointBody(BaseModel):
     point: str | None = Field(default=None, max_length=100)  # a turn number or event id
 
@@ -354,6 +358,15 @@ def create_app(application: Application, settings: WebSettings) -> FastAPI:
     async def set_model(body: ModelBody) -> dict[str, str]:
         try:
             return {"model": application.set_model(body.model)}
+        except ConfigurationError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)[:300]) from None
+
+    @api.post("/sessions/{session_id}/compact", dependencies=auth)
+    async def compact(session_id: str, body: CompactBody) -> dict[str, int]:
+        """Summarise the conversation so far in place (waits for a running turn to finish)."""
+        await owned_session(session_id)
+        try:
+            return {"messages": await application.compact_session(session_id, body.focus)}
         except ConfigurationError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)[:300]) from None
 

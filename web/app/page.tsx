@@ -247,6 +247,7 @@ export default function Page() {
       { name: "share", description: "name this point so another chat can open it", kind: "builtin" },
       { name: "mode", description: "approval mode: /mode auto or /mode ask", kind: "builtin" },
       { name: "model", description: "show or switch the model: /model provider:name", kind: "builtin" },
+      { name: "compact", description: "summarise the conversation to free context: /compact [focus]", kind: "builtin" },
     ],
     [],
   );
@@ -594,6 +595,12 @@ export default function Page() {
                   const switching = argument ? api.setModel(conn, argument) : api.model(conn);
                   void switching
                     .then((r) => setNotice(argument ? `Model: ${r.model} (from the next message on).` : `Model: ${r.model}. Switch: /model provider:name`))
+                    .catch(fail);
+                } else if (name === "compact" && activeId) {
+                  setNotice("Compacting the conversation…");
+                  void api
+                    .compact(conn, activeId, argument)
+                    .then((r) => setNotice(r.messages ? `Compacted ${r.messages} messages into a summary; the next message starts from it.` : "Nothing new to compact."))
                     .catch(fail);
                 } else setNotice("Open a conversation first.");
               }}

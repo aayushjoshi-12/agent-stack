@@ -153,3 +153,23 @@ async def test_model_endpoint_switches_the_model_for_the_next_message(
     handle = await w.app.send_message(MessageEnvelope(principal="u1", session="s1", text="hi"))
     reply = await handle.result()
     assert reply.content == "answered by the new model"
+
+
+async def test_compact_endpoint_passes_the_focus_and_needs_a_summarizer(tmp_path: Path) -> None:
+    client, w = await _setup(tmp_path)
+    async with client:
+        refused = await client.post("/sessions/s1/compact", json={}, headers=HEADERS)
+        assert refused.status_code == 400 and "summarizer" in refused.json()["detail"]
+        assert (
+            await client.post("/sessions/nope/compact", json={}, headers=HEADERS)
+        ).status_code == 404
+
+        seen: list[tuple[str, str | None]] = []
+
+        async def fake_compact(session_id: str, focus: str | None = None) -> int:
+            seen.append((session_id, focus))
+            return 4
+
+        w.app.compact_session = fake_compact  # type: ignore[method-assign]
+        done = await client.post("/sessions/s1/compact", json={"focus": "files"}, headers=HEADERS)
+        assert done.json() == {"messages": 4} and seen == [("s1", "files")]

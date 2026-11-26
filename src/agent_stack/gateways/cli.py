@@ -57,6 +57,10 @@ def print_event(console: Console, event: AgentEvent) -> None:
         console.print(subagent_block(event, done=False))
     elif event.type is EventType.SUBAGENT_COMPLETED:
         console.print(subagent_block(event, done=True))
+    elif event.type is EventType.CONTEXT_COMPACTED:
+        console.print(
+            f"[dim]context compacted: {event.data.get('messages', 0)} messages summarised[/]"
+        )
 
 
 #: Answers an ``approval.required`` event: ``True`` approves, ``False`` rejects.
@@ -152,6 +156,15 @@ async def run_cli(
             break
         if text == "/cost":
             await gateway.print_cost(application, session)
+            continue
+        if text == "/compact" or text.startswith("/compact "):
+            try:
+                count = await application.compact_session(session, text[len("/compact") :])
+                console.print(
+                    f"[dim]compacted {count} messages[/]" if count else "[dim]nothing to compact[/]"
+                )
+            except Exception as exc:
+                console.print(f"[red]cannot compact:[/] {escape(str(exc))}")
             continue
 
         envelope = MessageEnvelope(principal=principal_id, session=session, text=text)

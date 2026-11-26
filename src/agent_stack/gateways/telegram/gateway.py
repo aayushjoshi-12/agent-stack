@@ -74,6 +74,7 @@ _COMMANDS = [
     ("files", "Put this conversation's files in the working folder"),
     ("mode", "Approval mode: /mode auto or /mode ask"),
     ("model", "Show or switch the model: /model provider:name"),
+    ("compact", "Summarise the conversation to free context: /compact [focus]"),
     ("cost", "What this conversation has cost so far"),
     ("status", "Where you are and what is running"),
     ("cancel", "Stop the current run"),
@@ -94,6 +95,7 @@ _HELP = (
     "/files  put this conversation's files in the working folder\n"
     "/mode [ask|auto]  who approves tool calls: you, or a classifier that asks you when unsure\n"
     "/model [provider:name]  show the model, or switch it for the next messages\n"
+    "/compact [focus]  summarise the conversation so far to free context\n"
     "/<skill> [request]  run a skill (type / to see them)\n"
     "/cost  what this conversation has cost (tokens and dollars)\n"
     "/status  where you are and what is running\n"
@@ -428,6 +430,8 @@ class TelegramGateway:
             await self._cmd_mode(chat, argument)
         elif command == "/model":
             await self._cmd_model(chat, argument)
+        elif command == "/compact":
+            await self._cmd_compact(chat, argument)
         elif command == "/cost":
             await self._cmd_cost(chat)
         elif command == "/status":
@@ -574,6 +578,25 @@ class TelegramGateway:
             f"Reference to the last finished turn (paste it into another chat with /ref):\n"
             f"<code>{html.escape(ref)}</code>",
             raw=ref,
+        )
+
+    async def _cmd_compact(self, chat: _Chat, argument: str) -> None:
+        if chat.session is None:
+            await self._say(chat, "Nothing to compact yet.")
+            return
+        if chat.busy:  # compacting waits for the run; do not hold up this chat's updates
+            await self._say(chat, "A run is going. Compact after it finishes, or /cancel it.")
+            return
+        try:
+            count = await self._app.compact_session(chat.session, argument)
+        except Exception as exc:
+            await self._say(chat, f"Cannot compact: {redact_secrets(str(exc))[:300]}")
+            return
+        await self._say(
+            chat,
+            f"Compacted {count} messages into a summary; the next message starts from it."
+            if count
+            else "Nothing new to compact.",
         )
 
     async def _cmd_model(self, chat: _Chat, argument: str) -> None:
@@ -1001,6 +1024,10 @@ class TelegramGateway:
             await self._tool_completed(chat, event)
         elif kind is EventType.APPROVAL_AUTO:
             await self._auto_decision(chat, event)
+        elif kind is EventType.CONTEXT_COMPACTED:
+            chat.status_lines.append(
+                f"↺ context compacted ({event.data.get('messages', 0)} messages)"
+            )
         elif kind is EventType.APPROVAL_REQUIRED:
             await self._ask_approval(chat, event)
         elif kind is EventType.RUN_COMPLETED:

@@ -113,6 +113,10 @@ class FakeApplication:
         self.model = name
         return name
 
+    async def compact_session(self, session_id: str, focus: str | None = None) -> int:
+        self.compacted = [*getattr(self, "compacted", []), (session_id, focus)]
+        return 7
+
     def slash_commands(self) -> list[Any]:
         return list(self.skill_commands)
 

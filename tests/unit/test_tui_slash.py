@@ -153,3 +153,14 @@ async def test_model_command_shows_and_switches_the_model() -> None:
         await _settle(pilot)
         assert fake.get_model() == "openrouter:other/model"
         assert fake.sent == []  # a built-in, not a message
+
+
+async def test_compact_command_summarises_the_open_conversation() -> None:
+    app, fake = _app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        prompt = app.query_one("#prompt", PromptArea)
+        prompt.load_text("/compact keep the schema")
+        await pilot.press("enter")
+        await _settle(pilot)
+        assert fake.compacted == [("s1", "keep the schema")]
+        assert fake.sent == []

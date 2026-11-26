@@ -1104,6 +1104,19 @@ async def test_model_command_shows_and_switches_the_model() -> None:
     assert application.get_model() == "openrouter:other/model"
 
 
+async def test_compact_command_summarises_the_open_conversation() -> None:
+    application = FakeApplication(events=_reply_events())
+    gateway, api = _gateway(application)
+    await _say(gateway, "/compact")
+    assert any("Nothing to compact yet" in t for t in api.texts())
+    await _say(gateway, "/verbose off")
+    await _say(gateway, "hello")
+    await _say(gateway, "/compact the API design")
+    session = application.sent[0][0].session
+    assert application.compacted == [(session, "the API design")]
+    assert any("Compacted 7 messages" in t for t in api.texts())
+
+
 async def test_the_open_conversation_survives_a_restart(tmp_path: Any) -> None:
     state = tmp_path / "state" / "telegram.json"
     application = FakeApplication(events=_reply_events())

@@ -93,6 +93,8 @@ export const api = {
   model: (c: Conn) => call<{ model: string }>(c, "/model"),
   setModel: (c: Conn, model: string) =>
     call<{ model: string }>(c, "/model", { method: "PUT", body: JSON.stringify({ model }) }),
+  compact: (c: Conn, id: string, focus: string) =>
+    call<{ messages: number }>(c, `/sessions/${encodeURIComponent(id)}/compact`, json({ focus })),
   turns: (c: Conn, id: string) => call<TurnInfo[]>(c, `/sessions/${encodeURIComponent(id)}/turns`),
   rewind: (c: Conn, id: string, body: { owner_session_id: string; started_event_id: string; conversation: boolean; code: boolean }) =>
     call<RewindResult>(c, `/sessions/${encodeURIComponent(id)}/rewind`, json(body)),
