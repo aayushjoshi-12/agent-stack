@@ -92,6 +92,5 @@ smoke: ## new smoke-test stub in tmp/smoke_tests (PHASE=P01 TITLE=name)
 		"$(PHASE)" "$(TITLE)" "$(PHASE)" "$(TITLE)" > tmp/smoke_tests/$(PHASE)-$(TITLE)-smoke.py
 	@echo "wrote tmp/smoke_tests/$(PHASE)-$(TITLE)-smoke.py"
 
-tree: ## list the project's files
-	@find . -path ./.venv -prune -o -path ./.git -prune -o -path ./tmp -prune -o -type f -print \
-		| grep -v -E '\.(pyc|lock)$$' | sort
+tree: ## list the project's files (tracked and new, never what .gitignore hides)
+	@git ls-files --cached --others --exclude-standard | grep -v -E '(^|/)[^/]*\.lock$$|package-lock\.json$$' | sort
