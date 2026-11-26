@@ -28,7 +28,7 @@ LangChain messages). One runtime, many gateways (CLI/TUI, Web, Telegram).
 
 ```bash
 make install    # uv sync
-make check      # lint + typecheck + test  (the commit gate)
+make check      # lint (rules + formatting) + typecheck + test  (the commit gate)
 make fmt        # import-sort + ruff format
 make run        # python -m agent_stack
 ```

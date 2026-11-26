@@ -79,7 +79,7 @@ uv-native, skip-if-empty guarded >(a common pattern for optional tooling).
 | Target | What it does |
 |---|---|
 | `make install` | `uv sync` |
-| `make lint` | `ruff check src tests` (no-op if no `.py` yet) |
+| `make lint` | `ruff check` + `ruff format --check` on src and tests (no-op if no `.py` yet) |
 | `make fmt` | import-sort + `ruff format` |
 | `make typecheck` | `mypy src` (strict) |
 | `make test` | `pytest -q tests` (exit 0 if nothing collected) |

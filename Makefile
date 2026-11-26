@@ -27,9 +27,9 @@ install-tool: ## put agent-stack on PATH (editable)
 
 # ── Quality gates ──────────────────────────────────────────────────────────────
 
-lint: ## ruff check
+lint: ## ruff check, and fail on unformatted code (make fmt fixes it)
 	@if [ -n "$$($(PY_FIND))" ]; then \
-		$(UV) run ruff check $(SRC_DIRS); \
+		$(UV) run ruff check $(SRC_DIRS) && $(UV) run ruff format --check $(SRC_DIRS); \
 	else \
 		echo "lint: no .py files yet, skipping"; \
 	fi
@@ -55,7 +55,7 @@ test: ## run the test suite
 	else exit $$code; fi
 
 # The commit gate: lint + typecheck + test, run concurrently.
-check: ## the commit gate: lint + typecheck + test, concurrently
+check: ## the commit gate: lint (rules + formatting) + typecheck + test, concurrently
 	@($(MAKE) --no-print-directory lint) & P1=$$!; \
 	 ($(MAKE) --no-print-directory typecheck) & P2=$$!; \
 	 ($(MAKE) --no-print-directory test) & P3=$$!; \
