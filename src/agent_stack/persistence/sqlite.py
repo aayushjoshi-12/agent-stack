@@ -578,6 +578,8 @@ class SqliteSessionStore:
             "checkpoints",
             "todos",
             "event_log",
+            "chat_fts",  # the search index's copy of its text (P32)
+            "chat_fts_state",
         ):
             await self._db.execute(f"DELETE FROM {table} WHERE session_id = ?", (session_id,))
         # tool_executions rows belong to runs (no session column): drop the orphans above.

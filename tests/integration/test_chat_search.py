@@ -101,3 +101,21 @@ async def test_search_only_sees_the_sessions_it_is_given(tmp_path: Path) -> None
 
     mine = [s for s in sessions if s[0] != "discussed"]  # another owner's chat, or a deleted one
     assert [h.session_id for h in await index.search(mine, "pgvector")] == ["scrolled"]
+
+
+async def test_deleting_a_conversation_removes_its_text_from_the_index(tmp_path: Path) -> None:
+    from agent_stack.core.session import Session
+    from agent_stack.persistence.sqlite import SqliteSessionStore
+
+    db = SqliteDatabase(tmp_path / "index.db")
+    conversations = FileConversationStore(tmp_path / "conv")
+    sessions = SqliteSessionStore(db, conversations)
+    index = ChatSearchIndex(db, conversations)
+    await sessions.save(Session(id="gone", owner_id="u", agent_name="a"))
+    await sessions.append_messages("gone", [HumanMessage(content="my bank password hint")])
+    assert await index.search([("gone", "")], "password")
+
+    await sessions.delete("gone")
+
+    rows = await db.query("SELECT count(*) AS n FROM chat_fts WHERE chat_fts MATCH 'password'")
+    assert rows[0]["n"] == 0
