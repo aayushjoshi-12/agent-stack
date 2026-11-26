@@ -54,3 +54,13 @@ async def test_underscores_match_hyphens_and_non_skills_pass_through(tmp_path: P
     assert app.expand_slash("/unknown-thing x") is None
     assert app.expand_slash("/etc/hosts is odd") is None  # a path, not a command
     assert app.expand_slash("plain text") is None
+
+
+def test_agent_stack_ships_handoff_and_smoke_test_skills() -> None:
+    import agent_stack.skills
+
+    builtin = Path(agent_stack.skills.__file__).parent / "builtin"
+    found = SkillLoader([builtin], strict=True).discover()  # strict: both must parse cleanly
+    assert [skill.name for skill in found] == ["handoff", "smoke-test"]
+    body = SkillRegistry(SkillLoader([builtin])).load("handoff").body
+    assert "tmp/handoff/" in body and "User messages" in body

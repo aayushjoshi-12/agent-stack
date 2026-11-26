@@ -185,6 +185,8 @@ def build_application(config: AppConfig | None = None) -> Application:
                 _REPO_ROOT / "skills",
                 _REPO_ROOT / ".claude" / "skills",
                 *resolved.skill_roots,
+                # agent-stack's own skills (handoff, smoke-test) last: a same-named one wins
+                Path(__file__).resolve().parents[1] / "skills" / "builtin",
             ],
             strict=False,
         )
