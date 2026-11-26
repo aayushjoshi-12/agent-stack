@@ -1,6 +1,9 @@
 # ADR 014 — A small model for side work, never for edits
 
-**Status:** accepted (2026-11-14).
+**Status:** accepted (2026-11-14). Amended 2026-11-26: the small model also writes
+`read_chat(mode="summary")` digests of old chats; it does **not** write compaction summaries
+([ADR 015](015-compaction-uses-the-main-model.md)), which supersedes the brief use of the small
+model to summarise dropped messages.
 
 ## Context
 

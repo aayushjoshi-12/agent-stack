@@ -1,6 +1,7 @@
 # ADR 007 — Definition naming: `Agent` vs `AgentConfig`
 
-**Status:** Proposed
+**Status:** Accepted and done (Phase 4): the definition is `Agent` (`core/agent.py`);
+`AgentConfig` no longer exists.
 
 ## Context
 

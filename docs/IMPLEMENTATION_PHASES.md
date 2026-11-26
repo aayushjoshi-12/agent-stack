@@ -287,8 +287,8 @@ Milestone I — Context engineering
 
 Gateway build order detail: **TUI first (P23)**, **Telegram second (P25)**, **Web last
 (P24)**. The web gateway is **Next.js + SSE** (no WebSocket) and its frontend design is
-driven by the vendored design skills in `.claude/skills/`; the user will share design
-inspiration before the web phase starts.
+driven by the design skills in `.claude/skills/` (local only); the owner shared the design
+inspiration and the style was chosen in ADR 013.
 
 ---
 
@@ -370,6 +370,8 @@ class ModelCapabilities:
 - No provider `if/elif` anywhere outside `models/`.
 
 **Defer:** model routing, per-tool model selection, token accounting, retries (Phase 6/27).
+*Later:* token and cost accounting were built (`model.usage` events, `/cost`, budgets); a small
+model for side work came with ADR 014. Model routing and retries are still not built.
 
 ---
 
@@ -825,6 +827,8 @@ garbage collection this phase defers.
 **Deliverables**
 - `core/context.py` — `ContextBuilder.build(state, session)` and `.compact(...)`.
 - v1 strategy: `recent window`; then `summary + recent messages`.
+- *Superseded:* the recent window became a token budget (P16e and later), and `.compact()` plus
+  the in-memory summary of dropped messages were replaced by saved compaction in P31.
 - Compaction preserves goals, decisions, files changed, failures, open questions.
 
 **Acceptance tests**
@@ -942,6 +946,11 @@ phase makes the composition real, so what the model actually sees is
 **Defer:** semantic/vector retrieval; per-session instruction overrides.
 
 **Discovered — SKILL.md parser is a strict subset.** Real `SKILL.md` files use fuller YAML than P16b accepts, so at the composition boundary (`strict=False`) several vendored skills are silently skipped: `ponytail` uses a `>` block-scalar description, `web-design-guidelines` a nested `metadata:` map, and `image-to-code-skill`/`taste-skill` have a frontmatter name that differs from the directory name. Follow-up: accept `|`/`>` block scalars for `description`, tolerate (parse-and-ignore) a nested `metadata:` map, and decide whether a dir/name mismatch is a hard error or a warning. Until then only skills that match the subset reach the model's resident metadata.
+*Partly resolved later:* the frontmatter is parsed as real YAML (block scalars, nested
+`metadata`, unknown keys), so `ponytail` and `web-design-guidelines` load. A frontmatter name
+that differs from its folder is still an error, so `image-to-code-skill` (name `image-to-code`)
+and `taste-skill` (name `design-taste-frontend`) are still skipped (open; rename the folders or
+relax the rule).
 
 ---
 
@@ -1224,8 +1233,7 @@ Tests: `tests/unit/test_telegram_gateway.py`.
 **Stack decisions** (user-specified):
 - **Next.js** frontend (`web/` app) — design driven by the **vendored design skills in
   `.claude/skills/`** (awesome-design-md, image-to-code, taste-skill,
-  web-design-guidelines, playwright-cli). The user will share design inspiration before
-  this phase starts.
+  web-design-guidelines, playwright-cli; local only, gitignored). Style chosen in ADR 013.
 - **SSE, not WebSocket**, for the event stream.
 
 **Deliverables**
@@ -1238,6 +1246,9 @@ Tests: `tests/unit/test_telegram_gateway.py`.
   playwright-cli skill. Same live affordances as the TUI: a subagent tree (from
   `subagent.*` events, with delegate-from-the-UI) and streaming shell output (from
   `tool.output`), all fed by the same SSE stream.
+  *As built:* the app, subagent cards, live tool output, approvals, history and files panels
+  are done and were checked in a real browser. **Not built:** the visual regression suite and
+  delegate-from-the-UI (the agent delegates; the UI only shows it).
 - Add `fastapi`/`uvicorn` to dependencies only now; Node toolchain is managed via the
   Next.js app's own `package.json`.
 
@@ -1246,7 +1257,8 @@ Tests: `tests/unit/test_telegram_gateway.py`.
 - UI survives reconnect: after a dropped SSE connection it resumes from the last
   received event id.
 
-**Defer:** SSE-based approvals (Phase 26).
+**Defer:** SSE-based approvals (Phase 26). *Later: done; approval cards arrive on the SSE stream
+and are answered with `POST /runs/{run_id}/approvals/{approval_id}`.*
 
 ---
 
@@ -1283,7 +1295,8 @@ shortcut) and the line REPL asks on the console and rejects by default when it h
 Also fixed: a hard cancel emits no terminal event, which left the TUI stuck on "cancelling…".
 Tests: `tests/unit/test_approval.py` (+ TUI and CLI tests).
 
-**Defer:** command classification beyond a simple flag.
+**Defer:** command classification beyond a simple flag. *Later: superseded by auto mode (rules,
+then the Jev classifier, then the human; now the default approval mode).*
 
 ---
 
@@ -1427,6 +1440,8 @@ branch" — like a versioned timeline, not a linear chat.
 - `test_branch_and_parent_diverge_after_fork`
 - `test_branch_writes_do_not_touch_parent`
 - TUI/Web: an event in the past can be forked and continued (UI affordance, P23/P24+).
+  *Done later* with the history work: TUI rewind picker and branches view, web History panel,
+  Telegram `/rewind`.
 
 **Defer:** branch merging/diffing, GC of dead branches.
 

@@ -66,8 +66,9 @@ Code style:
 - Default to no comments in code — one short line max when one is needed.
 ```
 
-The following paragraph is **appended when P20 (subagents) lands** — until a
-`delegate` tool exists, instructions about it would be inert, so they are held back:
+The following paragraph was to be **appended when P20 (subagents) landed**. P20 is done; the
+live prompt (`app/bootstrap.py`) carries its own wording of it, built around the `explorer`
+subagent and `delegate`, which supersedes this draft:
 
 ```text
 Subagents (when available):

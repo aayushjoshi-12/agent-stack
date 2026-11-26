@@ -1,6 +1,9 @@
 # Before making the repository public
 
 Checked on 2026-11-24 against commit `HEAD` of `main`. "Done" means verified, not assumed.
+History was rewritten twice since (2026-11-25: every commit authored as `aayushjoshi-12`, no AI
+trailers; 2026-11-26: `.claude/skills/` removed from every commit). Neither added files, so the
+history checks below still hold; re-run them before publishing anyway.
 
 ## Done
 
@@ -20,8 +23,7 @@ Checked on 2026-11-24 against commit `HEAD` of `main`. "Done" means verified, no
       the usual choices) and add both.
 - [ ] **Telegram.** Revoke the bot token that was used during development (BotFather, `/revoke`)
       and issue a new one; set `/setjoingroups` to Disable if the bot should only answer you.
-- [ ] **Package metadata.** `description` in `pyproject.toml` is still "Add your description
-      here".
+- [x] **Package metadata.** `description` in `pyproject.toml` is set (checked 2026-11-26).
 - [ ] **Personal paths and names** in `docs/` and `STATUS.md`: read once for anything private
       (project names, home directories, chat IDs) before publishing.
 

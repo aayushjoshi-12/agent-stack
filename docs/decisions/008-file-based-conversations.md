@@ -1,6 +1,7 @@
 # ADR 008 — Conversations are files; SQLite is the index
 
-**Status:** Accepted
+**Status:** Accepted; amended by [ADR 016](016-chat-search-fts5.md) (a search index holds a
+disposable copy of message text). See "As built" below.
 
 ## Context
 
@@ -29,3 +30,13 @@ See [`../design/conversation-storage.md`](../design/conversation-storage.md).
 - One writer per session (append-only + session lock, P12).
 - Cross-session analytics need the index or a scan — acceptable for a personal agent.
 - Supersedes any earlier plan to persist `messages` rows with payloads.
+
+## As built (2026-11-26)
+
+- With the SQLite-backed store (the app's), session metadata lives in the `sessions` table;
+  `session.json` is written only by the file-only store used without SQLite.
+- The message index (offsets into the JSONL) exists in the schema but the app never writes it.
+- `chat_fts` (P32) holds a copy of message text for search. It is rebuilt from the JSONL on
+  demand and removed with the conversation, so the files stay the source of truth (ADR 016).
+- A saved compaction summary (P31) is one more line appended to `transcript.jsonl`; nothing is
+  ever removed from it (ADR 015).

@@ -93,8 +93,9 @@ automatic memory extraction. Not yet run against a real model: compaction (tests
 - **P29/P30 gaps (the phases themselves are done).** Not built, by choice: payload
   `offset` pointers into `transcript.jsonl` and a `branch_id` column (a branch is its own
   session, so `session_id` is the key; the log keeps redacted, capped event data instead of
-  offsets); a TUI/Web "fork here" affordance
-  (gateways call `Application.branch_session`); branch merge/diff and dead-branch GC.
+  offsets); branch merge/diff and dead-branch GC. (A TUI/Web "fork here" affordance was listed
+  here as not built; it was built later with the history work: rewind pickers, branches views,
+  the web History panel and "Fork a branch from here".)
   Branch granularity: messages are saved when a run ends, so forking at an event inside a run
   gives the conversation as it stood *before* that run; fork at `run.completed` to keep it.
   Branches do not copy `artifacts/` (workspace-scoped) and show up in the picker as
@@ -131,6 +132,14 @@ Still unverified (do these next):
 - The approval broker never prunes finished requests (memory only; fine for one owner).
 - Tool output shown to the model is scrubbed with `redact(pairs=False)`: known env secrets and
   common key shapes only, so a secret in an unusual shape passes.
+- The `message_index` and `artifacts_index` tables are in the schema and `SqliteIndex` is
+  tested, but the app never writes them (no query has needed them).
+- `chat_fts` (P32) keeps a copy of message text in `agent.db`; deleting a conversation removes
+  its rows. The transcripts stay the source of truth.
+- `.claude/CLAUDE.md` is not read as instructions (`AGENTS.md`, `CLAUDE.md` and the `.local.md`
+  overlays are). Two local skills are skipped because their frontmatter name differs from their
+  folder (`image-to-code-skill`, `taste-skill`).
+- Compaction (P31) has only been tested with the scripted model, not a real one.
 
 ## Decisions already made (do not relitigate)
 
@@ -139,8 +148,17 @@ Still unverified (do these next):
   allow-listed user only in their own private chat (never a group or channel, where members
   would see the output); strangers get no reply and are logged locally (id and reason, never
   content) at most once a minute.
-- Default tools that need approval: `run_command`, `write_file`, `edit_file`
-  (`AGENT_STACK_APPROVAL_TOOLS`; empty runs everything unattended).
+- Default tools that need approval: `run_command`, `write_file`, `edit_file`, `web_fetch`,
+  `monitor_start` (`AGENT_STACK_APPROVAL_TOOLS`; empty runs everything unattended). The default
+  approval mode is **auto** (2026-11-25): rules, then the classifier, then you. This supersedes
+  the earlier "always ask" default.
+- Every commit is authored as `aayushjoshi-12` with no `Co-Authored-By`/AI trailer; history was
+  rewritten to match on 2026-11-25.
+- `.claude/skills/` stays on the owner's machine: gitignored and removed from all history on
+  2026-11-26. Skills agent-stack ships live in `src/agent_stack/skills/builtin/`.
+- Compaction uses the conversation's own model, never the small one (ADR 015, supersedes the
+  first P31 cut that used the small model). Chat search is FTS5 + BM25 over a disposable index
+  (ADR 016).
 - A launch opens a fresh draft conversation; old ones come from `ctrl+o`.
 - Items from the ponytail audit deliberately skipped: file/in-memory `list_for_owner` (kept for
   the store contract), the `AGENT_STACK_CONTEXT_WINDOW` knob, `memory/store.py` typing nits,

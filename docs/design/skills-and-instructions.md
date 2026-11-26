@@ -112,10 +112,15 @@ class SkillRegistry:
     def read_resource(self, name: str, rel_path: str) -> str: ...  # level 3
 ```
 
-**Discovery roots** (in order):
-1. `<workspace>/.agent/skills/` — project-local, session workspace.
-2. `<repo>/skills/` — skills shipped with the project.
-3. `~/.claude/skills/` — user-global, **opt-in** via config.
+**Discovery roots** (in order; as built, `app/bootstrap.py`):
+1. `<workspace>/.agent/skills/`, `<workspace>/.agents/skills/`, `<workspace>/.claude/skills/` —
+   project-local.
+2. `<repo>/skills/` and `<repo>/.claude/skills/` — skills next to agent-stack's own checkout (the
+   latter is gitignored, local only).
+3. `AGENT_STACK_SKILLS_PATH` (colon-separated, e.g. `~/.claude/skills/`) — user-global, **opt-in**.
+4. `src/agent_stack/skills/builtin/` — skills shipped with agent-stack (`handoff`, `smoke-test`).
+
+Every skill is also a `/name` slash command in each gateway.
 
 **Progressive disclosure wiring** (the whole point):
 
@@ -137,7 +142,8 @@ class SkillRegistry:
   ```
 
 - Executing a skill's `scripts/*` goes through the normal **terminal tool** (P14), so it
-  inherits policy, timeouts, output caps, and (later) approval. Never a bespoke executor.
+  inherits policy, timeouts, output caps, and approval (`run_command` is gated; auto mode can
+  answer it). Never a bespoke executor.
 
 **`allowed-tools`**: when a skill declares `allowed-tools`, `QueryRunner`/`ToolContext`
 can narrow the tool set available while that skill is active. Experimental — implement as
@@ -147,7 +153,8 @@ metadata first, enforcement later.
 
 - `name` matches the directory name and the charset rules;
 - `description` non-empty and ≤1024;
-- duplicate skill names across roots → the higher-precedence root wins, warn on shadowing.
+- duplicate skill names across roots → the higher-precedence root wins (as built: silently at
+  runtime; strict discovery, used in tests, raises).
 
 ### 4.3 Agent instructions
 

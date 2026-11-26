@@ -19,14 +19,14 @@
 | Capability | agent-stack phase | Status | Notes |
 |---|---|---|---|
 | `AGENTS.md` walk-up + nearest-wins | **P16c** (`context/instructions.py`) | ✅ implemented | Also falls back to `CLAUDE.md`; size caps (8 KB/file, 32 KB total), `(path, mtime)` cache |
-| `CLAUDE.md` / `CLAUDE.local.md` fallback | **P16c** | 🟡 AGENTS.md + CLAUDE.md done; `CLAUDE.local.md` / `.claude/CLAUDE.md` to add | Same loader, one more fallback name |
-| `@imports` / per-package rules | **P16c** | ⬜ deferred | Monorepo per-package permissions — not needed yet |
-| `SKILL.md` discovery + progressive disclosure | **P16b** (`skills/`) | ✅ implemented | Roots `workspace/.agent/skills/`, repo `skills/`, repo `.claude/skills/`, `~/.claude/skills/` opt-in |
-| `MEMORY.md` index + topics | **P16d** (new) | ⬜ planned | Progressive disclosure mirrors the skills system; on-disk shape feeds P21 |
+| `CLAUDE.md` / `CLAUDE.local.md` fallback | **P16c** | ✅ implemented (later) | `AGENTS.local.md` / `CLAUDE.local.md` overlays load ahead of the shared file; `.claude/CLAUDE.md` is still not read |
+| `@imports` / per-package rules | **P16c** | 🟡 `@imports` implemented (relative, same directory tree, three levels); per-package permissions deferred | Monorepo per-package permissions — not needed yet |
+| `SKILL.md` discovery + progressive disclosure | **P16b** (`skills/`) | ✅ implemented | Roots `workspace/.agent/skills/`, `.agents/skills/`, `.claude/skills/`, repo `skills/`, repo `.claude/skills/` (local only), `AGENT_STACK_SKILLS_PATH` (e.g. `~/.claude/skills`), then the built-in `handoff`/`smoke-test`; the first root wins a name |
+| `MEMORY.md` index + topics | **P16d** | ✅ implemented | Progressive disclosure mirrors the skills system; on-disk shape feeds P21 |
 | Path-scoped rules (`.claude/rules/`) | — | ⬜ deferred | Would compose with the instructions loader; no forcing requirement yet |
 | Automatic memory extraction | **P21** (persistent memory) | ⬜ deferred | P16d gives the *file* format; P21 gives the *store + tools* |
 
-## P16d — Memory files (`MEMORY.md`) [planned]
+## P16d — Memory files (`MEMORY.md`) [implemented]
 
 **Goal.** Support the file-based memory convention: a `MEMORY.md` index + topic files,
 with the same three-level progressive disclosure as skills.

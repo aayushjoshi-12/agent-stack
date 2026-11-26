@@ -1,7 +1,8 @@
 # agent-stack — Test Plan
 
-> Coverage strategy for what exists and what is coming. The runtime must be testable
-> **without real LLM calls**; real-model tests are opt-in.
+> Coverage strategy. The runtime must be testable **without real LLM calls**; real-model tests
+> are opt-in. Sections 3 and 4 were the plan written before the build; §3 now records what exists
+> (2026-11-26), §4 is kept as the record of what each phase had to prove.
 
 ---
 
@@ -13,8 +14,9 @@
 | **Contract** | one suite run against every implementation of a store protocol (in-memory + SQLite) | `tests/contract/` | yes |
 | **Invariant** | the runtime guarantees in §92 | `tests/invariants/` | yes |
 | **Integration** | real SQLite, real filesystem, real subprocess (fake model) | `tests/integration/` | yes |
-| **LLM** | real provider call | `tests/integration/` (`@pytest.mark.llm`) | opt-in |
-| **E2E** | gateway → application → runtime → store → events | `tests/e2e/` | yes (fake model) |
+| **LLM** | real provider call | `tests/integration/` (`@pytest.mark.llm`) | opt-in (none written yet: real-model checks live in `tmp/smoke_tests/`) |
+| **Gateway** | TUI (Textual pilot), Telegram (fake Bot API), web (ASGI client), line REPL | `tests/unit/`, `tests/integration/` | yes (fake model) |
+| **Web UI** | the event reducer and helpers (`node --test`) | `web/lib/*.test.ts` | `cd web && npm test` |
 | **Smoke** | real deps, nothing mocked on the changed path (incl. real LLM) | `tmp/smoke_tests/` | **never** |
 
 ---
@@ -41,21 +43,21 @@ Also: `SleepTool(seconds)` for the parallelism proof (§138), and `FailingTool`.
 
 ---
 
-## 3. Coverage — what exists now vs. what's missing
+## 3. Coverage — what exists (2026-11-26)
 
-| Module | Tests today | Missing (this build) |
-|---|---|---|
-| `tools/registry.py` | none | duplicate, unknown, `get`, `all` |
-| `tools/executor.py` | none | single, parallel, ordering, tool error, **args bug** |
-| `core/runtime.py` | none | direct response, tool round-trip, persistence, **no-duplication** |
-| `core/agent.py` | none | immutability, defaults |
-| `core/session.py` | none | copy-on-read, isolation |
-| `models/` | none | factory returns model; capability validation |
-| **`tests/conftest.py`** | none | tmp workspace, fake model, sample tools |
+749 tests: 47 unit files, 17 integration, 1 contract suite (in-memory and SQLite stores), 1
+invariant suite; plus 4 web test files. The table that stood here listed every core module as
+"none" (true on 2026-10-11, before the build) and is superseded. `make check` runs ruff (rules
+and formatting), strict mypy and the whole suite. Gaps that remain:
+
+- No `@pytest.mark.llm` test: real-model behaviour is checked by hand in `tmp/smoke_tests/`.
+- No end-to-end directory (`tests/e2e/` was planned): gateway tests drive the real
+  `Application` with the fake model instead.
+- No visual regression suite for the web UI or the TUI (screenshots are checked by hand).
 
 ---
 
-## 4. Coverage — coming next (per phase)
+## 4. Coverage per phase (the plan; all phases are built)
 
 - **P03/P05** — the loop tests listed in §137 of the design doc:
   `test_returns_direct_model_response`, `test_executes_single_tool_call`,
@@ -73,6 +75,8 @@ Also: `SleepTool(seconds)` for the parallelism proof (§138), and `FailingTool`.
 - **P13/P14** — workspace escape rejected; command timeout; env filtered; cwd preserved.
 - **P15** — large output → artifact + short message.
 - **P16** — context is system + recent window; compaction with a fake summarizer.
+  *Superseded by P31:* compaction is tested with the scripted model summarising its own input
+  (`tests/unit/test_context_wiring.py`); P32 search in `tests/integration/test_chat_search.py`.
 - **P16b/P16c** — skills + instructions acceptance lists in
   `docs/design/skills-and-instructions.md`.
 - **P17** — `test_bootstrap_creates_full_object_graph`.

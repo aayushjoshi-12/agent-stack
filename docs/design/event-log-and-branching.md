@@ -1,8 +1,9 @@
 # Design — Durable event log & conversation branching
 
-> Scheduled for **Milestone H** (Phases 29–30) — documented now, implemented after the
-> gateways land. This is what turns the event bus + conversation store into a **timeline
-> you can rewind and fork**.
+> **Implemented** in Milestone H (Phases 29–30), then extended by the history work (rewind with
+> file restore, switch, branch tree, `asref://` references; see `docs/STATUS.md`). Written before
+> the build; where the build differs, `docs/STATUS.md` "P29/P30 gaps" says how. This is what turns
+> the event bus + conversation store into a **timeline you can rewind and fork**.
 
 ---
 
@@ -110,4 +111,6 @@ class SessionStore(Protocol):  # extends P09 protocol
   in order; events survive restart.
 - P30: `test_branch_forks_at_event_and_preserves_prefix`,
   `test_branch_and_parent_diverge_after_fork`,
-  `test_branch_writes_do_not_touch_parent`; UI affordance in TUI/Web (later).
+  `test_branch_writes_do_not_touch_parent`; UI affordance in TUI/Web (done later: the TUI's
+  `esc esc` rewind picker and branches view, the web History panel and "Fork a branch from
+  here", Telegram `/rewind` and `/branches`).

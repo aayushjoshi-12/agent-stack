@@ -27,10 +27,10 @@ lists every theme.
 
 ```
 HeaderBar   ◆ agent-stack · task title ......... run state · model        height 1
-#body       conversation (1fr)                  │ sidebar (34 / 40 wide)
+#body       conversation (1fr)                  │ sidebar (36 / 42 wide)
               #chat  (VerticalScroll)           │   SESSION · CONTEXT meter
               #composer (multi-line)            │   ACTIVITY · SUBAGENTS
-              #hints  model · key hint          │   WORKSPACE (path, branch)
+              #hints  "auto mode" (only when on)  │   WORKSPACE (path, branch)
 Footer      esc cancel · ^n new · ^b sidebar · f1 help ........ ^p palette
 ```
 
@@ -42,7 +42,7 @@ Textual breakpoints put classes on the screen (`HORIZONTAL_BREAKPOINTS`,
 | Class | When | Effect |
 |---|---|---|
 | `-narrow` | < 100 cols | sidebar and model name hidden, tighter gutters |
-| `-normal` / `-wide` | 100 to 139 / 140+ | sidebar 34 / 40 wide |
+| `-normal` / `-wide` | 100 to 139 / 140+ | sidebar 36 / 42 wide |
 | `-short` | < 24 rows | hints, welcome and row spacing dropped |
 | `-show-sidebar` / `-hide-sidebar` | `ctrl+b` | explicit override of the width default |
 

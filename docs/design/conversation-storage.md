@@ -102,6 +102,13 @@ artifacts_index(id, session_id, run_id, name, rel_path, mime_type, size_bytes, c
 so cross-session queries ("find sessions that used the terminal tool") don't have to read
 every file.
 
+**As built (2026-11-26).** `message_index` and `artifacts_index` exist in the schema and
+`SqliteIndex` can write and read them (tested), but nothing in the running app writes them: no
+query has needed offsets. Cross-session search instead uses `chat_fts` (P32, ADR 016), an FTS5
+table that does hold a **copy** of message text. It is a disposable search index rebuilt from the
+JSONL on demand, so the transcript files stay the only source of truth; this amends "no message
+payloads" above for that one table.
+
 ## 7. Consequences
 
 - Conversations are reviewable: open the session directory and read `transcript.md`.

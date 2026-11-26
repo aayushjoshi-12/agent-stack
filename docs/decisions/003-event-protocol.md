@@ -32,3 +32,11 @@ The runtime publishes `run.started`, `model.reasoning`, `assistant.message`,
 - Events carry monotonic sequence numbers to enable reconnect/replay.
 - Adding a new gateway does not change the runtime.
 - The runtime never imports a gateway.
+
+## Amendment (2026-11-26): the event set as built
+
+`core/events.py` holds the closed set. Beyond the list above: `model.usage` (tokens and cost per
+model call), `approval.required` / `approval.resolved` (P26), `approval.auto` (auto mode's
+verdict on a gated call), `session.branched` (P30) and `context.compacted` (P31). `tool.completed`
+carries `ok` and `error`. None of these is terminal for a stream; only `run.completed` and
+`run.failed` are.
