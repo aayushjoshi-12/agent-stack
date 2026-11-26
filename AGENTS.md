@@ -75,5 +75,6 @@ src/agent_stack/
 └── app/          # config, application service, bootstrap (composition root)
 ```
 
-Note: `.claude/skills/` holds vendored, repo-scoped skills (the design skills for the web
-phase plus the ponytail working-mode skill); never reference the external source repos.
+Note: `.claude/skills/` holds repo-scoped skills (the web design skills plus the ponytail
+working-mode skill). It is gitignored: the skills live on the owner's machine only and are not
+in the repository or its history; never reference the external source repos.

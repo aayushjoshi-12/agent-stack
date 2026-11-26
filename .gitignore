@@ -21,3 +21,6 @@ tmp/
 .agent/
 workspace/
 agent.db*
+
+# Repo-scoped agent skills: kept locally for the agent, never published
+.claude/skills/

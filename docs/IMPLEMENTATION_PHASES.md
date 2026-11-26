@@ -840,7 +840,7 @@ garbage collection this phase defers.
 - `skills/models.py` (`SkillMetadata`, `Skill`, `SkillResource`), `skills/loader.py`
   (discover + parse YAML frontmatter + name validation), `skills/registry.py`.
 - Discovery roots: `<workspace>/.agent/skills/`, repo `skills/`, repo `.claude/skills/`
-  (the vendored design skills live here — already in the repo tree), `~/.claude/skills/`
+  (the design skills live here — local only, gitignored), `~/.claude/skills/`
   (opt-in).
 - Level-1 metadata appended to the system prompt (name + description only).
 - Tools: `load_skill(name)` (level 2 body), `read_skill_resource(name, path)` (level 3).

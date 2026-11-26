@@ -23,5 +23,5 @@
 
 - **TUI first** (Textual + Rich), then **Telegram**, then **Web** (Next.js + SSE — no
   WebSocket).
-- Web design is driven by the **vendored design skills** in `.claude/skills/`; the user
+- Web design is driven by the **design skills** in `.claude/skills/` (local only, gitignored); the user
   will share design inspiration before the web phase starts.
