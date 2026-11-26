@@ -1,0 +1,47 @@
+%% Who decides a tool call before it runs (core/approval.py, approval/auto.py, P26 + auto mode).
+%% Gated by default: run_command, write_file, edit_file, web_fetch, monitor_start (AGENT_STACK_APPROVAL_TOOLS),
+%% plus any call that reaches outside the workspace when AGENT_STACK_EXTERNAL_ACCESS=ask. Default mode: auto.
+flowchart TB
+
+  req["The model asks for a tool call"]
+  gated{"Gated?<br/>(ToolPolicy: the list,<br/>or it touches a path outside the workspace)"}
+  run["Runs"]
+  req --> gated
+  gated -->|"no"| run
+
+  mode{"Approval mode<br/>shift+tab · /mode · web button"}
+  gated -->|"yes"| mode
+
+  subgraph AUTO["AUTO MODE (default)"]
+    rules{"1. Rules (no model call)"}
+    deny["Refused: catastrophic<br/>(rm -rf /, wiping home, disk writes)"]
+    allowr["Allowed: plain reads and ordinary<br/>edits inside the workspace"]
+    askr["Always asked: sudo, pushes,<br/>credentials, installs"]
+    jev{"2. Classifier model (Jev)<br/>sees only your request and the call,<br/>redacted, never tool output or web pages"}
+    rules -->|"catastrophic"| deny
+    rules -->|"clearly safe"| allowr
+    rules -->|"sensitive"| askr
+    rules -->|"anything else"| jev
+  end
+
+  human{"3. You decide<br/>TUI dialog · Telegram buttons · web card<br/>(a diff preview for file edits)"}
+
+  mode -->|"auto"| rules
+  mode -->|"ask"| human
+  jev -->|"allow"| run
+  jev -->|"deny"| refused["Refused: the model is told why"]
+  jev -->|"unsure or failed"| human
+  askr --> human
+  allowr --> run
+  human -->|"approve"| run
+  human -->|"reject"| refused
+
+  shown["Every decision is shown with its reason,<br/>tagged [rule] or [jev] (approval.auto event)"]
+  AUTO -.-> shown
+
+  classDef good fill:#eaf7ee,stroke:#3d9a5b
+  classDef bad fill:#fdecea,stroke:#d9534f
+  classDef you fill:#fff6e0,stroke:#d9a13d
+  class run,allowr good
+  class deny,refused bad
+  class human,askr you

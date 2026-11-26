@@ -1,0 +1,46 @@
+%% One message, end to end: from a gateway through the run loop and back (core/run.py, core/runtime.py).
+%% The loop is explicit and boring on purpose (ADR 002): build context, call the model, run tools, repeat.
+%% Every step publishes events; gateways render the events, never the model's messages (ADR 003).
+sequenceDiagram
+  autonumber
+  actor You
+  participant GW as Gateway (TUI / web / Telegram / REPL)
+  participant App as Application
+  participant RM as RunManager
+  participant RT as AgentRuntime
+  participant M as Main model
+  participant TE as ToolExecutor + approvals
+  participant S as Stores (transcript, SQLite)
+
+  You->>GW: type a message (or /skill args)
+  GW->>App: send_message(envelope)
+  App->>App: budget check, expand /skill, drain monitor notes
+  App->>RM: start(RunRequest)
+  RM->>RT: run() under the per-session lock
+  RT->>S: load the conversation
+  Note over RT: events: run.started
+
+  loop until the model answers without tool calls (or a limit stops it)
+    RT->>RT: take queued messages (your follow-ups, monitor notes)
+    alt context past 80% of the budget
+      RT->>M: the input it was about to send + "summarise"
+      M-->>RT: summary (saved as a marker, files in use attached)
+      Note over RT: events: context.compacted, model.usage
+    end
+    RT->>RT: build context: system parts + summary + window
+    RT->>M: ainvoke(context)
+    M-->>RT: AI message (text and/or tool calls)
+    Note over RT: events: model.usage, model.reasoning, assistant.message
+    opt the message has tool calls
+      RT->>TE: run the batch (in parallel)
+      TE->>TE: gated? ask the rules, the classifier or you (diagram 04)
+      TE-->>RT: tool results (big ones become artifacts)
+      Note over RT: events: tool.started, tool.output, tool.completed
+    end
+  end
+
+  RT->>S: append the run's messages, save the session
+  Note over RT: events: run.completed (or run.failed)
+  RT-->>RM: final answer
+  RM-->>GW: event stream ends
+  GW-->>You: answer, tool cards, cost

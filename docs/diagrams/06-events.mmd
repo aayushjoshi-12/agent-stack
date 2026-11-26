@@ -1,0 +1,38 @@
+%% How progress reaches you: one event bus, many listeners (core/events.py, persistence/event_log.py, ADR 003).
+%% Events carry a per-run sequence number, so a dropped web stream resumes from Last-Event-ID.
+%% A subagent's start and end are published on its parent's run, so the parent's stream shows the child.
+flowchart LR
+
+  rt["AgentRuntime<br/>and RunManager"]
+
+  subgraph TYPES["Event types"]
+    life["run.started · run.completed · run.failed"]
+    model["assistant.message · model.reasoning · model.usage"]
+    tool["tool.started · tool.output · tool.completed"]
+    appr["approval.required · approval.resolved · approval.auto"]
+    other["subagent.started · subagent.completed<br/>session.branched · context.compacted"]
+  end
+
+  bus["EventStoreBus"]
+  rt --> TYPES --> bus
+
+  subgraph DURABLE["Kept"]
+    log[("event_log table<br/>redacted, capped")]
+    audit[("audit JSONL<br/>agent-stack audit tail")]
+    metrics["Metrics + JSON log"]
+  end
+
+  subgraph LIVE["Shown live (each gateway subscribes per run)"]
+    tui["TUI<br/>cards, sidebar, notices"]
+    web["Web<br/>SSE stream, resumable"]
+    tg["Telegram<br/>one status message, tool viewer"]
+    repl["Line REPL<br/>printed blocks"]
+  end
+
+  bus --> log & audit & metrics
+  bus --> tui & web & tg & repl
+
+  log -->|"cost totals, turns, replay,<br/>forking at an event"| uses["Application:<br/>session_usage · timeline · replay"]
+
+  classDef store fill:#eef4ff,stroke:#5b7bd5
+  class log,audit store

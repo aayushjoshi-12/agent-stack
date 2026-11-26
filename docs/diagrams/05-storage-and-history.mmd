@@ -1,0 +1,55 @@
+%% Where everything is kept, and how history (rewind, fork, switch) and search read it (ADR 008, P29-P32).
+%% Files are the source of truth for conversations; SQLite (agent.db) is the index plus disposable copies.
+%% Paths are under the workspace (the folder agent-stack runs in, ADR 010).
+flowchart LR
+
+  subgraph FILES["FILES (.agent/ in the workspace)"]
+    tr[("sessions/&lt;id&gt;/transcript.jsonl<br/>append-only, every message<br/>+ transcript.md to read")]
+    ch[("changes/<br/>text before and after each<br/>write_file / edit_file")]
+    art[("artifacts/<br/>tool output over 20 KB")]
+    mem[("memory/MEMORY.md + topics")]
+    lg[("logs/: audit JSONL, app log")]
+  end
+
+  subgraph DB["SQLite agent.db"]
+    sess[("sessions, runs,<br/>checkpoints, tool_executions")]
+    ev[("event_log<br/>every event, redacted")]
+    fc[("file_changes<br/>index of the snapshots")]
+    mt[("memory_items, todos")]
+    fts[("chat_fts + chat_fts_state<br/>search copy of message text")]
+  end
+
+  run["A run"] -->|"messages at the end"| tr
+  run -->|"events"| ev
+  run --> sess
+  tools["write_file / edit_file"] --> ch
+  tools --> fc
+
+  subgraph HIST["HISTORY (app/timeline.py)"]
+    turns["Turns: your messages,<br/>read from events + transcript"]
+    rewind["Rewind: fork at a turn,<br/>restore the files to that point"]
+    fork["Fork: a new session with<br/>a copy of the transcript prefix"]
+    switch["Switch: put the folder in<br/>another branch's file state"]
+    ref["asref:// reference<br/>to share a point"]
+  end
+  tr --> turns
+  ev --> turns
+  turns --> rewind & fork & ref
+  rewind --> fork
+  ch --> rewind
+  ch --> switch
+
+  subgraph SEARCH["SEARCH (P32)"]
+    find["find_chats(query)"]
+    sync["Re-index only chats whose<br/>transcript or title changed"]
+    rank["FTS5 MATCH, ranked by BM25<br/>(what was said > tool output)"]
+    find --> sync --> rank
+  end
+  tr -.->|"read on change"| sync
+  sync --> fts
+  rank --> fts
+
+  classDef store fill:#eef4ff,stroke:#5b7bd5
+  classDef copy fill:#f5f5f5,stroke:#999,stroke-dasharray: 4 3
+  class tr,ch,art,mem,lg,sess,ev,fc,mt store
+  class fts copy

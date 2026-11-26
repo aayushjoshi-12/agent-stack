@@ -1,0 +1,85 @@
+%% agent-stack: every moving part, top to bottom, as wired in app/bootstrap.py (the one composition root).
+%% Dependencies only point down: gateway -> application -> run manager -> runtime -> model / tools / stores.
+%% Dashed = optional or off by default. The run loop, context, approvals, storage and events have their own diagrams (02-06).
+flowchart TB
+
+  you(["You<br/>(the only user: one owner)"])
+
+  subgraph GW["1. GATEWAYS (only talk to Application)"]
+    tui["TUI<br/>Textual · agent-stack / resume"]
+    repl["Line REPL and headless run<br/>agent-stack chat · agent-stack run"]
+    tg["Telegram bot<br/>allow-listed private chat only"]
+    subgraph WEB["Web"]
+      next["Next.js UI (web/)"]
+      api["FastAPI + SSE<br/>loopback, bearer token"]
+      next --> api
+    end
+    cli["History CLI<br/>sessions · turns · tree · fork · rewind · switch · ref"]
+  end
+
+  subgraph APP["2. APPLICATION (app/application.py)"]
+    appsvc["Application<br/>send_message · slash commands · /model · /compact<br/>history, timeline, changed files, cost, budget"]
+    chats["Chat library<br/>find (FTS5 + BM25) · read · ask · fork old chats"]
+    monitors["Monitors<br/>background pollers queue a note<br/>for the next message"]
+    appsvc --- chats
+    appsvc --- monitors
+  end
+
+  subgraph CORE["3. CORE (never imports a gateway)"]
+    rm["RunManager<br/>starts, cancels, recovers runs<br/>inbox for queued messages"]
+    rt["AgentRuntime<br/>the explicit model / tool loop"]
+    ctx["Context<br/>system parts + token budget<br/>+ compaction (P31)"]
+    exec["ToolExecutor<br/>parallel calls, timeouts,<br/>large output to artifacts"]
+    appr["Approvals<br/>ToolPolicy · broker · auto mode"]
+    rm --> rt
+    rt --> ctx
+    rt --> exec
+    exec --> appr
+  end
+
+  subgraph TOOLS["4. TOOLS (bound to the main agent)"]
+    fs["Files<br/>list · read · search · grep · write · edit"]
+    sh["run_command<br/>shell, guarded, streamed"]
+    web_t["web_search · web_fetch<br/>(reader mode by default)"]
+    mem["Memory<br/>MEMORY.md topics · remember/recall · ideas"]
+    plan["todo_* · skills · artifacts"]
+    hist["History tools<br/>find/read/ask/fork chats · references"]
+    mon_t["monitor_* tools"]
+    sub["delegate → explorer subagent<br/>(read-only, small model)"]
+  end
+
+  subgraph MODELS["5. MODELS (LangChain init_chat_model)"]
+    main["Main model<br/>AGENT_STACK_MODEL (/model switches it)<br/>answers, edits, compaction"]
+    small["Small model<br/>titles · explorer · read_chat summaries"]
+    jev["Auto-mode classifier<br/>AGENT_STACK_AUTO_MODEL"]
+  end
+
+  subgraph STORE["6. STORAGE (workspace/.agent + agent.db)"]
+    files[("Transcripts<br/>sessions/&lt;id&gt;/transcript.jsonl + .md<br/>source of truth")]
+    sqlite[("SQLite agent.db<br/>sessions · runs · checkpoints · event_log<br/>file_changes · memory · todos · chat_fts")]
+    snaps[("Snapshots and artifacts<br/>.agent/changes · .agent/artifacts")]
+    logs[("Audit log + JSON logs<br/>.agent/logs")]
+  end
+
+  ext(["Outside world<br/>OpenRouter · the web · your shell"])
+
+  you --> tui & repl & tg & next & cli
+  tui & repl & tg & api & cli --> appsvc
+  appsvc --> rm
+  rt -->|"model calls"| main
+  appr -.->|"auto mode"| jev
+  exec --> fs & sh & web_t & mem & plan & hist & mon_t & sub
+  sub -.-> small
+  appsvc -.->|"titles"| small
+  rt --> files
+  rt --> sqlite
+  fs --> snaps
+  rt -->|"events"| logs
+  main & small & jev & web_t & sh --- ext
+
+  classDef store fill:#eef4ff,stroke:#5b7bd5
+  classDef gate fill:#fff6e0,stroke:#d9a13d
+  classDef model fill:#f3eefc,stroke:#7a5bd5
+  class files,sqlite,snaps,logs store
+  class appr gate
+  class main,small,jev model

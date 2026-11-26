@@ -1,0 +1,44 @@
+%% What the model sees on every call, and what happens as a conversation grows (core/context.py, P16e, P31).
+%% Sizes are the defaults: AGENT_STACK_CONTEXT_BUDGET 120k tokens, AGENT_STACK_COMPACT_AT 0.8.
+%% The token count is an estimate (about 4 characters a token, tool schemas included) corrected by the provider's real counts.
+flowchart TB
+
+  subgraph SYS["1. SYSTEM PROMPT (rebuilt each run, capped at 64 KB)"]
+    base["Base prompt"]
+    summ["Latest compaction summary<br/>(right after the base prompt, so never cut first)"]
+    instr["AGENTS.md / CLAUDE.md<br/>nearest first, .local.md overlays, @imports"]
+    skills["Skill list<br/>name + description only"]
+    memidx["MEMORY.md index + open todos"]
+    base --> summ --> instr --> skills --> memidx
+  end
+
+  subgraph MSG["2. MESSAGES (newest that fit the budget)"]
+    pinned["This run's request<br/>(always first)"]
+    filesmsg["Files you were working on<br/>(only after a compaction)"]
+    window["Everything after the latest summary:<br/>your messages, answers, tool calls and results"]
+    pinned --> filesmsg --> window
+  end
+
+  size{"How big is it?"}
+  SYS --> size
+  MSG --> size
+
+  ok["Under 80% (about 96k)<br/>send as is"]
+  compact["Past 80%: COMPACT<br/>the conversation's own model summarises everything so far;<br/>the summary is saved in the transcript as a marker,<br/>and the next call starts from it (box 1)<br/>(/compact [focus] does the same by hand)"]
+  trim["Still past 100% (120k)<br/>clear old tool results (keep the newest 6),<br/>then drop the oldest messages with a note"]
+
+  size -->|"small"| ok
+  size -->|"over 80%"| compact
+  size -->|"over 100%, or compaction failed or is off"| trim
+
+  transcript[("transcript.jsonl<br/>keeps every message, summaries included:<br/>the UIs, rewind and forks still see it all")]
+  compact --> transcript
+
+  classDef store fill:#eef4ff,stroke:#5b7bd5
+  classDef good fill:#eaf7ee,stroke:#3d9a5b
+  classDef warn fill:#fff6e0,stroke:#d9a13d
+  classDef bad fill:#fdecea,stroke:#d9534f
+  class transcript store
+  class ok good
+  class compact warn
+  class trim bad
