@@ -1,11 +1,12 @@
-# Status snapshot (paused 2026-11-13)
+# Status snapshot (2026-11-26)
 
 Where the project stands and what to do next. Written so a fresh session can pick it up
-cold. Everything below was true at commit `2be1c43`; `git log` has the later truth.
+cold. `git log` has the later truth.
 
 ## State
 
-- 553 tests, `make check` (ruff + strict mypy + pytest) green. Private repo, `main`, in sync.
+- 745 tests, `make check` (ruff + strict mypy + pytest) green; web `npm test` and `npm run build`
+  green. Private repo, `main`. `.claude/skills/` is local only (gitignored, removed from history).
 - Run it: `agent-stack` (TUI), `agent-stack chat` (line REPL), `agent-stack telegram`
   (bot), `agent-stack audit tail`. Default model `openrouter:deepseek/deepseek-v4-pro`
   (`AGENT_STACK_MODEL`); see `.env.example` for every variable.
@@ -18,7 +19,29 @@ cold. Everything below was true at commit `2be1c43`; `git log` has the later tru
 | Trust | 26, 27, 28 | approval flow; redaction, JSON logs, metrics, eight invariants; hardening matrix |
 | Event log, branching | 29, 30 | durable redacted `event_log` table + `Application.replay`; `Application.branch_session` forks a conversation at a logged event |
 | Large output | 15 | results over 20 KB become artifacts; `read_artifact` pages through them |
+| Web | 24 | FastAPI + resumable SSE, Next.js UI (`web/`) |
+| Context engineering | 16, 16e, 31 | resident parts, calibrated token budget, tool-result clearing, saved compaction + `/compact` |
 
+## Since the phases (unphased work, all in `git log`)
+
+- **History:** rewind (code, conversation or both), fork, switch files, branch tree, `asref://`
+  references, tools to find/read/ask/fork old chats; in every gateway.
+- **Auto mode** (default): rules, then the Jev classifier, then you. The classifier sees a
+  redacted request and call only. Audit fixes on 2026-11-25 closed rule bypasses, kept monitor
+  notes out of its view, and redacted Telegram tool arguments and errors.
+- **`/model`** switches the main model for the next runs (TUI, Telegram, web, until restart).
+- **Monitors, `web_search`, `web_fetch`** (reader mode by default), ideas inbox, headless runs.
+- **Built-in skills** `handoff` and `smoke-test` ship in `src/agent_stack/skills/builtin/`.
+
+## Context engineering (where it stands)
+
+What the model sees each call: the base prompt, then AGENTS.md/CLAUDE.md, skill metadata and the
+MEMORY.md index (capped at 64 KB), then the latest compaction summary, then the messages after
+it, with the run's request pinned first. The size estimate counts tool schemas and is calibrated
+against the provider's reported input tokens. Past 80% of `AGENT_STACK_CONTEXT_BUDGET` (120k) the
+conversation is summarised and the summary saved in the transcript (P31); past 100% old tool
+results are cleared and then the oldest messages dropped with a note. Not built: re-reading
+recent files after a compaction, semantic retrieval over old chats, automatic memory extraction.
 ## Small model for side work
 
 - `AGENT_STACK_SMALL_MODEL` (ADR 014): the `explorer` subagent and conversation titles use a
@@ -56,7 +79,7 @@ cold. Everything below was true at commit `2be1c43`; `git log` has the later tru
 
 ## Not done
 
-- **P24 Web gateway: backend and UI built (`web/`, Next.js).** `agent-stack web` serves the API
+- **P24 Web gateway: done** (kept here for its notes). `agent-stack web` serves the API
   (`gateways/web/`): sessions, messages, a resumable SSE stream (`Last-Event-ID`), cancel (also
   stops subagents), approvals, branching. It needs `AGENT_STACK_WEB_TOKEN`, binds to loopback,
   and treats other principals' sessions as nonexistent. The Next.js app (`web/`, style per ADR 013)

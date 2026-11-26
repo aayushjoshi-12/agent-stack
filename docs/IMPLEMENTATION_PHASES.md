@@ -221,13 +221,13 @@ If you prefer to avoid churn, keep `AgentConfig` but be consistent everywhere.
 
 ```text
 Milestone A — The minimal loop
-  0  Foundation & tooling                🟡
-  1  Model layer                          🟡
+  0  Foundation & tooling                ✅
+  1  Model layer                          ✅
   2  Tool registry                        ✅
-  3  Tool executor                        🟡
-  4  Agent definition (Agent/limits)      🟡
-  5  AgentRuntime loop                    🟡
-  6  Errors & limits                      ⬜
+  3  Tool executor                        ✅
+  4  Agent definition (Agent/limits)      ✅
+  5  AgentRuntime loop                    ✅
+  6  Errors & limits                      ✅
 
 Milestone B — Durability & state
   7  Sessions & in-memory stores          ✅
@@ -249,28 +249,31 @@ Milestone C — Real capabilities
 16e  Context wiring (make it real)        ✅
 
 Milestone D — Composition & application
- 17  Composition root (bootstrap.py)      🟡
+ 17  Composition root (bootstrap.py)      ✅
  18  Application service layer            ✅
  19  Gateway contract (base.py)           ✅
 
 Milestone E — Multi-agent & memory
  20  Subagents (delegation)               ✅
- 21  Persistent memory                    ⬜
- 22  Planning / TODOs                     ⬜
+ 21  Persistent memory                    ✅
+ 22  Planning / TODOs                     ✅
 
 Milestone F — Gateways (**order: TUI → Telegram → Web**)
  23  TUI gateway (Textual + Rich)         ✅
- 25  Telegram gateway                     ⬜   ← build second
- 24  Web gateway (Next.js, SSE)           ⬜   ← build last
+ 25  Telegram gateway                     ✅
+ 24  Web gateway (Next.js, SSE)           ✅
 
 Milestone G — Trust & operations
- 26  Approval flow                        ⬜
- 27  Observability & invariant tests      ⬜
- 28  Hardening                             ⬜
+ 26  Approval flow                        ✅
+ 27  Observability & invariant tests      ✅
+ 28  Hardening                            ✅
 
 Milestone H — Time travel & branching (later)
- 29  Durable event log & replay           ⬜
- 30  Conversation branching               ⬜
+ 29  Durable event log & replay           ✅
+ 30  Conversation branching               ✅
+
+Milestone I — Context engineering
+ 31  Compaction (summarise and continue)  ✅
 ```
 
 > **Build order one-liner** (keep visible):
@@ -1214,7 +1217,7 @@ Tests: `tests/unit/test_telegram_gateway.py`.
 
 ---
 
-## Phase 24 — Web gateway (Next.js + SSE) ⬜  ← LAST gateway to build
+## Phase 24 — Web gateway (Next.js + SSE) ✅  ← LAST gateway to build
 
 **Goal.** HTTP commands + **SSE** event stream. §62–63.
 **Stack decisions** (user-specified):
@@ -1425,6 +1428,52 @@ branch" — like a versioned timeline, not a linear chat.
 - TUI/Web: an event in the past can be forked and continued (UI affordance, P23/P24+).
 
 **Defer:** branch merging/diffing, GC of dead branches.
+
+---
+
+# Milestone I — Context engineering
+
+## Phase 31 — Compaction (summarise and continue) ✅
+
+**Goal.** A long conversation keeps working: past a threshold the conversation so far is replaced
+by one saved summary, the way Claude Code (auto-compact, `/compact [instructions]`) and opencode
+(`session.summarize`, messages before the summary filtered out) do it.
+
+**Where context engineering stood before this phase** (P16, P16e and later fixes): resident
+system parts (base prompt, AGENTS.md/CLAUDE.md, skill metadata, MEMORY.md index) capped at 64 KB;
+a token budget (`AGENT_STACK_CONTEXT_BUDGET`, 120k) with an estimate that counts tool schemas and
+is calibrated against the provider's reported input tokens; over budget, old tool results are
+cleared (newest 6 kept) and then the oldest messages dropped with a note, the run's request
+always pinned first. The small model summarised *dropped* messages, but only in memory for one
+run: the next run, or a restart, dropped and summarised again, and with no small model nothing
+was summarised at all.
+
+**Deliverables**
+- `core/context.py`: `COMPACTION_HEADER`, `compaction_message`, `after_compaction` (the latest
+  summary and the messages after it), `ContextBuilder.over_threshold` (`compact_at`, 0.8 of the
+  budget). The old `compact()` (40-message window) and the in-memory dropped-message summary are
+  gone; dropping stays as the fallback.
+- `core/runtime.py`: before each model call, past the threshold, the conversation since the last
+  summary (the run's request included) is summarised and the marker appended to the run's
+  messages, so it is saved with them; `context.compacted` is emitted. One failure turns it off
+  for that run. `AgentRuntime.compact(session, focus)` does it on demand under the session lock.
+- `context/summarizer.py`: a Claude Code-style prompt (request, facts, files, errors, every user
+  message, decisions, pending, current work, next step), an optional focus, a 200k-char cap.
+- `Application.compact_session`; `/compact [focus]` in the TUI, line REPL, Telegram and web
+  (`POST /sessions/{id}/compact`). Auto-compaction shows in the TUI, REPL and Telegram status.
+- The summary model is the small model, else the main model.
+
+**Acceptance**
+- `test_a_conversation_past_the_threshold_is_compacted_and_the_summary_saved` (one summary call
+  across two runs; the transcript keeps every message)
+- `test_a_failed_summary_falls_back_to_dropping_and_is_not_retried`
+- `test_compact_now_summarises_with_the_focus_and_only_once`
+- `test_compaction_marker_hides_everything_before_it`, `test_over_threshold_…`
+- gateway `/compact` tests (TUI, Telegram, web).
+
+**Defer:** re-reading recently used files after a compaction (Claude Code does); showing the
+marker as a row when a conversation is reopened; a live web notice for auto-compaction; a
+setting to turn auto-compaction off; summarising a first compaction of a huge chat in chunks.
 
 ---
 
