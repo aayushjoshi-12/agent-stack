@@ -16,7 +16,7 @@ cold. `git log` has the later truth.
 | Runtime core | 0-20 | loop, limits, deadline, tool timeout, sessions, events, checkpoints, run manager, subagents, skills, instructions, memory files |
 | Memory and tasks | 21, 22 | `remember`/`recall`/`forget` (SQLite, per user); `todo_*` tools (per session) |
 | Gateways | 23, 25 | TUI (themes, cards, conversations picker, approvals), Telegram (allow-listed; pages and opens any conversation, tool-call viewer, /verbose modes, rename/delete, HTML replies, restart-safe state) |
-| Trust | 26, 27, 28 | approval flow; redaction, JSON logs, metrics, eight invariants; hardening matrix |
+| Trust | 26, 27, 28, 42 | approval flow; redaction, JSON logs, metrics, eight invariants; hardening matrix; optional OpenTelemetry traces (`--extra otel`) |
 | Event log, branching | 29, 30 | durable redacted `event_log` table + `Application.replay`; `Application.branch_session` forks a conversation at a logged event |
 | Large output | 15 | results over 20 KB become artifacts; `read_artifact` pages through them |
 | Web | 24 | FastAPI + resumable SSE, Next.js UI (`web/`) |

@@ -31,6 +31,7 @@ from agent_stack.observability.audit import AuditLogger, audit_log_path
 from agent_stack.observability.logging import EventLogger, configure_logging
 from agent_stack.observability.metrics import Metrics
 from agent_stack.observability.sinks import FanoutSink
+from agent_stack.observability.tracing import tracing_from_env
 from agent_stack.persistence.changes import LocalChangeStore
 from agent_stack.persistence.conversation import FileConversationStore
 from agent_stack.persistence.event_log import EventStoreBus, SqliteEventLogStore
@@ -166,7 +167,8 @@ def build_application(config: AppConfig | None = None) -> Application:
     audit = AuditLogger(audit_log_path(workspace))
     metrics = Metrics()
     configure_logging(workspace / ".agent" / "logs" / "agent.jsonl")
-    event_bus = EventStoreBus(event_log, audit=FanoutSink(audit, EventLogger(), metrics))
+    sinks = FanoutSink(audit, EventLogger(), metrics, *tracing_from_env(os.environ))
+    event_bus = EventStoreBus(event_log, audit=sinks)
     locks = SessionLockManager()
 
     policy = WorkspacePolicy(root=workspace, allow_external=resolved.external_access != "deny")

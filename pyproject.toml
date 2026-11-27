@@ -29,6 +29,10 @@ local = [
 browser = [
     "playwright>=1.65.0",
 ]
+otel = [
+    "opentelemetry-sdk>=1.30",
+    "opentelemetry-exporter-otlp-proto-http>=1.30",
+]
 
 [tool.ruff]
 target-version = "py312"

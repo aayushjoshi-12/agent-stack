@@ -1784,7 +1784,7 @@ and compacted turns (no row) are skipped; no server change. `HistoryPanel`'s lis
 
 ---
 
-## Phase 42 — OpenTelemetry tracing
+## Phase 42 — OpenTelemetry tracing ✅
 
 **Goal.** A run can be followed in any OTLP backend: one trace per run, spans for model calls,
 tool calls and subagents.
@@ -1799,6 +1799,31 @@ tool calls and subagents.
 **Acceptance**
 - tests with the in-memory span exporter: span tree for a run with a tool call and a subagent;
   nothing exported or imported when off; redaction holds.
+
+**Built.** `observability/tracing.py`: `RunTracer`, a bus sink beside the audit log and metrics
+(`FanoutSink` in `bootstrap.py`), so the runtime has no tracing code. Extra `otel`
+(`opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http`); `tracing_from_env(os.environ)`
+returns no sink (and imports nothing) unless `OTEL_EXPORTER_OTLP_ENDPOINT`,
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `AGENT_STACK_OTEL=1` is set; extra missing → a warning.
+Standard `OTEL_*` variables apply; service name defaults to `agent-stack`;
+`OTEL_TRACES_EXPORTER=console` prints spans. Span times come from event timestamps:
+- `run` (root, fresh trace): `session.id`, `agent_stack.run_id`, `gen_ai.agent.name`,
+  `gen_ai.request.model` (from the first model call).
+- `model.call`: `gen_ai.usage.input_tokens`/`output_tokens`, cache read/write and reasoning
+  tokens, `agent_stack.cost_usd`, model. `MODEL_USAGE` arrives after the call, so the span starts
+  at the previous event of the same run (run start, last tool result, ...). A `purpose` call (the
+  title, made beside the run) is a zero-length span.
+- `tool.call`: name, call id, arguments sanitised by `audit_record` (the audit/event-log rules),
+  ok, `duration_ms`; ERROR status with the redacted error. A parallel batch's tools end together
+  (the runtime publishes `TOOL_COMPLETED` after the batch).
+- `subagent`: child run under the parent's `delegate` span (bound at `SUBAGENT_STARTED`, oldest
+  open unbound delegate first).
+- Failure ends the open spans with ERROR. A hard cancel publishes no terminal event (by design),
+  so the spans end on the child's `SUBAGENT_COMPLETED`, the session's next run, the parent's end,
+  or `close()` at exit, at the run's last seen event, with ERROR.
+
+Tests: `tests/unit/test_tracing.py` (skipped without the extra). Smoke:
+`tmp/smoke_tests/P42-otel-smoke.py` (local OTLP/HTTP receiver, real run with a subagent and tools).
 
 ---
 
