@@ -163,3 +163,54 @@ async def test_compact_command_summarises_the_open_conversation() -> None:
         await _settle(pilot)
         assert fake.compacted == [("s1", "keep the schema")]
         assert fake.sent == []
+
+
+async def test_memories_command_keeps_edits_and_rejects_suggestions() -> None:
+    from types import SimpleNamespace
+
+    from textual.widgets import Input
+
+    from agent_stack.core.events import EventType
+    from agent_stack.gateways.tui.screens import MemoriesScreen
+
+    fake = FakeApplication(
+        events=[
+            event(EventType.RUN_STARTED, run_id="run-1"),
+            event(EventType.ASSISTANT_MESSAGE, run_id="run-1", content="noted"),
+            event(EventType.RUN_COMPLETED, run_id="run-1", steps=1, tool_calls=0),
+        ]
+    )
+    fake.memory_suggester = object()
+    fake.suggested = [
+        SimpleNamespace(id=f"m{i}", key=k, value=v, run_id="run-1")
+        for i, (k, v) in enumerate([("editor", "Helix"), ("shell", "fish"), ("os", "macOS")])
+    ]
+    app = TuiApp(fake, session_id="s1")  # type: ignore[arg-type]
+    async with app.run_test(size=(120, 40)) as pilot:
+        prompt = app.query_one("#prompt", PromptArea)
+        prompt.load_text("I use helix")
+        await pilot.press("enter")
+        await _settle(pilot, 12)
+        notices = [str(n.render()) for n in app.tab.query("Hint")]
+        assert any("3 memory suggestions: /memories to review" in n for n in notices)
+
+        prompt.load_text("/memories")
+        await pilot.press("enter")
+        await _settle(pilot)
+        assert isinstance(app.screen, MemoriesScreen)
+        await pilot.press("a")  # keep the first as it is
+        await _settle(pilot)
+        await pilot.press("r")  # reject the next
+        await _settle(pilot)
+        await pilot.press("e")
+        await _settle(pilot)
+        box = app.screen.query_one(Input)
+        assert box.value == "os: macOS"
+        box.value = "os: macOS 15"
+        await pilot.press("enter")
+        await _settle(pilot)
+        await pilot.press("escape")
+        await _settle(pilot)
+        assert not isinstance(app.screen, MemoriesScreen)
+    assert fake.kept == [("m0", None, None), ("m2", "os", "macOS 15")]
+    assert fake.rejected == ["m1"]

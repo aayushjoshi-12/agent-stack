@@ -153,6 +153,7 @@ A phase may start only when every phase it depends on has passed its acceptance 
 | P50 Storage lifecycle (delete and gc) | P09, P15, P29, P30, P46 |
 | P51 Model retries and failover | P45, P48 |
 | P52 MCP lifecycle | P43 |
+| P53 Reviewable memory suggestions | P21, P24, P25, P34 |
 | P54 Side effects run at most once | P10, P51 |
 
 ---

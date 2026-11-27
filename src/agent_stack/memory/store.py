@@ -1,7 +1,8 @@
 """Persistent, explicitly managed facts that outlive a session (P21).
 
-The model decides what to keep with ``remember`` / ``forget``; nothing is extracted
-automatically and there are no embeddings: recall is a case-insensitive keyword match over
+The model decides what to keep with ``remember`` / ``forget``, or, with memory suggestions on
+(P53), the user keeps what a model suggested (``memory/suggestions.py``). There are no
+embeddings: recall is a case-insensitive keyword match over
 keys and values. A *namespace* isolates one owner's facts from another's.
 """
 

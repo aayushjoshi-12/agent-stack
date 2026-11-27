@@ -104,6 +104,20 @@ CREATE TABLE IF NOT EXISTS memory_items (
     PRIMARY KEY (namespace, key)
 );
 
+-- Facts a model proposed after a run (P53); only an accepted one is copied to memory_items.
+CREATE TABLE IF NOT EXISTS memory_suggestions (
+    id         TEXT PRIMARY KEY,
+    namespace  TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    run_id     TEXT NOT NULL,
+    key        TEXT NOT NULL,
+    value      TEXT NOT NULL,
+    status     TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL,
+    decided_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_memory_suggestions_ns ON memory_suggestions(namespace, status);
+
 CREATE TABLE IF NOT EXISTS todos (
     session_id TEXT NOT NULL,
     id         INTEGER NOT NULL,

@@ -46,6 +46,8 @@ export type TurnInfo = {
   user_text: string;
   files_changed: number;
 };
+/** A fact the assistant suggested remembering (P53); stored only once the user keeps it. */
+export type MemorySuggestion = { id: string; key: string; value: string; run_id: string };
 export type FileMoves = { moved: { path: string; action: string }[]; conflicts: string[] };
 export type RewindResult = { session_id: string; prompt: string; files: FileMoves };
 
@@ -145,6 +147,13 @@ export const api = {
   changeFile: (c: Conn, id: string, path: string) =>
     call<ChangedFileDetail>(c, `/sessions/${encodeURIComponent(id)}/changes/file?path=${encodeURIComponent(path)}`),
   usage: (c: Conn, id: string) => call<UsageInfo>(c, `/sessions/${encodeURIComponent(id)}/usage`),
+  /** Pending memory suggestions; with a run id, that run's (the server waits for them). */
+  memorySuggestions: (c: Conn, runId?: string) =>
+    call<MemorySuggestion[]>(c, `/memories/suggestions${runId ? `?run_id=${encodeURIComponent(runId)}` : ""}`),
+  keepMemory: (c: Conn, id: string, edit: { key?: string; value?: string } = {}) =>
+    call<{ id: string; key: string; value: string }>(c, `/memories/suggestions/${encodeURIComponent(id)}/accept`, json(edit)),
+  rejectMemory: (c: Conn, id: string) =>
+    call<void>(c, `/memories/suggestions/${encodeURIComponent(id)}/reject`, { method: "POST" }),
   run: (c: Conn, id: string) => call<RunInfo>(c, `/runs/${encodeURIComponent(id)}`),
   input: (c: Conn, id: string, text: string) =>
     call<{ accepted: boolean }>(c, `/runs/${encodeURIComponent(id)}/input`, json({ text })),

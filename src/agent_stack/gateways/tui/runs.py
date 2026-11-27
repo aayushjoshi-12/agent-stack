@@ -20,7 +20,14 @@ from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.gateways.base import Image, MessageEnvelope
 from agent_stack.gateways.tui.chrome import PromptArea, Welcome
 from agent_stack.gateways.tui.render import tool_args_lines, tool_detail
-from agent_stack.gateways.tui.rows import AgentMessage, Disclosure, Notice, SubagentRow, UserMessage
+from agent_stack.gateways.tui.rows import (
+    AgentMessage,
+    Disclosure,
+    Hint,
+    Notice,
+    SubagentRow,
+    UserMessage,
+)
 from agent_stack.gateways.tui.screens import ApprovalScreen
 from agent_stack.gateways.tui.subagent import SubagentScreen
 from agent_stack.gateways.tui.tabs import Conversation
@@ -327,8 +334,22 @@ class RunsMixin(App[None]):
                 card.finish("failed")
         self._refresh_all()
         self._spawn(self._sync_usage(tab))
+        if outcome == "done" and self.application.memory_suggester is not None:
+            self._spawn(self._offer_memories(tab, tab.run_id))
         if not tab.named:
             self._spawn(self._sync_title(tab))
+
+    async def _offer_memories(self, tab: Conversation, run_id: str | None) -> None:
+        """Say so when the finished run left memory suggestions to review (P53)."""
+        if run_id is None:
+            return
+        try:
+            rows = await self.application.memory_suggestions(self._principal, run_id)
+        except Exception:  # a nicety: never disturb the conversation
+            return
+        if rows and tab.is_attached:
+            n = len(rows)
+            tab.mount(Hint(f"{n} memory suggestion{'' if n == 1 else 's'}: /memories to review"))
 
     async def _finish_with_diff(
         self, tab: Conversation, card: Disclosure, call_id: str, event: AgentEvent

@@ -18,6 +18,7 @@ from agent_stack.app.application import parse_export_args
 from agent_stack.gateways.base import Image, image_paths, load_images
 from agent_stack.gateways.tui.chrome import PromptArea
 from agent_stack.gateways.tui.rows import UserMessage
+from agent_stack.gateways.tui.screens import MemoriesScreen
 
 if TYPE_CHECKING:
     from agent_stack.app.application import Application
@@ -70,6 +71,7 @@ class CommandsMixin(App[None]):
             "model": ("show or switch the model: /model provider:name", None),
             "compact": ("summarise the conversation to free context: /compact [focus]", None),
             "mcp": ("MCP servers: state and tool counts", self.action_show_mcp),
+            "memories": ("review memories the assistant suggested keeping", self.action_memories),
             "export": ("save this conversation to a file: /export [md|json] [path]", None),
             "image": ("attach an image: /image <path> (or type @path in the prompt)", None),
             "help": ("keyboard shortcuts", self.action_help),
@@ -194,6 +196,24 @@ class CommandsMixin(App[None]):
             self.notify("\n".join(lines), title="MCP servers", timeout=15)
 
         self._spawn(show())
+
+    async def action_memories(self) -> None:
+        """``/memories``: keep, edit or reject what the assistant suggested remembering (P53)."""
+        app = self.application
+        if app.memory_suggester is None:
+            self.notify(
+                "Memory suggestions are off. Turn them on: AGENT_STACK_MEMORY_SUGGESTIONS=on"
+            )
+            return
+        rows = await app.memory_suggestions(self._principal)
+
+        async def keep(sid: str, key: str | None, value: str | None) -> None:
+            await app.accept_memory_suggestion(self._principal, sid, key, value)
+
+        async def reject(sid: str) -> None:
+            await app.reject_memory_suggestion(self._principal, sid)
+
+        self.push_screen(MemoriesScreen([(r.id, r.key, r.value) for r in rows], keep, reject))
 
     async def _export(self, argument: str) -> None:
         """``/export [md|json] [path]``: write the conversation into the workspace."""

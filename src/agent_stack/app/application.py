@@ -62,6 +62,7 @@ from agent_stack.gateways.base import (
     SlashCommand,
     format_cost,
 )
+from agent_stack.memory.suggestions import MemorySuggester, MemorySuggestion
 from agent_stack.monitor import MonitorService
 from agent_stack.observability.metrics import Metrics
 from agent_stack.observability.redact import env_secrets, redact
@@ -104,7 +105,10 @@ class Application:
     mcp: McpManager | None = None
     #: Removes what deleted chats left behind (``agent-stack gc``, P50); None: not wired.
     storage_gc: StorageCollector | None = None
+    #: Proposes facts to remember after each run for the user to review (P53); None: off.
+    memory_suggester: MemorySuggester | None = None
     _mcp_started: asyncio.Task[None] | None = field(default=None, repr=False)
+    _suggesting: dict[str, asyncio.Task[None]] = field(default_factory=dict, repr=False)
     _background: set[asyncio.Task[None]] = field(default_factory=set, repr=False)
 
     async def send_message(
@@ -142,7 +146,72 @@ class Application:
         handle = await self.run_manager.start(request)
         if first:
             self._spawn(self._autotitle(envelope.session, handle.run_id, envelope.text))
+        if parent_run_id is None and self.memory_suggester is not None:
+            run_id = handle.run_id
+            task = self._spawn(self._suggest(envelope, handle))
+            self._suggesting[run_id] = task
+            task.add_done_callback(lambda _: self._suggesting.pop(run_id, None))
         return handle
+
+    async def _suggest(self, envelope: MessageEnvelope, handle: RunHandle) -> None:
+        """After the run succeeds, propose facts to remember (pending until the user decides).
+
+        Runs beside the run, never in it: a failure or a slow model only means no suggestions.
+        """
+        suggester = self.memory_suggester
+        if suggester is None:
+            return
+        try:
+            reply = _text_of(await handle.result())
+        except (Exception, asyncio.CancelledError):  # a failed or stopped run: nothing to suggest
+            return
+        try:
+            _, raw = await suggester.suggest(
+                f"user:{envelope.principal}",
+                envelope.session,
+                handle.run_id,
+                envelope.text,
+                reply,
+            )
+            usage = usage_data(raw) if raw is not None else None
+            if usage is not None:
+                await self.event_bus.publish(
+                    AgentEvent.create(
+                        EventType.MODEL_USAGE,
+                        run_id=handle.run_id,
+                        session_id=envelope.session,
+                        sequence=0,
+                        data={**usage, "purpose": "memory"},
+                    )
+                )
+        except Exception:  # the run is done; suggestions are a nicety
+            _LOG.debug("memory suggestion failed", exc_info=True)
+
+    async def memory_suggestions(
+        self, principal: str, run_id: str | None = None
+    ) -> list[MemorySuggestion]:
+        """Pending suggestions: every one, or (waiting for it, bounded) one run's."""
+        if self.memory_suggester is None:
+            return []
+        if run_id is not None and (task := self._suggesting.get(run_id)) is not None:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(asyncio.shield(task), 45)
+        rows = await self.memory_suggester.pending(f"user:{principal}")
+        return [r for r in rows if run_id is None or r.run_id == run_id]
+
+    async def accept_memory_suggestion(
+        self, principal: str, suggestion_id: str, key: str | None = None, value: str | None = None
+    ) -> MemorySuggestion:
+        """Keep a suggestion (as edited) in the memory store. ``KeyError``: none pending."""
+        if self.memory_suggester is None:
+            raise KeyError("memory suggestions are off")
+        return await self.memory_suggester.accept(f"user:{principal}", suggestion_id, key, value)
+
+    async def reject_memory_suggestion(self, principal: str, suggestion_id: str) -> None:
+        """Drop a suggestion; the same fact is not offered again. ``KeyError``: none pending."""
+        if self.memory_suggester is None:
+            raise KeyError("memory suggestions are off")
+        await self.memory_suggester.reject(f"user:{principal}", suggestion_id)
 
     def slash_commands(self) -> list[SlashCommand]:
         """The skills a user can invoke with ``/name`` (a gateway adds its own built-ins)."""
@@ -266,10 +335,11 @@ class Application:
         while self._background:
             await asyncio.gather(*list(self._background), return_exceptions=True)
 
-    def _spawn(self, coro: Coroutine[Any, Any, None]) -> None:
+    def _spawn(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
         task = asyncio.ensure_future(coro)
         self._background.add(task)
         task.add_done_callback(self._background.discard)
+        return task
 
     async def _has_history(self, session_id: str) -> bool:
         try:

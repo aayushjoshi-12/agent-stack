@@ -25,6 +25,7 @@ from agent_stack.core.workspace import WorkspacePolicy
 from agent_stack.memory import MemoryIndex, memory_tools
 from agent_stack.memory.ideas import IdeaInbox, idea_tools
 from agent_stack.memory.store import SqliteMemoryStore
+from agent_stack.memory.suggestions import MemorySuggester, SuggestionStore
 from agent_stack.models.decisions import PREFIX as DECISIONS
 from agent_stack.models.decisions import DecisionModel, build_decision_model
 from agent_stack.models.factory import build_model
@@ -134,6 +135,9 @@ run_command and fix what fails. Edits and commands may need the user's approval;
 rejected, do not retry it unchanged. Report what you changed (file paths) and what you ran.
 """
 
+#: Memory writes the model makes on its own; off while memory suggestions are on (P53).
+_UNREVIEWED_MEMORY_WRITES = frozenset({"remember", "write_memory_topic"})
+
 #: The read-only slice of the filesystem toolset handed to the explorer subagent.
 _READ_ONLY_TOOLS = frozenset({"list_directory", "read_file", "search_files", "grep_files"})
 
@@ -230,6 +234,9 @@ def build_application(config: AppConfig | None = None) -> Application:
         todos=todo_store,
     )
     small = _title_model(resolved.small_model)
+    memory_store = SqliteMemoryStore(db)
+    # P53, opt-in: the small model (else the main one) proposes facts; the user keeps or rejects.
+    suggest_model = (small or _title_model(resolved.model)) if resolved.memory_suggestions else None
     context_builder = ContextBuilder(
         # the token budget decides what is kept; a 40-message window made long tasks forget
         recent_window=10_000,
@@ -276,9 +283,14 @@ def build_application(config: AppConfig | None = None) -> Application:
             shell,
             *control_tools(),
             *skill_tools(skills),
-            *memory_tools(memory),
             *idea_tools(IdeaInbox(resolved.home)),
-            *persistent_memory_tools(SqliteMemoryStore(db)),
+            *(
+                tool
+                for tool in (*memory_tools(memory), *persistent_memory_tools(memory_store))
+                # with suggestions on, only the user stores facts (P53): the model gets no
+                # unreviewed write (`remember`, `write_memory_topic`), only reading and forgetting
+                if not (resolved.memory_suggestions and tool.name in _UNREVIEWED_MEMORY_WRITES)
+            ),
             *todo_tools(todo_store),
             *web_tools(mode=resolved.fetch_mode),
             *screenshot_tools(artifacts),
@@ -359,6 +371,11 @@ def build_application(config: AppConfig | None = None) -> Application:
         skills=skills,
         chat_index=ChatSearchIndex(db, conversation),
         mcp=mcp,
+        memory_suggester=(
+            MemorySuggester(suggest_model, SuggestionStore(db), memory_store)
+            if suggest_model is not None
+            else None
+        ),
         storage_gc=StorageCollector(
             db,
             session_store,

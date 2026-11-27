@@ -15,7 +15,7 @@ cold. `git log` has the later truth.
 | Area | Phases | Notes |
 |---|---|---|
 | Runtime core | 0-20 | loop, limits, deadline, tool timeout, sessions, events, checkpoints, run manager, subagents, skills, instructions, memory files |
-| Memory and tasks | 21, 22 | `remember`/`recall`/`forget` (SQLite, per user); `todo_*` tools (per session) |
+| Memory and tasks | 21, 22, 53 | `remember`/`recall`/`forget` (SQLite, per user); `todo_*` tools (per session); opt-in memory suggestions after each run, kept only when the user accepts them (TUI `/memories`, web panel, Telegram buttons; ADR 022) |
 | Gateways | 23, 25 | TUI (themes, cards, conversations picker, approvals), Telegram (allow-listed; pages and opens any conversation, tool-call viewer, /verbose modes, rename/delete, HTML replies, restart-safe state) |
 | Trust | 26, 27, 28, 42 | approval flow; redaction, JSON logs, metrics, eight invariants; hardening matrix; optional OpenTelemetry traces (`--extra otel`) |
 | Event log, branching | 29, 30 | durable redacted `event_log` table + `Application.replay`; `Application.branch_session` forks a conversation at a logged event |
@@ -50,7 +50,7 @@ conversation's own model summarises it from its real input and the summary is sa
 transcript with the files in use (P31; `AGENT_STACK_COMPACT_AT`, `off` disables); past 100% old
 tool results are cleared and then the oldest messages dropped with a note. Old chats are found by
 ranked full-text search (P32). Not built: semantic (embedding) retrieval over old chats,
-automatic memory extraction. Not yet run against a real model: compaction (tests only).
+automatic memory extraction without review (P53 suggests, the user decides). Not yet run against a real model: compaction (tests only).
 ## Small model for side work
 
 - `AGENT_STACK_SMALL_MODEL` (ADR 014): the `explorer` subagent and conversation titles use a

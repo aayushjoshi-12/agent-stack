@@ -2238,6 +2238,52 @@ would have double-retried. Failover is per call, not sticky (ticket).
 
 ---
 
+## Phase 53 — Reviewable memory suggestions ✅
+
+**Goal.** After a run the assistant can suggest facts worth remembering; the user keeps (as is or
+edited) or rejects each, and only kept ones reach the memory store. Nothing is stored without the
+user.
+
+**Deliverables**
+- Opt-in `AGENT_STACK_MEMORY_SUGGESTIONS=on` (default off: one more model call per run, and the
+  turn goes to the side model's provider). The small model does it (the main one without a split).
+- `memory/suggestions.py`: `SuggestionStore` over a new `memory_suggestions` table (pending,
+  accepted, rejected rows kept) and `MemorySuggester`: structured output (`function_calling`), at
+  most three `{key, value}`; code drops empty ones, ones carrying a secret, ones already stored and
+  ones suggested before in any state. The turn (the user's message and the final reply, no tool
+  output) is wrapped in `<turn>` tags and treated as data.
+- `Application`: after each top-level run a background task (the titling set; it awaits the run's
+  result, suggests nothing for a failed or stopped run, never raises) saves pending suggestions;
+  `memory_suggestions(principal, run_id=None)` (with a run id it waits, bounded, for that run's),
+  `accept_memory_suggestion` (the only path into `memory_items`, checked against the principal's
+  namespace) and `reject_memory_suggestion`. The call's usage is a `model.usage` event with
+  `purpose: memory`.
+- With suggestions on, the model's own memory writes (`remember`, `write_memory_topic`) are not wired; `recall`, `forget` and `read_memory_topic` stay.
+- TUI: a quiet `Hint` row after the run and `/memories` (`MemoriesScreen`: a keep, e edit as
+  `key: value`, r reject). Web: `GET /memories/suggestions[?run_id=]`, `POST
+  /memories/suggestions/{id}/accept` (optional edit) and `/reject`; a panel above the composer
+  (Keep / Edit / Reject). Telegram: Keep / Reject buttons per suggestion after a run, `/memories`.
+- ADR 022. Measured keyword recall before any embeddings (handoff).
+
+**Acceptance**
+- Tests with fake models (`tests/integration/test_memory_suggestions.py`, TUI and Telegram unit
+  tests): suggestions produced and persisted across a reopen; accept (also edited) stores, reject
+  is not offered again; an injected "remember X" only becomes a pending row and another principal
+  cannot accept it; secrets, duplicates and extras dropped; a failing suggester, a failed run and a
+  stopped run never break anything; web endpoints; bootstrap wires it (and drops `remember` and `write_memory_topic`) only
+  when on.
+- Smoke on a real cheap model: a real run produced suggestions, kept in the TUI (rendered and
+  looked at) and edited and kept in the real web UI through Playwright (screenshots looked at, 1280
+  and 390 px), then recalled in a new chat.
+
+**Built.** `memory/suggestions.py`, `persistence/migrations.py`, `app/application.py`,
+`app/bootstrap.py`, `app/config.py`, `gateways/tui/{screens,commands,runs,rows}.py` and
+`styles.tcss`, `gateways/web/app.py`, `gateways/telegram/gateway.py`,
+`web/components/MemorySuggestions.tsx`, `web/app/page.tsx`, `web/lib/api.ts`, `.env.example`,
+ADR 022. Smoke: `tmp/smoke_tests/P53-memory-suggestions.py`, `tmp/smoke_tests/P53-recall-measure.py`.
+
+---
+
 ## Phase 54 — Side effects run at most once ✅
 
 **Goal.** A tool call that ran is never hidden from the next turn, so a retry does not run a

@@ -154,6 +154,13 @@ class ModelBody(BaseModel):
     model: str = Field(min_length=1, max_length=200)
 
 
+class MemoryBody(BaseModel):
+    """An edit made before keeping a suggested memory; unset fields keep the suggestion's."""
+
+    key: str | None = Field(default=None, min_length=1, max_length=100)
+    value: str | None = Field(default=None, min_length=1, max_length=1000)
+
+
 class CompactBody(BaseModel):
     focus: str = Field(default="", max_length=500)
 
@@ -443,6 +450,40 @@ def create_app(
         """Summarise the conversation so far in place (waits for a running turn to finish)."""
         await owned_session(session_id)
         return {"messages": await application.compact_session(session_id, body.focus)}
+
+    # ── memory suggestions (P53) ─────────────────────────────────────────────
+    @api.get("/memories/suggestions", dependencies=auth)
+    async def memory_suggestions(
+        run_id: Annotated[str | None, Query(max_length=100)] = None,
+    ) -> list[dict[str, str]]:
+        """Pending suggestions; with ``run_id``, that run's (waiting for them to be made)."""
+        if run_id is not None:
+            await owned_run(run_id)
+        rows = await application.memory_suggestions(principal, run_id)
+        return [{"id": r.id, "key": r.key, "value": r.value, "run_id": r.run_id} for r in rows]
+
+    @api.post("/memories/suggestions/{suggestion_id}/accept", dependencies=auth)
+    async def accept_memory(suggestion_id: str, body: MemoryBody) -> dict[str, str]:
+        try:
+            row = await application.accept_memory_suggestion(
+                principal, suggestion_id, body.key, body.value
+            )
+        except KeyError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such pending suggestion") from None
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
+        return {"id": row.id, "key": row.key, "value": row.value}
+
+    @api.post(
+        "/memories/suggestions/{suggestion_id}/reject",
+        dependencies=auth,
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def reject_memory(suggestion_id: str) -> None:
+        try:
+            await application.reject_memory_suggestion(principal, suggestion_id)
+        except KeyError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such pending suggestion") from None
 
     # ── history: rewind, branches, references ────────────────────────────────
     @api.get("/sessions/{session_id}/turns", dependencies=auth)

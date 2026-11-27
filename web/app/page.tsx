@@ -6,7 +6,8 @@ import { Composer } from "@/components/Composer";
 import { Connect } from "@/components/Connect";
 import { Mark } from "@/components/Mark";
 import { Sidebar } from "@/components/Sidebar";
-import { api, ApiError, type ChangedFile, type Conn, type HistoryRow, type RewindResult, type SessionSummary, type SlashCommand, type TurnInfo, type UsageInfo } from "@/lib/api";
+import { api, ApiError, type ChangedFile, type Conn, type HistoryRow, type MemorySuggestion, type RewindResult, type SessionSummary, type SlashCommand, type TurnInfo, type UsageInfo } from "@/lib/api";
+import { MemorySuggestions } from "@/components/MemorySuggestions";
 import { ChangesPanel } from "@/components/ChangesPanel";
 import { HistoryPanel, type HistoryTab } from "@/components/HistoryPanel";
 import { RewindMenu, type RewindMode } from "@/components/RewindMenu";
@@ -92,6 +93,7 @@ export default function Page() {
   const [skills, setSkills] = useState<SlashCommand[]>([]);
   const [mode, setMode] = useState<string>("ask");
   const [notice, setNotice] = useState("");
+  const [memories, setMemories] = useState<MemorySuggestion[]>([]);
   /** The turns behind the chat (across forks), and the message whose rewind choices are open. */
   const [turns, setTurns] = useState<TurnInfo[]>([]);
   const [picking, setPicking] = useState<number | null>(null);
@@ -175,6 +177,8 @@ export default function Page() {
         setDraft({ text: unreadRef.current.join("\n\n"), n: draftCount.current });
       }
       setQueued([]);
+      const finishedRun = id ? runBySession.current.get(id) : undefined;
+      if (finishedRun && phase === "completed") offerMemories(finishedRun);
       if (id) runBySession.current.delete(id);
       if (id && phase === "completed" && live.state.completedEventId) setForkable({ sessionId: id, eventId: live.state.completedEventId });
       void (async () => {
@@ -294,7 +298,39 @@ export default function Page() {
     if (!conn) return;
     api.commands(conn).then(setSkills).catch(() => setSkills([]));
     api.approvalMode(conn).then((r) => setMode(r.mode)).catch(() => undefined);
+    api.memorySuggestions(conn).then(setMemories).catch(() => setMemories([]));
   }, [conn]);
+
+  // Memory suggestions (P53): a finished run's arrive a moment after it ends; merged by id.
+  const offerMemories = useCallback(
+    (runId: string) => {
+      if (!conn) return;
+      void api
+        .memorySuggestions(conn, runId)
+        .then((rows) => setMemories((now) => [...now, ...rows.filter((r) => !now.some((m) => m.id === r.id))]))
+        .catch(() => undefined); // a nicety: never block the chat
+    },
+    [conn],
+  );
+  const keepMemory = async (item: MemorySuggestion, edit?: { key: string; value: string }) => {
+    if (!conn) return;
+    try {
+      const kept = await api.keepMemory(conn, item.id, edit);
+      setMemories((now) => now.filter((m) => m.id !== item.id));
+      setNotice(`Remembered: ${kept.key}: ${kept.value}`);
+    } catch (e) {
+      fail(e);
+    }
+  };
+  const rejectMemory = async (item: MemorySuggestion) => {
+    if (!conn) return;
+    try {
+      await api.rejectMemory(conn, item.id);
+      setMemories((now) => now.filter((m) => m.id !== item.id));
+    } catch (e) {
+      fail(e);
+    }
+  };
 
   const toggleMode = useCallback(async () => {
     if (!conn) return;
@@ -807,6 +843,7 @@ export default function Page() {
 
         <div className="border-t-2 border-line bg-paper px-4 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
           <div className="mx-auto max-w-3xl">
+            <MemorySuggestions items={memories} onKeep={keepMemory} onReject={rejectMemory} />
             <Composer
               running={running}
               stopping={stopping}

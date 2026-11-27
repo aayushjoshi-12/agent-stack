@@ -85,6 +85,7 @@ _COMMANDS = [
     ("export", "Send this conversation as a file: /export [md|json]"),
     ("cost", "What this conversation has cost so far"),
     ("mcp", "MCP servers: state and tool counts"),
+    ("memories", "Review memories the assistant suggested keeping"),
     ("status", "Where you are and what is running"),
     ("cancel", "Stop the current run"),
     ("help", "Show this list"),
@@ -109,6 +110,7 @@ _HELP = (
     "/<skill> [request]  run a skill (type / to see them)\n"
     "/cost  what this conversation has cost (tokens and dollars)\n"
     "/mcp  the MCP servers, their state and tool counts\n"
+    "/memories  keep or reject memories the assistant suggested (when turned on)\n"
     "/status  where you are and what is running\n"
     "/cancel  stop the current run"
 )
@@ -268,6 +270,7 @@ class TelegramGateway:
         self._message_limit = RateLimiter(config.rate_messages, _RATE_WINDOW, clock)
         self._button_limit = RateLimiter(config.rate_requests, _RATE_WINDOW, clock)
         self._slowed_at: dict[int, float] = {}
+        self._side: set[asyncio.Task[bool]] = set()  # memory offers after a run (P53)
 
     # ── persisted chat state ─────────────────────────────────────────────────
     def _read_state(self) -> dict[str, dict[str, Any]]:
@@ -499,6 +502,8 @@ class TelegramGateway:
             await self._cmd_cost(chat)
         elif command == "/status":
             await self._cmd_status(chat)
+        elif command == "/memories":
+            await self._cmd_memories(chat)
         elif command == "/mcp":
             servers = await self._app.mcp_servers()
             lines = [s.line() for s in servers] or ["No MCP servers (add them to .mcp.json)."]
@@ -934,8 +939,47 @@ class TelegramGateway:
             await self._edit(chat.chat_id, message_id, f"Approval mode: {now}.")
         elif prefix in ("rw", "rm"):
             await self._on_rewind(chat, callback_id, message_id, data)
+        elif prefix == "ms":
+            await self._on_memory(chat, callback_id, message_id, data)
         else:
             await self._api.answer_callback_query(callback_id)
+
+    # ── memory suggestions (P53) ─────────────────────────────────────────────
+    async def _cmd_memories(self, chat: _Chat) -> None:
+        if self._app.memory_suggester is None:
+            await self._say(chat, "Memory suggestions are off (AGENT_STACK_MEMORY_SUGGESTIONS=on).")
+        elif not await self._offer_memories(chat, None):
+            await self._say(chat, "No memory suggestions to review.")
+
+    async def _offer_memories(self, chat: _Chat, run_id: str | None) -> bool:
+        """One message per pending suggestion, with Keep and Reject buttons."""
+        try:
+            rows = await self._app.memory_suggestions(chat.principal, run_id)
+        except Exception:  # a nicety: never disturb the chat
+            return False
+        for row in rows:
+            buttons = [_button("Keep", f"ms:a:{row.id}"), _button("Reject", f"ms:r:{row.id}")]
+            await self._say(
+                chat, f"Remember this?\n{row.key}: {row.value}", {"inline_keyboard": [buttons]}
+            )
+        return bool(rows)
+
+    async def _on_memory(self, chat: _Chat, callback_id: str, message_id: int, data: str) -> None:
+        _, verdict, sid = [*data.split(":", 2), "", ""][:3]
+        try:
+            if verdict == "a":
+                row = await self._app.accept_memory_suggestion(chat.principal, sid)
+                text = f"Remembered: {row.key}: {row.value}"
+            else:
+                await self._app.reject_memory_suggestion(chat.principal, sid)
+                text = "Rejected; it will not be suggested again."
+        except KeyError:
+            await self._api.answer_callback_query(callback_id, "Already decided.")
+            return
+        await self._api.answer_callback_query(
+            callback_id, "Saved" if verdict == "a" else "Rejected"
+        )
+        await self._edit(chat.chat_id, message_id, text)
 
     async def _on_approval(self, chat: _Chat, callback_id: str, data: str) -> None:
         _, approval_id, verdict = data.split(":", 2)
@@ -1105,6 +1149,10 @@ class TelegramGateway:
                 finished = await self._on_event(chat, event) or finished
             if not finished:  # a hard cancel ends the stream with no terminal event
                 await self._finish_status(chat, "■ cancelled")
+            elif self._app.memory_suggester is not None:  # waits for the suggester: not in-line
+                task = asyncio.create_task(self._offer_memories(chat, handle.run_id))
+                self._side.add(task)
+                task.add_done_callback(self._side.discard)
         except Exception as exc:  # a broken run must never kill the polling loop
             await self._say(chat, f"✗ {type(exc).__name__}: {str(exc)[:300]}")
         finally:

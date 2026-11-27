@@ -126,6 +126,29 @@ class FakeApplication:
     async def drain_background(self) -> None:
         self.drained = True
 
+    # memory suggestions (P53): set `memory_suggester` to anything to turn them on
+    memory_suggester: Any = None
+    suggested: list[Any] = []  # noqa: RUF012 - replaced per test, never mutated in place
+    kept: list[tuple[str, str | None, str | None]] = []  # noqa: RUF012
+    rejected: list[str] = []  # noqa: RUF012
+
+    async def memory_suggestions(self, principal: str, run_id: str | None = None) -> list[Any]:
+        return [s for s in self.suggested if run_id is None or s.run_id == run_id]
+
+    async def accept_memory_suggestion(
+        self, principal: str, sid: str, key: str | None = None, value: str | None = None
+    ) -> Any:
+        row = next((s for s in self.suggested if s.id == sid), None)
+        if row is None:
+            raise KeyError(sid)
+        self.kept = [*self.kept, (sid, key, value)]
+        self.suggested = [s for s in self.suggested if s.id != sid]
+        return row
+
+    async def reject_memory_suggestion(self, principal: str, sid: str) -> None:
+        self.rejected = [*self.rejected, sid]
+        self.suggested = [s for s in self.suggested if s.id != sid]
+
     def __init__(
         self,
         *,

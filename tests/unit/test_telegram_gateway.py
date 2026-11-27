@@ -1426,3 +1426,43 @@ async def test_button_presses_are_limited_too_and_off_disables_it() -> None:
     for _ in range(40):
         await _say(gateway, "/help")
     assert len(api.sent) == 40
+
+
+async def test_memory_suggestions_come_with_keep_and_reject_buttons() -> None:
+    from types import SimpleNamespace
+
+    app = FakeApplication(events=_reply_events("noted"))
+    app.memory_suggester = object()
+    app.suggested = [
+        SimpleNamespace(id="m1", key="editor", value="Helix", run_id="run-1"),
+        SimpleNamespace(id="m2", key="shell", value="fish", run_id="run-1"),
+    ]
+    gateway, api = _gateway(app)
+
+    await _say(gateway, "I use helix and fish")
+    await asyncio.gather(*gateway._side)
+
+    offers = [(t, m) for _, t, m in api.sent if t.startswith("Remember this?")]
+    assert [t for t, _ in offers] == [
+        "Remember this?\neditor: Helix",
+        "Remember this?\nshell: fish",
+    ]
+    assert offers[0][1] == {
+        "inline_keyboard": [
+            [
+                {"text": "Keep", "callback_data": "ms:a:m1"},
+                {"text": "Reject", "callback_data": "ms:r:m1"},
+            ]
+        ]
+    }
+    await gateway.handle_update(_callback("ms:a:m1"))
+    await gateway.handle_update(_callback("ms:r:m2"))
+    await gateway.handle_update(_callback("ms:a:m1"))  # a second tap: already decided
+    assert app.kept == [("m1", None, None)] and app.rejected == ["m2"]
+    assert [t for _, _, t in api.edits][-2:] == [
+        "Remembered: editor: Helix",
+        "Rejected; it will not be suggested again.",
+    ]
+    assert api.answers[-1] == ("cb-ms:a:m1", "Already decided.")
+    await _say(gateway, "/memories")
+    assert api.texts()[-1] == "No memory suggestions to review."

@@ -13,7 +13,7 @@ from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.markup import escape
 from textual.screen import ModalScreen
-from textual.widgets import OptionList, Static
+from textual.widgets import Input, OptionList, Static
 from textual.widgets.option_list import Option
 
 from agent_stack.app.application import FileDiff
@@ -27,6 +27,7 @@ __all__ = [
     "ApprovalScreen",
     "BranchesScreen",
     "ChangesScreen",
+    "MemoriesScreen",
     "RewindScreen",
     "SessionPicker",
 ]
@@ -191,6 +192,119 @@ class SessionPicker(ModalScreen[str | None]):
         self._foot(self.FOOT if listing.option_count else self._EMPTY)
 
     def action_close(self) -> None:
+        self.dismiss(None)
+
+
+class MemoriesScreen(ModalScreen[None]):
+    """Facts the assistant suggested remembering: keep, edit then keep, or reject each (P53).
+
+    ``keep`` and ``reject`` are supplied by the app, so the screen never touches storage.
+    """
+
+    BINDINGS: ClassVar[list[Any]] = [
+        Binding("escape,q", "close", "close"),
+        Binding("a", "keep", "keep"),
+        Binding("e", "edit", "edit"),
+        Binding("r", "reject", "reject"),
+    ]
+    FOOT = (
+        "[$foreground-muted]a keep · e edit · r reject · esc close · "
+        "nothing is remembered until you keep it[/]"
+    )
+    _EMPTY = "[$foreground-muted]No memory suggestions to review. esc to close[/]"
+
+    def __init__(
+        self,
+        suggestions: list[tuple[str, str, str]],
+        keep: Callable[[str, str | None, str | None], Awaitable[None]],
+        reject: Callable[[str], Awaitable[None]],
+    ) -> None:
+        super().__init__()
+        self._rows = {sid: (key, value) for sid, key, value in suggestions}
+        self._keep = keep
+        self._reject = reject
+        self._editing: str | None = None
+
+    def compose(self):  # type: ignore[no-untyped-def]
+        with Vertical(id="picker-card"):
+            yield Static("[bold $primary]Memory suggestions[/]", id="picker-title")
+            yield OptionList(
+                *(self._option(sid, k, v) for sid, (k, v) in self._rows.items()), id="picker-list"
+            )
+            yield Input(id="memory-edit", placeholder="key: value", select_on_focus=False)
+            yield Static(self.FOOT if self._rows else self._EMPTY, id="picker-foot")
+
+    @staticmethod
+    def _option(sid: str, key: str, value: str) -> Option:
+        return Option(f"[bold]{escape(key)}[/]\n  {escape(value)}\n", id=sid)
+
+    def on_mount(self) -> None:
+        self.query_one(Input).display = False
+        listing = self.query_one(OptionList)
+        listing.focus()
+        if self._rows:
+            listing.highlighted = 0
+
+    def _current(self) -> str | None:
+        listing = self.query_one(OptionList)
+        if listing.highlighted is None or listing.option_count == 0:
+            return None
+        return listing.get_option_at_index(listing.highlighted).id
+
+    async def _decide(self, sid: str, work: Awaitable[None], done: str) -> None:
+        try:
+            await work
+        except Exception as exc:  # a failed save must not take the screen (or app) down
+            self.notify(f"Could not save: {exc}", severity="error")
+            return
+        self._rows.pop(sid, None)
+        listing = self.query_one(OptionList)
+        listing.remove_option(sid)
+        self.notify(done)
+        self.query_one("#picker-foot", Static).update(self.FOOT if self._rows else self._EMPTY)
+
+    async def action_keep(self) -> None:
+        if (sid := self._current()) is not None:
+            await self._decide(sid, self._keep(sid, None, None), "Remembered.")
+
+    async def action_reject(self) -> None:
+        if (sid := self._current()) is not None:
+            await self._decide(sid, self._reject(sid), "Rejected; it will not be suggested again.")
+
+    def action_edit(self) -> None:
+        if (sid := self._current()) is None:
+            return
+        self._editing = sid
+        key, value = self._rows[sid]
+        box = self.query_one(Input)
+        box.value = f"{key}: {value}"
+        box.display = True
+        box.focus()
+        self.query_one("#picker-foot", Static).update(
+            "[$foreground-muted]enter keep the edited memory · esc cancel[/]"
+        )
+
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
+        sid, self._editing = self._editing, None
+        key, sep, value = event.value.partition(":")
+        self._stop_editing()
+        if sid is None:
+            return
+        if not sep or not key.strip() or not value.strip():
+            self.notify("Write it as key: value", severity="warning")
+            return
+        await self._decide(sid, self._keep(sid, key.strip(), value.strip()), "Remembered.")
+
+    def _stop_editing(self) -> None:
+        self.query_one(Input).display = False
+        self.query_one(OptionList).focus()
+        self.query_one("#picker-foot", Static).update(self.FOOT if self._rows else self._EMPTY)
+
+    def action_close(self) -> None:
+        if self._editing is not None:
+            self._editing = None
+            self._stop_editing()
+            return
         self.dismiss(None)
 
 

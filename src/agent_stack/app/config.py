@@ -165,6 +165,10 @@ class AppConfig:
     #: Per-conversation spend cap in USD; a conversation at or over it starts no further run.
     #: ``None`` (the default) means no cap.
     budget_usd: float | None = None
+    #: After each run, the small model proposes facts to remember for you to keep or reject
+    #: (P53). Off by default: one more model call per run, and the turn goes to that model's
+    #: provider. ``AGENT_STACK_MEMORY_SUGGESTIONS=on``.
+    memory_suggestions: bool = False
     #: Tools that pause for a human's approval before they run. Comma-separated in
     #: ``AGENT_STACK_APPROVAL_TOOLS``; set it empty to run everything unattended.
     approval_tools: tuple[str, ...] = (
@@ -258,6 +262,8 @@ class AppConfig:
             ),
             auto_model=_auto_model(source.get("AGENT_STACK_AUTO_MODEL", defaults.auto_model or "")),
             budget_usd=budget,
+            memory_suggestions=source.get("AGENT_STACK_MEMORY_SUGGESTIONS", "").strip().lower()
+            in ("1", "on", "true", "yes"),
             workspace=workspace,
             home=Path(home_raw).expanduser() if home_raw else _default_home(),
             skill_roots=skill_roots,

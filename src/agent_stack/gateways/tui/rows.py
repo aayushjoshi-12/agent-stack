@@ -27,6 +27,7 @@ from agent_stack.gateways.tui.render import diff_kind
 __all__ = [
     "AgentMessage",
     "Disclosure",
+    "Hint",
     "Notice",
     "SubagentRow",
     "UserMessage",
@@ -165,6 +166,13 @@ class Notice(Static):
 
     def __init__(self, text: str) -> None:
         super().__init__(f"✗ {escape(text)}", classes="notice")
+
+
+class Hint(Static):
+    """A quiet line between messages: something to look at, not an error (P53)."""
+
+    def __init__(self, text: str) -> None:
+        super().__init__(f"[$accent]→[/] {escape(text)}", classes="hint")
 
 
 class SubagentRow(Static, can_focus=True):
