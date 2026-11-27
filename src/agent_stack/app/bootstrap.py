@@ -296,6 +296,7 @@ def build_application(config: AppConfig | None = None) -> Application:
         checkpoint_store=checkpoint_store,
         event_bus=event_bus,
         agent_factory=factory,
+        subagent_record=conversation.write_subagent_record,
     )
 
     application = Application(

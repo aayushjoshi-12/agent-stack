@@ -12,8 +12,9 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage
@@ -131,8 +132,10 @@ class RunManager:
         event_bus: EventBus | None = None,
         checkpoint_store: CheckpointStore | None = None,
         agent_factory: AgentFactory | None = None,
+        subagent_record: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> None:
         self._runtime = runtime
+        self._subagent_record = subagent_record
         self._run_store = run_store
         self._event_bus = event_bus
         self._checkpoint_store = checkpoint_store
@@ -190,6 +193,7 @@ class RunManager:
         # (and the TUI) learns a subagent exists. The child's own lifecycle events stream
         # on its own run id, tagged with parent_run_id.
         if request.parent_run_id is not None:
+            self._record_subagent(run, request)
             await self._publish_subagent_started(
                 child_run_id=run.id,
                 agent_name=runtime.agent.name,
@@ -274,6 +278,7 @@ class RunManager:
                 await self._run_store.save(run)
             finally:
                 if request.parent_run_id is not None:
+                    self._record_subagent(run, request)
                     await self._publish_subagent_completed(run, request.parent_run_id)
                 if self._event_bus is None:
                     # No pump to close it: end the event stream right here.
@@ -417,8 +422,11 @@ class RunManager:
         if self._agent_factory is None:
             raise RuntimeError("RunManager has no agent factory; cannot start a subagent")
         child_runtime = self._agent_factory.create(agent)
+        # The child's id starts with the chat's, so its stored conversation sits inside it.
+        parent = await self._run_store.get(parent_run_id)
+        prefix = parent.session_id if parent is not None else parent_run_id
         request = RunRequest(
-            session_id=f"{parent_run_id}::{agent.name}::{uuid4().hex}",
+            session_id=f"{prefix}::{agent.name}::{uuid4().hex}",
             user_id=user_id,
             message=message,
             parent_run_id=parent_run_id,
@@ -516,6 +524,26 @@ class RunManager:
         )
         with contextlib.suppress(Exception):
             await self._event_bus.publish(event)
+
+    def _record_subagent(self, run: Run, request: RunRequest) -> None:
+        """Keep an audit record of a subagent run beside its transcript (never fails the run)."""
+        if self._subagent_record is None:
+            return
+        record = {
+            "agent": self._agent_names.get(run.id, ""),
+            "run_id": run.id,
+            "parent_run_id": request.parent_run_id,
+            "session_id": run.session_id,
+            "depth": request.depth,
+            "task": request.message,
+            "status": run.status.value,
+            "steps": run.step_count,
+            "tool_calls": run.tool_call_count,
+            "error": run.error,
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+        with contextlib.suppress(Exception):
+            self._subagent_record(run.session_id, record)
 
     @staticmethod
     def _record_counters(run: Run) -> Callable[[int, int], None]:

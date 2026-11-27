@@ -1983,6 +1983,34 @@ mount), `settle` on the final; the thinking card is mounted above the streamed r
 and the line REPL ignore deltas. Tests: `tests/unit/test_streaming.py`, web gateway SSE test,
 TUI tests, `web/lib/events.test.ts`. Smoke: `tmp/smoke_tests/P45-token-streaming-smoke.py`.
 
+## Phase 46 — Subagent conversations stored inside their chat ✅
+
+**Goal.** Every subagent run can be audited later from the chat that started it: its own
+conversation and a record of its ids, task and outcome, in the chat's folder.
+
+**Deliverables**
+- A child session id is `<parent session id>::<agent>::<id>` (was `<parent run id>::...`), and
+  `FileConversationStore.session_dir` maps it to `<chat>/subagents/<agent>-<id>/` (a subagent of
+  a subagent nests one level deeper). Deleting the chat deletes them. Older folders named by the
+  parent run id are still found where they are.
+- `subagent.json` beside the child transcript: agent, run id, parent run id, session id, depth,
+  task, status, steps, tool calls, error, `updated_at`. Written when the child starts and again
+  when it ends (`RunManager(subagent_record=...)`, wired in bootstrap).
+- A failed or cancelled run reports the steps and tool calls it made (they were 0), so the
+  parent's `delegate` summary, `subagent.completed` and the runs table are right.
+
+**Acceptance**
+- tests: a child that hits its tool-call limit is stored under `<chat>/subagents/`, its record
+  has the run ids, task, `failed`, the error and real counts, and the parent's summary says how
+  far it got; an older flat folder still resolves; nested subagents nest.
+- Smoke with the real default model: a delegation in a fresh workspace lands in
+  `<chat>/subagents/explorer-<id>/` with `subagent.json`, `transcript.jsonl`, `transcript.md`.
+
+**Built.** `core/run.py` (`start_subagent` prefixes the parent run's session id,
+`_record_subagent`), `core/runtime.py` (counters on failure and hard cancel),
+`persistence/conversation.py` (`session_dir`, `write_subagent_record`), `app/bootstrap.py`.
+Tests: `tests/unit/test_subagents.py`. Smoke: `tmp/smoke_tests/P46-subagent-folders.py`.
+
 ---
 
 # Appendix A — Target file tree

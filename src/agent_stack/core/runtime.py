@@ -636,9 +636,13 @@ class AgentRuntime:
             await asyncio.shield(
                 self._persist_partial(session, stored_version, session_id, new_messages)
             )
+            if counters is not None:
+                counters(step_count, tool_call_count)
             raise
         except Exception as exc:
             await self._persist_partial(session, stored_version, session_id, new_messages)
+            if counters is not None:  # a failed run still reports how far it got
+                counters(step_count, tool_call_count)
             await self._emit(
                 EventType.RUN_FAILED,
                 run_id=run_id,

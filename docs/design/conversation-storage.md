@@ -36,6 +36,8 @@ dependency. The composition root decides which implementation it gets.
 ├── transcript.jsonl  # machine-readable, append-only (one record per line)
 ├── artifacts/        # files generated or shared in this chat
 │   └── <artifact_id>__<name>
+├── subagents/        # P46: each subagent's conversation, same layout + subagent.json
+│   └── <agent>-<id>/ #   (run ids, task, status, counts, error)
 └── (later) run-<run_id>.md   # optional per-run view
 ```
 

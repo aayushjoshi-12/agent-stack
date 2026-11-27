@@ -9,6 +9,7 @@ real provider.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Sequence
 from typing import Any
 
@@ -536,3 +537,69 @@ async def test_send_input_is_refused_once_the_run_is_past_its_final_answer() -> 
     assert manager._drain_inbox(handle.run_id, close=True) == []  # empty: now closed
     assert await manager.send_input(handle.run_id, "too late") is False
     await handle.result()
+
+
+async def test_a_subagent_is_stored_inside_its_chat_with_an_audit_record(tmp_path: Any) -> None:
+    """P46: the child's session id starts with the chat's; a failed child keeps its counts."""
+    from agent_stack.persistence.conversation import FileConversationStore
+
+    session_store = InMemorySessionStore()
+    run_store = InMemoryRunStore()
+    bus = RecordingEventBus()
+    files = FileConversationStore(tmp_path)
+
+    explorer = Agent(
+        name="explorer", model="test:model", limits=AgentLimits(max_steps=10, max_tool_calls=1)
+    )
+    probe = ConcurrencyProbe(seconds=0)
+    child_model = FakeChatModel([ai(tool_calls=[call("probe", {}), call("probe", {})])])
+    child_runtime = _runtime(explorer, child_model, [probe], session_store, bus)
+    parent_model = FakeChatModel(
+        [
+            ai(tool_calls=[call("delegate", {"agent_name": "explorer", "task": "look"})]),
+            ai("done"),
+        ]
+    )
+    parent = Agent(
+        name="assistant",
+        model="test:model",
+        tools=(delegate,),
+        subagents=(SubAgentSpec("explorer", "Read-only exploration.", explorer),),
+    )
+    manager = RunManager(
+        runtime=_runtime(parent, parent_model, [delegate], session_store, bus),
+        run_store=run_store,
+        event_bus=bus,
+        agent_factory=FakeFactory({"explorer": child_runtime}),
+        subagent_record=files.write_subagent_record,
+    )
+
+    handle = await manager.start(RunRequest(session_id="tui:me-1", user_id="u1", message="go"))
+    await handle.result()
+
+    [child] = await run_store.list_runs(handle.run_id)
+    assert child.session_id.startswith("tui:me-1::explorer::")
+    assert child.status is RunStatus.FAILED
+    assert (child.step_count, child.tool_call_count) == (1, 2)  # not 0, 0
+    folder = files.session_dir(child.session_id)
+    assert folder.parent == tmp_path / "sessions" / "tui:me-1" / "subagents"
+    record = json.loads((folder / "subagent.json").read_text())
+    assert record["run_id"] == child.id
+    assert record["parent_run_id"] == handle.run_id
+    assert record["task"] == "look"
+    assert record["status"] == "failed"
+    assert "limit" in record["error"].lower()
+    # The parent was told how far the child got.
+    assert any("1 steps, 2 tool calls" in str(m.content) for m in parent_model.calls[1])
+
+
+def test_an_older_subagent_folder_is_still_found(tmp_path: Any) -> None:
+    from agent_stack.persistence.conversation import FileConversationStore
+
+    files = FileConversationStore(tmp_path)
+    old = "0f" * 16 + "::explorer::abc"
+    (tmp_path / "sessions" / old).mkdir(parents=True)
+    assert files.session_dir(old) == tmp_path / "sessions" / old
+    assert files.session_dir("c::explorer::x::helper::y") == (
+        tmp_path / "sessions" / "c" / "subagents" / "explorer-x" / "subagents" / "helper-y"
+    )

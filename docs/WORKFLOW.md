@@ -146,6 +146,7 @@ A phase may start only when every phase it depends on has passed its acceptance 
 | P43 MCP client | P02, P26 |
 | P44 Images in | P34, P38 |
 | P45 Token streaming | P08, P24, P29 |
+| P46 Subagent conversations in their chat | P09, P20 |
 
 ---
 

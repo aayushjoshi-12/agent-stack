@@ -10,7 +10,13 @@ Layout::
     ├── session.json      # metadata mirror of the SQLite row
     ├── transcript.jsonl  # append-only, one record per line
     ├── transcript.md     # human-readable rendering, append-only
-    └── artifacts/        # files created or shared in this chat, and the chat's images
+    ├── artifacts/        # files created or shared in this chat, and the chat's images
+    └── subagents/<agent>-<id>/   # each subagent's own conversation, same layout, plus
+                                  # subagent.json: its run ids, task, status and counts
+
+A subagent's session id is ``<parent session id>::<agent>::<id>``, so its folder sits inside
+the chat that started it (a subagent of a subagent nests one level deeper) and goes when the
+chat is deleted. Older subagent folders, named by the parent *run* id, stay where they are.
 
 An image in a message is saved once as ``artifacts/<sha256[:16]>.<ext>`` and the transcript line
 names it (``data.images``); reading the conversation turns the names back into image blocks.
@@ -80,7 +86,17 @@ class FileConversationStore:
     # -- ConversationStore -------------------------------------------------
 
     def session_dir(self, session_id: str) -> Path:
-        return self._sessions_root / session_id
+        flat = self._sessions_root / session_id
+        if "::" not in session_id or flat.is_dir():  # a chat, or an older subagent folder
+            return flat
+        parent, agent, child = session_id.rsplit("::", 2)
+        return self.session_dir(parent) / "subagents" / f"{agent}-{child}"
+
+    def write_subagent_record(self, session_id: str, record: dict[str, Any]) -> None:
+        """Write ``subagent.json`` (run ids, task, status, counts) beside a subagent's transcript."""
+        directory = self.session_dir(session_id)
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "subagent.json").write_text(json.dumps(record, indent=2) + "\n", "utf-8")
 
     async def append(self, session_id: str, records: Sequence[MessageRecord]) -> None:
         await asyncio.to_thread(self._append_sync, session_id, list(records))
