@@ -1670,7 +1670,7 @@ provider's prompt cache, and the cache reads show in usage and cost.
 
 ---
 
-## Phase 39 — Multi-turn rewind in the web UI
+## Phase 39 — Multi-turn rewind in the web UI ✅
 
 **Goal.** In the web UI you rewind from the conversation itself, to any earlier turn, as in the
 TUI's `esc esc` picker: every earlier user message has a rewind action (conversation, code or
@@ -1685,6 +1685,16 @@ both), and the rewound message comes back into the composer to edit.
 **Acceptance**
 - `npm test` for the turn ↔ message mapping; a smoke against the real server: rewind 3 turns
   back, both modes, the composer holds the old prompt and the files are restored.
+
+**Built.** Every past user message in the chat (across the fork lineage) has a "rewind" action
+in its bubble header (shown on hover or keyboard focus, always on touch screens) that opens the
+three modes inline under the message (`web/components/RewindMenu.tsx`, the same `MODES` as the
+History panel). `esc esc` on an empty composer opens it at the latest turn; Up / Down move to
+the message before / after, Esc closes. The rewind reuses the panel's path: the conflict notice,
+and the rewound prompt back in the composer. Hidden while a run is going. Messages map to turns
+in `web/lib/rewind.ts` (`rewindTargets`): history rows and `/turns` are walked backwards and
+paired by text (skill block stripped as the server does), so a message queued mid-run (no turn)
+and compacted turns (no row) are skipped; no server change. `HistoryPanel`'s list is unchanged.
 
 ---
 

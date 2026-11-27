@@ -195,16 +195,21 @@ export function UserBubble({
   queued = false,
   onEdit,
   onCancel,
+  onRewind,
+  rewinding = false,
 }: {
   text: string;
   queued?: boolean;
   /** A queued message only: take it back into the composer / drop it. */
   onEdit?: () => void;
   onCancel?: () => void;
+  /** A past message: open the rewind choices for it (`rewinding` while they are open). */
+  onRewind?: () => void;
+  rewinding?: boolean;
 }) {
   return (
     <section
-      className={`ml-auto max-w-[85%] border-2 border-line bg-yellow p-3 text-on-yellow shadow-[4px_4px_0_var(--line)] ${queued ? "opacity-70" : ""}`}
+      className={`group ml-auto max-w-[85%] border-2 border-line bg-yellow p-3 text-on-yellow shadow-[4px_4px_0_var(--line)] ${queued ? "opacity-70" : ""}`}
       aria-label={queued ? "You (queued)" : "You"}
     >
       <div className="mb-1 flex items-baseline gap-3 text-xs font-bold uppercase tracking-wide">
@@ -217,6 +222,18 @@ export function UserBubble({
         {onCancel && (
           <button type="button" className="underline" onClick={onCancel}>
             cancel
+          </button>
+        )}
+        {onRewind && (
+          <button
+            type="button"
+            className={`underline ${rewinding ? "" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100"}`}
+            onClick={onRewind}
+            aria-expanded={rewinding}
+            aria-label="Rewind to before this message"
+            title="Rewind to before this message (Esc Esc opens it at the latest)"
+          >
+            ↺ rewind
           </button>
         )}
       </div>

@@ -6,7 +6,7 @@ import { Mermaid } from "./Mermaid";
 
 export type HistoryTab = "rewind" | "branches" | "share";
 
-const MODES = [
+export const MODES = [
   { key: "both", label: "Restore code and conversation", conversation: true, code: true },
   { key: "conversation", label: "Restore conversation (keep the code as it is now)", conversation: true, code: false },
   { key: "code", label: "Restore code (keep the conversation)", conversation: false, code: true },

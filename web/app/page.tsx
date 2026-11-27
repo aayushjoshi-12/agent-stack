@@ -6,10 +6,12 @@ import { Composer } from "@/components/Composer";
 import { Connect } from "@/components/Connect";
 import { Mark } from "@/components/Mark";
 import { Sidebar } from "@/components/Sidebar";
-import { api, ApiError, type ChangedFile, type Conn, type HistoryRow, type RewindResult, type SessionSummary, type SlashCommand, type UsageInfo } from "@/lib/api";
+import { api, ApiError, type ChangedFile, type Conn, type HistoryRow, type RewindResult, type SessionSummary, type SlashCommand, type TurnInfo, type UsageInfo } from "@/lib/api";
 import { ChangesPanel } from "@/components/ChangesPanel";
 import { HistoryPanel, type HistoryTab } from "@/components/HistoryPanel";
+import { RewindMenu, type RewindMode } from "@/components/RewindMenu";
 import { formatCost, formatTokens } from "@/lib/format";
+import { rewindTargets } from "@/lib/rewind";
 import type { Item, RunPhase } from "@/lib/events";
 import { useLive } from "@/lib/useLive";
 
@@ -78,6 +80,10 @@ export default function Page() {
   const [skills, setSkills] = useState<SlashCommand[]>([]);
   const [mode, setMode] = useState<string>("ask");
   const [notice, setNotice] = useState("");
+  /** The turns behind the chat (across forks), and the message whose rewind choices are open. */
+  const [turns, setTurns] = useState<TurnInfo[]>([]);
+  const [picking, setPicking] = useState<number | null>(null);
+  const [rewinding, setRewinding] = useState(false);
   const draftCount = useRef(0);
   const lastEscape = useRef(0);
   const runBySession = useRef<Map<string, string>>(new Map());
@@ -189,10 +195,33 @@ export default function Page() {
     };
   }, [conn, activeId, changeTick, running]);
 
+  // Which chat messages can be rewound to: refetched whenever the history reloads at rest.
+  useEffect(() => {
+    setPicking(null);
+    if (!conn || !activeId || running) {
+      setTurns([]);
+      return;
+    }
+    let current = true;
+    api
+      .turns(conn, activeId)
+      .then((t) => current && setTurns(t.filter((x) => x.user_text)))
+      .catch(() => current && setTurns([])); // the History panel still offers rewind
+    return () => {
+      current = false;
+    };
+  }, [conn, activeId, running, history]);
+  const targets = useMemo(() => rewindTargets(history, turns), [history, turns]);
+  const rewindRows = useMemo(() => [...targets.keys()].sort((a, b) => a - b), [targets]);
+
   // Esc Esc: clear what is typed, or open the rewind picker (the terminal UI's habit).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || historyTab || running || !activeRef.current) return;
+      if (picking !== null) {
+        setPicking(null);
+        return;
+      }
       const now = Date.now();
       const double = now - lastEscape.current < 800;
       lastEscape.current = double ? 0 : now;
@@ -201,13 +230,15 @@ export default function Page() {
       if (box && box.value.trim()) {
         draftCount.current += 1;
         setDraft({ text: "", n: draftCount.current });
+      } else if (rewindRows.length) {
+        setPicking(rewindRows[rewindRows.length - 1] ?? null); // at the latest turn, as in the terminal
       } else {
         setHistoryTab("rewind");
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [historyTab, running]);
+  }, [historyTab, running, picking, rewindRows]);
 
   // The folder may hold another conversation's files (after a rewind or switching chats).
   useEffect(() => {
@@ -407,6 +438,28 @@ export default function Page() {
     [refreshSessions, loadHistory, fail],
   );
 
+  const rewindTo = useCallback(
+    async (turn: TurnInfo, mode: RewindMode) => {
+      if (!conn || !activeId) return;
+      setRewinding(true);
+      try {
+        const result = await api.rewind(conn, activeId, {
+          owner_session_id: turn.owner_session_id,
+          started_event_id: turn.started_event_id,
+          conversation: mode.conversation,
+          code: mode.code,
+        });
+        setPicking(null);
+        onRewound(result);
+      } catch (e) {
+        fail(e);
+      } finally {
+        setRewinding(false);
+      }
+    },
+    [conn, activeId, onRewound, fail],
+  );
+
   const stop = useCallback(async () => {
     const run = live.rootRun.current;
     if (!conn || !run || stopping) return;
@@ -590,9 +643,27 @@ export default function Page() {
         <div ref={scroller} className="contain min-h-0 flex-1 overflow-y-auto px-4 py-6" role="log" aria-label="Conversation">
           <div className="mx-auto max-w-3xl space-y-4">
             {history.length === 0 && !pendingUser && live.state.items.length === 0 && <EmptyState />}
-            {history.map((row, i) =>
-              row.kind === "user" ? (
-                <UserBubble key={`h${i}`} text={row.text} />
+            {history.map((row, i) => {
+              const turn = running ? undefined : targets.get(i);
+              return row.kind === "user" ? (
+                <div key={`h${i}`}>
+                  <UserBubble text={row.text} onRewind={turn && (() => setPicking(picking === i ? null : i))} rewinding={picking === i} />
+                  {turn && picking === i && (
+                    <RewindMenu
+                      turn={turn}
+                      busy={rewinding}
+                      onPick={(m) => void rewindTo(turn, m)}
+                      onMove={(step) => {
+                        const at = rewindRows.indexOf(i) + step;
+                        if (at >= 0 && at < rewindRows.length) setPicking(rewindRows[at] ?? null);
+                      }}
+                      onClose={() => {
+                        setPicking(null);
+                        document.getElementById("composer")?.focus();
+                      }}
+                    />
+                  )}
+                </div>
               ) : row.kind === "compaction" ? (
                 <details key={`h${i}`} className="code text-soft">
                   <summary>↺ context compacted: earlier messages were summarised</summary>
@@ -621,8 +692,8 @@ export default function Page() {
                 </div>
               ) : (
                 <ToolCard key={`h${i}`} tool={historyTool(row, i)} onOpenFile={openFile} />
-              ),
-            )}
+              );
+            })}
             {pendingUser && <UserBubble text={pendingUser} />}
             {live.state.items.map((item) => {
               switch (item.kind) {
