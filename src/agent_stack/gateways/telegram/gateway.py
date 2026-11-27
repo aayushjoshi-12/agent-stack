@@ -437,9 +437,20 @@ class TelegramGateway:
         elif command == "/status":
             await self._cmd_status(chat)
         elif chat.busy:
-            await self._say(chat, "A run is in progress. Send /cancel to stop it first.")
+            await self._queue_input(chat, text)
         else:
             chat.task = asyncio.create_task(self._run_message(chat, text, key))
+
+    async def _queue_input(self, chat: _Chat, text: str) -> None:
+        """Send a message into the working run; the model reads it before its next step."""
+        if text.startswith("/"):
+            await self._say(chat, "A run is in progress. Send /cancel to stop it first.")
+        elif chat.run_id is not None and await self._app.send_input(chat.run_id, text):
+            await self._say(chat, "Queued: the agent reads it at its next step.")
+        else:
+            await self._say(
+                chat, "Could not add that to the run (starting or just done). Send it again."
+            )
 
     async def _refuse_if_busy(self, chat: _Chat) -> bool:
         if chat.busy:

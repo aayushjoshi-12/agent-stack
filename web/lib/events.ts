@@ -45,6 +45,7 @@ export type Item =
       steps: number;
       toolCalls: number;
     }
+  | { kind: "user"; key: string; runId: string; depth: number; text: string }
   | { kind: "failure"; key: string; runId: string; depth: number; text: string }
   | { kind: "notice"; key: string; runId: string; depth: number; text: string };
 
@@ -267,6 +268,11 @@ export function applyEvent(state: LiveState, event: ApiEvent): LiveState {
           : [...base.items, { kind: "failure", key, runId: event.run_id, depth, text: error.slice(0, 600) }],
       };
     }
+    case "input.received":
+      // A message queued while the run worked, shown where the model read it.
+      return event.parent_run_id === null
+        ? { ...base, items: [...base.items, { kind: "user", key, runId: event.run_id, depth, text: str(d.text) }] }
+        : base;
     case "context.compacted":
       return event.parent_run_id === null
         ? {

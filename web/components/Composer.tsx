@@ -61,8 +61,9 @@ export function Composer({
 
   const send = () => {
     const value = text.trim();
-    if (!value || running || disabled) return;
+    if (!value || disabled) return;
     const typed = /^\/([A-Za-z][\w-]*)(?:\s+(.*))?$/s.exec(value);
+    if (running && typed) return; // a command waits for the run; plain text is queued into it
     const word = typed?.[1]?.toLowerCase();
     const builtin = typed && word ? commands.find((c) => c.kind === "builtin" && c.name === word) : undefined;
     setText("");
@@ -141,9 +142,14 @@ export function Composer({
             onStop();
           }
         }}
-        placeholder={running ? "Working… press Esc or Stop to cancel" : "Ask the agent to do something…"}
+        placeholder={running ? "Working… type to queue a message, Esc or Stop to cancel" : "Ask the agent to do something…"}
         className="min-h-10 flex-1 resize-none bg-transparent py-2 outline-none placeholder:text-soft"
       />
+      {running && text.trim() && (
+        <button type="submit" className="btn btn-blue" disabled={disabled}>
+          Queue
+        </button>
+      )}
       {running ? (
         <button type="button" className="btn btn-red" onClick={onStop} disabled={stopping} aria-label="Stop the run and every subagent">
           <span className="inline-block h-3 w-3 bg-on-accent" aria-hidden />

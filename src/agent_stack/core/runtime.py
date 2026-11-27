@@ -210,7 +210,8 @@ class AgentRuntime:
         counters: Callable[[int, int], None] | None = None,
         checkpoint_store: CheckpointStore | None = None,
         parent_run_id: str | None = None,
-        inbox: Callable[[], list[str]] | None = None,
+        inbox: Callable[[bool], list[str]] | None = None,
+        notes: str | None = None,
     ) -> AIMessage:
         resolved_run_id = run_id or str(uuid4())
 
@@ -225,6 +226,7 @@ class AgentRuntime:
                 checkpoint_store=checkpoint_store,
                 parent_run_id=parent_run_id,
                 inbox=inbox,
+                notes=notes,
             )
 
         if self._session_lock is None:
@@ -268,7 +270,8 @@ class AgentRuntime:
         counters: Callable[[int, int], None] | None,
         checkpoint_store: CheckpointStore | None,
         parent_run_id: str | None = None,
-        inbox: Callable[[], list[str]] | None = None,
+        inbox: Callable[[bool], list[str]] | None = None,
+        notes: str | None = None,
     ) -> AIMessage:
         session = await self._session_store.get(session_id)
         if session is None:
@@ -278,6 +281,8 @@ class AgentRuntime:
 
         history = await self._session_store.get_messages(session_id)
         new_messages: list[BaseMessage] = [HumanMessage(content=message)]
+        if notes:  # background-monitor notes that waited for this turn
+            new_messages.append(HumanMessage(content=notes))
 
         # Bound what the model sees. Resident system parts are computed once per run;
         # the message window is rebuilt each iteration as tool results accumulate.
@@ -292,6 +297,20 @@ class AgentRuntime:
         spiral_nudge = False
         summary_memo: dict[str, Any] = {}
 
+        async def take_input(*, close: bool) -> bool:
+            """Append the inbox's waiting messages to the run; True when there were any."""
+            texts = inbox(close) if inbox is not None else []
+            for text in texts:
+                new_messages.append(HumanMessage(content=text))
+                await self._emit(
+                    EventType.INPUT_RECEIVED,
+                    run_id=run_id,
+                    session_id=session_id,
+                    parent_run_id=parent_run_id,
+                    data={"text": text},
+                )
+            return bool(texts)
+
         await self._emit(
             EventType.RUN_STARTED,
             run_id=run_id,
@@ -303,12 +322,10 @@ class AgentRuntime:
         try:
             while True:
                 self._check_cancelled(cancel)
-                # Cooperative input injection (P20): drain anything the parent pushed at
-                # this boundary — right before the model call, which also covers the gap
-                # between tool batches. The callable is the seam; no asyncio here.
-                if inbox is not None:
-                    for text in inbox():
-                        new_messages.append(HumanMessage(content=text))
+                # Cooperative input injection (P20): drain anything the parent (or the user,
+                # mid-run) pushed at this boundary — right before the model call, which also
+                # covers the gap between tool batches. The callable is the seam; no asyncio here.
+                await take_input(close=False)
                 if spiral_nudge:
                     spiral_nudge = False
                     new_messages.append(HumanMessage(content=SPIRAL_NUDGE))
@@ -382,6 +399,10 @@ class AgentRuntime:
                 )
 
                 if not response.tool_calls:
+                    # A message that arrived during this last step is answered in this run;
+                    # with none waiting the inbox closes, so a late one is refused, never lost.
+                    if await take_input(close=True):
+                        continue
                     break
 
                 if step_count > limits.max_steps:

@@ -110,6 +110,10 @@ export const api = {
     call<ChangedFileDetail>(c, `/sessions/${encodeURIComponent(id)}/changes/file?path=${encodeURIComponent(path)}`),
   usage: (c: Conn, id: string) => call<UsageInfo>(c, `/sessions/${encodeURIComponent(id)}/usage`),
   run: (c: Conn, id: string) => call<RunInfo>(c, `/runs/${encodeURIComponent(id)}`),
+  input: (c: Conn, id: string, text: string) =>
+    call<{ accepted: boolean }>(c, `/runs/${encodeURIComponent(id)}/input`, json({ text })),
+  withdraw: (c: Conn, id: string, text: string) =>
+    call<{ withdrawn: boolean }>(c, `/runs/${encodeURIComponent(id)}/input/withdraw`, json({ text })),
   cancel: (c: Conn, id: string) => call<{ runs: Record<string, string> }>(c, `/runs/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
   decide: (c: Conn, runId: string, approvalId: string, approve: boolean) =>
     call<{ approved: boolean }>(

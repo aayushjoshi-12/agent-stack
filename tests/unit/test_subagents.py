@@ -490,3 +490,49 @@ async def test_cancelling_a_parent_stops_its_running_subagent_and_never_resumes_
     assert child.status is RunStatus.CANCELLED
     assert child_model.interrupted == 1 and child_model.calls == 1
     assert len(parent_model.calls) == 1  # the parent never went back to the model
+
+
+async def test_a_message_that_arrives_during_the_final_step_is_answered_in_the_same_run() -> None:
+    session_store = InMemorySessionStore()
+    bus = RecordingEventBus()
+    agent = Agent(name="assistant", model="test:model")
+    model = FakeChatModel([ai("first answer"), ai("answer to the late one")])
+    runtime = _runtime(agent, model, [], session_store, bus)
+    waiting = ["late"]
+    closes: list[bool] = []
+
+    def inbox(close: bool) -> list[str]:
+        if not close:
+            return []  # it lands only while the last step runs
+        closes.append(True)
+        taken = waiting[:]
+        waiting.clear()
+        return taken
+
+    result = await runtime.run(session_id="s1", user_id="u1", message="go", inbox=inbox)
+
+    assert result.content == "answer to the late one"
+    assert len(closes) == 2  # checked after each final answer; the second found nothing
+    humans = [m.content for m in model.calls[1] if isinstance(m, HumanMessage)]
+    assert humans[-1] == "late"
+    received = [e.data["text"] for e in bus.published if e.type is EventType.INPUT_RECEIVED]
+    assert received == ["late"]
+
+
+async def test_send_input_is_refused_once_the_run_is_past_its_final_answer() -> None:
+    session_store, run_store = InMemorySessionStore(), InMemoryRunStore()
+    agent = Agent(name="assistant", model="test:model")
+    runtime = _runtime(agent, FakeChatModel([ai("done")]), [], session_store, None)
+    manager = RunManager(runtime=runtime, run_store=run_store)
+    handle = await manager.start(RunRequest(session_id="s1", user_id="u1", message="go"))
+    manager._inboxes[handle.run_id].append("early")  # read before the first model call
+    assert manager._drain_inbox(handle.run_id, close=True) == ["early"]  # items: stays open
+    assert await manager.send_input(handle.run_id, "still open") is True
+    assert await manager.send_input(handle.run_id, "changed my mind") is True
+    assert await manager.withdraw_input(handle.run_id, "changed my mind") is True
+    assert await manager.withdraw_input(handle.run_id, "changed my mind") is False
+    assert manager._drain_inbox(handle.run_id, close=True) == ["still open"]
+    assert await manager.withdraw_input(handle.run_id, "still open") is False  # already read
+    assert manager._drain_inbox(handle.run_id, close=True) == []  # empty: now closed
+    assert await manager.send_input(handle.run_id, "too late") is False
+    await handle.result()

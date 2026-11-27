@@ -10,10 +10,10 @@ composer, breakpoint-driven responsive layout, a help overlay, and named themes.
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from textual.containers import VerticalScroll
 
 from agent_stack.core.events import EventType
 from agent_stack.gateways.base import HistoryItem, SessionSummary
@@ -23,7 +23,6 @@ from agent_stack.gateways.tui.widgets import (
     AgentMessage,
     ApprovalScreen,
     Disclosure,
-    HeaderBar,
     HelpScreen,
     Notice,
     PromptArea,
@@ -36,9 +35,14 @@ from agent_stack.gateways.tui.widgets import (
 from tests.unit.gateway_fakes import FakeApplication, event
 
 
+def _tabs_text(app: TuiApp) -> str:
+    """The tab bar's labels, as shown."""
+    return " | ".join(str(tab.render()) for tab in app.query(".tab"))
+
+
 def _chat_text(app: TuiApp) -> str:
     """Every leaf renderable in the conversation, in order (must run while mounted)."""
-    chat = app.query_one("#chat", VerticalScroll)
+    chat = app.tab
     parts: list[str] = []
 
     def _walk(widget: Any) -> None:
@@ -91,8 +95,8 @@ async def test_tui_renders_messages_and_tool_history() -> None:
     async with app.run_test(size=(140, 40)) as pilot:
         await _submit(pilot, "hi")
         text = _chat_text(app)
-        assert len(app.query(UserMessage)) == 1
-        assert len(app.query(AgentMessage)) == 1
+        assert len(app.tab.query(UserMessage)) == 1
+        assert len(app.tab.query(AgentMessage)) == 1
 
     assert "hi" in text  # the user's own message
     assert "hello world" in text
@@ -118,7 +122,7 @@ async def test_tui_renders_assistant_markdown_with_headings_and_code() -> None:
     async with app.run_test(size=(140, 40)) as pilot:
         await _submit(pilot, "hi")
         text = _chat_text(app)
-        markdown_count = len(app.query("#chat Markdown"))
+        markdown_count = len(app.tab.query("Markdown"))
 
     assert "Summary" in text
     assert "bold" in text
@@ -139,7 +143,7 @@ async def test_tui_renders_collapsible_thinking_card() -> None:
 
     async with app.run_test(size=(140, 40)) as pilot:
         await _submit(pilot, "hi")
-        card = app.query_one(Disclosure)
+        card = app.tab.query_one(Disclosure)
         assert card.kind == "think"
         assert not card.has_class("-open")  # thinking starts collapsed
 
@@ -160,7 +164,7 @@ async def test_thinking_header_is_painted_without_any_interaction() -> None:
     async with app.run_test(size=(140, 40)) as pilot:
         app.handle_event(event(EventType.MODEL_REASONING, text="weighing options"))
         await _settle(pilot, 3)
-        header = app.query_one(Disclosure).query_one(".dh-main")
+        header = app.tab.query_one(Disclosure).query_one(".dh-main")
         assert "thinking" in str(header.render())
 
 
@@ -172,11 +176,11 @@ async def test_tui_run_failure_shows_error_notice_and_state() -> None:
 
     async with app.run_test(size=(140, 40)) as pilot:
         await _submit(pilot, "hi")
-        notices = list(app.query(Notice))
+        notices = list(app.tab.query(Notice))
         text = _chat_text(app)
         assert len(notices) == 1
-        assert not app._run_active
-        assert app._last_outcome == "failed"
+        assert not app.tab.running
+        assert app.tab.outcome == "failed"
 
     assert "error: boom" in text
 
@@ -194,7 +198,7 @@ async def test_tool_card_streams_output_and_diff_colours_it() -> None:
                 args={"command": "git diff"},
             )
         )
-        card = app.cards["c9"]
+        card = app.tab.cards["c9"]
         assert card.status == "running"
         app.handle_event(
             event(
@@ -244,7 +248,7 @@ async def test_non_shell_tool_card_is_expandable_and_shows_its_arguments() -> No
         )
         app.handle_event(event(EventType.TOOL_COMPLETED, tool="read_file", tool_call_id="r"))
         await _settle(pilot, 3)
-        card = app.cards["r"]
+        card = app.tab.cards["r"]
         assert card.has_body  # so the header shows a chevron
         assert "▸" in str(card.query_one(".dh-main").render())
         assert not card.has_class("-open")  # arguments alone do not open the card
@@ -284,7 +288,7 @@ async def test_a_failed_tool_shows_failed_and_stays_open() -> None:
             )
         )
         await _settle(pilot, 3)
-        card = app.cards["f"]
+        card = app.tab.cards["f"]
         assert card.status == "failed"
         assert card.has_class("-failed")
         assert "✗" in str(card.query_one(".dh-main").render())
@@ -299,7 +303,7 @@ async def test_tool_card_holds_partial_lines_until_complete() -> None:
                 EventType.TOOL_STARTED, tool="run_command", tool_call_id="p", args={"command": "x"}
             )
         )
-        card = app.cards["p"]
+        card = app.tab.cards["p"]
         app.handle_event(event(EventType.TOOL_OUTPUT, tool_call_id="p", chunk="par"))
         assert card.line_count == 0  # a half line is held back
         app.handle_event(event(EventType.TOOL_OUTPUT, tool_call_id="p", chunk="tial\nnext"))
@@ -321,7 +325,7 @@ async def test_long_output_is_capped_and_folds_after_completion() -> None:
                 args={"command": "seq"},
             )
         )
-        card = app.cards["l"]
+        card = app.tab.cards["l"]
         chunk = "".join(f"line {i}\n" for i in range(1000))
         app.handle_event(event(EventType.TOOL_OUTPUT, tool_call_id="l", chunk=chunk))
         app.handle_event(event(EventType.TOOL_COMPLETED, tool="run_command", tool_call_id="l"))
@@ -348,7 +352,7 @@ async def test_enter_on_focused_card_header_toggles_it() -> None:
         app.handle_event(event(EventType.TOOL_OUTPUT, tool_call_id="t", chunk="a\n" * 20))
         app.handle_event(event(EventType.TOOL_COMPLETED, tool="run_command", tool_call_id="t"))
         await _settle(pilot, 3)
-        card = app.cards["t"]
+        card = app.tab.cards["t"]
         assert not card.has_class("-open")
 
         card.query_one(".dh-header").focus()
@@ -366,8 +370,8 @@ async def test_subagent_row_is_updated_in_place() -> None:
             event(EventType.SUBAGENT_STARTED, child_run_id="child-abc", agent_name="explorer")
         )
         await _settle(pilot, 3)
-        assert app._last_child_id == "child-abc"
-        rows = list(app.query(SubagentRow))
+        assert app.tab.last_child_id == "child-abc"
+        rows = list(app.tab.query(SubagentRow))
         assert len(rows) == 1 and rows[0].running
 
         app.handle_event(
@@ -379,7 +383,7 @@ async def test_subagent_row_is_updated_in_place() -> None:
             )
         )
         await _settle(pilot, 3)
-        assert len(app.query(SubagentRow)) == 1  # same row, not a second one
+        assert len(app.tab.query(SubagentRow)) == 1  # same row, not a second one
         assert not rows[0].running
         text = _chat_text(app)
 
@@ -419,17 +423,37 @@ async def test_prompt_history_recall_with_up_and_down() -> None:
         assert prompt.text == ""  # back to the (empty) draft
 
 
-async def test_submit_is_blocked_while_a_run_is_active() -> None:
+async def test_submit_while_a_run_is_active_queues_into_it() -> None:
     gate = asyncio.Event()
     application = FakeApplication(events=[event(EventType.RUN_STARTED)], gate=gate)
     app = _app(application)
 
     async with app.run_test(size=(140, 40)) as pilot:
         await _submit(pilot, "first")
-        assert app._run_active
+        assert app.tab.running
         await _submit(pilot, "second")
-        assert len(application.sent) == 1  # the second message was not started
-        assert app.query_one("#prompt", PromptArea).text == "second"  # and is not lost
+        assert len(application.sent) == 1  # no second run: it went into the working one
+        assert [m for _, m in application.inputs] == ["second"]
+        assert [b.text for b in app.tab.queued] == ["second"]
+        app.handle_event(event(EventType.INPUT_RECEIVED, text="second"))
+        assert app.tab.queued == []  # the model read it
+        await _submit(pilot, "/new")  # a built-in still works: a new tab beside the running one
+        assert len(app._tabs) == 2 and app.tab.blank
+        gate.set()
+        await _settle(pilot)
+
+
+async def test_unread_queued_messages_return_to_the_prompt_when_the_run_stops() -> None:
+    gate = asyncio.Event()
+    application = FakeApplication(events=[event(EventType.RUN_STARTED)], gate=gate)
+    app = _app(application)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await _submit(pilot, "first")
+        await _submit(pilot, "second")
+        app._finish_run(app.tab, "failed")
+        assert app.tab.queued == []
+        assert app.query_one("#prompt", PromptArea).text == "second"
         gate.set()
         await _settle(pilot)
 
@@ -441,7 +465,7 @@ async def test_escape_returns_focus_to_the_prompt_when_idle() -> None:
     app = _app()
 
     async with app.run_test(size=(140, 40)) as pilot:
-        app.query_one("#chat").focus()
+        app.tab.focus()
         await pilot.pause()
         assert app.focused is not app.query_one("#prompt")
         await pilot.press("escape")
@@ -455,11 +479,12 @@ async def test_first_message_sets_title_and_sidebar_usage() -> None:
 
     async with app.run_test(size=(140, 40)) as pilot:
         await _submit(pilot, "make the panels slightly darker")
-        assert "panels slightly darker" in str(app.query_one("#title").render())
-        assert "working" in str(app.query_one("#run-state").render())
+        assert "make the panels sligh..." in _tabs_text(app)  # cut to fit the tab
+        assert "panels slightly darker" in str(app.query_one("#sb-session").render())
+        assert "working" in str(app.query_one("#sb-activity").render())
         side = str(app.query_one("#sb-context").render())
         assert "200K" in side
-        assert "status: working" in str(app.query_one("#sb-activity").render())
+        assert "working" in str(app.query_one("#sb-activity").render())
 
 
 async def test_header_shows_done_after_a_completed_run() -> None:
@@ -469,8 +494,7 @@ async def test_header_shows_done_after_a_completed_run() -> None:
 
     async with app.run_test(size=(140, 40)) as pilot:
         await _submit(pilot, "hi")
-        assert "done" in str(app.query_one("#run-state").render())
-        assert app.query_one(HeaderBar)
+        assert "done" in str(app.query_one("#sb-activity").render())
 
 
 async def test_welcome_shows_when_empty() -> None:
@@ -478,7 +502,7 @@ async def test_welcome_shows_when_empty() -> None:
 
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause()
-        assert len(app.query(Welcome)) == 1  # the empty state explains the basics
+        assert len(app.tab.query(Welcome)) == 1  # the empty state explains the basics
 
 
 async def test_new_conversation_starts_a_new_session_and_keeps_the_old_one() -> None:
@@ -489,24 +513,24 @@ async def test_new_conversation_starts_a_new_session_and_keeps_the_old_one() -> 
 
     async with app.run_test(size=(140, 40)) as pilot:
         await _submit(pilot, "first task")
-        assert len(app.query(Welcome)) == 0
-        assert app._tokens > 0
-        first = app._session_id
+        assert len(app.tab.query(Welcome)) == 0
+        assert app.tab.tokens > 0
+        first = app.tab.session_id
         assert application.titles[first] == "first task"  # persisted so it can be found
 
         await pilot.press("ctrl+n")
         await _settle(pilot, 3)
 
-        assert app._session_id is None  # a draft: stored only when a message is sent
-        assert len(app.query(Welcome)) == 1
-        assert len(app.query(UserMessage)) == 0
-        assert app._tokens == 0
-        assert app._task_title is None
-        assert "New conversation" in str(app.query_one("#title").render())
+        assert app.tab.session_id is None  # a draft: stored only when a message is sent
+        assert len(app.tab.query(Welcome)) == 1
+        assert len(app.tab.query(UserMessage)) == 0
+        assert app.tab.tokens == 0
+        assert app.tab.title is None
+        assert "New conversation" in _tabs_text(app)
 
         await _submit(pilot, "second task")
-        assert app._session_id not in (None, first)  # a real, separate session
-        assert application.titles[app._session_id] == "second task"
+        assert app.tab.session_id not in (None, first)  # a real, separate session
+        assert application.titles[app.tab.session_id] == "second task"
 
 
 async def test_launch_is_a_fresh_draft_and_stores_nothing_until_the_first_message() -> None:
@@ -517,28 +541,32 @@ async def test_launch_is_a_fresh_draft_and_stores_nothing_until_the_first_messag
 
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause()
-        assert app._session_id is None
+        assert app.tab.session_id is None
         assert application.sessions == []  # opening (and quitting) leaves no empty chat
-        assert len(app.query(Welcome)) == 1
+        assert len(app.tab.query(Welcome)) == 1
         assert "not saved yet" in str(app.query_one("#sb-session").render())
 
         await _submit(pilot, "hello")
-        assert app._session_id is not None
-        assert [s.id for s in application.sessions] == [app._session_id]
-        assert application.sent[0][0].session == app._session_id
+        assert app.tab.session_id is not None
+        assert [s.id for s in application.sessions] == [app.tab.session_id]
+        assert application.sent[0][0].session == app.tab.session_id
 
 
-async def test_new_conversation_is_refused_while_a_run_is_active() -> None:
+async def test_new_tab_while_a_run_is_active_leaves_it_running() -> None:
     gate = asyncio.Event()
     app = _app(FakeApplication(events=[event(EventType.RUN_STARTED)], gate=gate))
 
     async with app.run_test(size=(140, 40)) as pilot:
         await _submit(pilot, "busy")
-        before = app._session_id
+        working = app.tab
         await pilot.press("ctrl+n")
         await _settle(pilot, 3)
-        assert app._session_id == before
-        assert len(app.query(UserMessage)) == 1
+        assert app.tab is not working and app.tab.blank
+        assert working.running  # still going in its own tab
+        assert len(app._tabs) == 2
+        await pilot.press("alt+1")
+        await _settle(pilot)
+        assert app.tab is working
         gate.set()
         await _settle(pilot)
 
@@ -565,16 +593,16 @@ async def test_switching_conversation_replays_its_history() -> None:
         await _settle(pilot, 8)
 
         assert not isinstance(app.screen, SessionPicker)
-        assert app._session_id == "old-1"
-        assert app._task_title == "Fix the retry bug"
-        assert len(app.query(Welcome)) == 0
-        assert len(app.query(UserMessage)) == 1
-        assert len(app.query(AgentMessage)) == 1
-        card = app.query_one(Disclosure)
+        assert app.tab.session_id == "old-1"
+        assert app.tab.title == "Fix the retry bug"
+        assert len(app.tab.query(Welcome)) == 0
+        assert len(app.tab.query(UserMessage)) == 1
+        assert len(app.tab.query(AgentMessage)) == 1
+        card = app.tab.query_one(Disclosure)
         assert card.has_body  # arguments are available behind the chevron
         text = _chat_text(app)
         assert "fix the retry bug" in text and "added backoff" in text
-        assert "Fix the retry bug" in str(app.query_one("#title").render())
+        assert "Fix the retry bug" in _tabs_text(app)
 
 
 async def test_picker_escape_keeps_the_current_conversation() -> None:
@@ -583,13 +611,13 @@ async def test_picker_escape_keeps_the_current_conversation() -> None:
     app = _app(application)
 
     async with app.run_test(size=(140, 40)) as pilot:
-        current = app._session_id
+        current = app.tab.session_id
         await pilot.press("ctrl+o")
         await _settle(pilot, 4)
         await pilot.press("escape")
         await _settle(pilot, 3)
         assert not isinstance(app.screen, SessionPicker)
-        assert app._session_id == current
+        assert app.tab.session_id == current
 
 
 async def test_picker_with_no_conversations_says_so() -> None:
@@ -707,19 +735,19 @@ async def test_deleting_the_open_conversation_returns_to_a_fresh_draft() -> None
         await _settle(pilot, 4)
         await pilot.press("enter")  # open "Keep me"
         await _settle(pilot, 8)
-        assert app._session_id == "keep"
-        assert len(app.query(UserMessage)) == 1
+        assert app.tab.session_id == "keep"
+        assert len(app.tab.query(UserMessage)) == 1
 
         await pilot.press("ctrl+o")
         await _settle(pilot, 4)
         await pilot.press("d", "d")  # the highlighted row is the current conversation
         await _settle(pilot, 6)
         assert application.deleted == ["keep"]
-        assert app._session_id is None
+        assert app.tab.session_id is None
         await pilot.press("escape")
         await _settle(pilot, 4)
-        assert len(app.query(UserMessage)) == 0
-        assert len(app.query(Welcome)) == 1
+        assert len(app.tab.query(UserMessage)) == 0
+        assert len(app.tab.query(Welcome)) == 1
 
 
 # ── approvals ────────────────────────────────────────────────────────────────
@@ -756,8 +784,8 @@ async def test_an_approval_request_opens_a_dialog_and_y_approves() -> None:
 
         assert isinstance(app.screen, ApprovalScreen)
         assert "rm -rf build" in str(app.screen.query_one("#approval-detail").render())
-        assert app.cards["c1"].status == "waiting"
-        assert "approval" in str(app.query_one("#run-state").render())
+        assert app.tab.cards["c1"].status == "waiting"
+        assert "approval" in str(app.query_one("#sb-activity").render())
 
         await pilot.press("y")
         await _settle(pilot, 4)
@@ -801,15 +829,15 @@ async def test_approval_resolved_resumes_or_leaves_the_card_to_fail() -> None:
                 EventType.TOOL_STARTED, tool="run_command", tool_call_id="c", args={"command": "x"}
             )
         )
-        card = app.cards["c"]
+        card = app.tab.cards["c"]
         card.await_approval()
-        app._awaiting = 1
+        app.tab.awaiting = 1
         app.handle_event(
             event(EventType.APPROVAL_RESOLVED, approval_id="a", tool_call_id="c", status="approved")
         )
         await _settle(pilot, 3)
         assert card.status == "running"
-        assert app._awaiting == 0
+        assert app.tab.awaiting == 0
 
 
 async def test_a_stream_that_ends_without_a_terminal_event_returns_the_ui_to_idle() -> None:
@@ -821,9 +849,9 @@ async def test_a_stream_that_ends_without_a_terminal_event_returns_the_ui_to_idl
         await _submit(pilot, "go")
         await _settle(pilot, 6)
 
-        assert not app._run_active
-        assert app._last_outcome == "failed"
-        assert "failed" in str(app.query_one("#run-state").render())
+        assert not app.tab.running
+        assert app.tab.outcome == "failed"
+        assert "failed" in str(app.query_one("#sb-activity").render())
         await _submit(pilot, "second")  # and the next message is accepted
         assert len(application.sent) == 2
 
@@ -836,13 +864,13 @@ async def test_a_card_left_waiting_when_the_run_ends_is_marked_failed() -> None:
     async with app.run_test(size=(140, 40)) as pilot:
         await _submit(pilot, "clean up")
         await _settle(pilot, 8)
-        assert app.cards["c1"].status == "waiting"
+        assert app.tab.cards["c1"].status == "waiting"
 
-        app._cancel_sent = True
-        app._finish_run("failed")  # what _consume does when the stream ends after a cancel
+        app.tab.cancel_sent = True
+        app._finish_run(app.tab, "failed")  # what _consume does when the stream ends after a cancel
         await _settle(pilot, 4)
 
-        assert app.cards["c1"].status == "failed"
+        assert app.tab.cards["c1"].status == "failed"
         assert not isinstance(app.screen, ApprovalScreen)  # the dialog closed too
         gate.set()
         await _settle(pilot)
@@ -877,13 +905,13 @@ async def test_cancel_keys_cancel_a_live_run(key: str) -> None:
     async with app.run_test(size=(140, 40)) as pilot:
         await _submit(pilot, "long task")
         run_id = application.sent[0][1]
-        assert app._active_run_id == run_id
+        assert app.tab.run_id == run_id
 
         await pilot.press(key)
         await pilot.pause()
 
         assert application.cancelled == [run_id]
-        assert app._cancel_sent
+        assert app.tab.cancel_sent
         gate.set()
         await pilot.pause()
 
@@ -1067,7 +1095,7 @@ async def test_an_edit_card_opens_on_the_diff_of_what_that_call_changed() -> Non
     async with app.run_test(size=(140, 40)) as pilot:
         await _submit(pilot, "fix y")
         await pilot.pause(0.3)
-        (card,) = app.query(Disclosure)
+        (card,) = app.tab.query(Disclosure)
         assert card.status == "done" and card.diff is True
         assert card._is_open and card.has_body
         text = _card_text(card)
@@ -1084,7 +1112,7 @@ async def test_a_failed_edit_shows_no_diff_and_a_read_never_asks_for_one() -> No
     async with app.run_test(size=(140, 40)) as pilot:
         await _submit(pilot, "try")
         await pilot.pause(0.3)
-        (card,) = app.query(Disclosure)
+        (card,) = app.tab.query(Disclosure)
         assert card.status == "failed" and "+y = 3" not in _card_text(card)
     assert application.diff_lookups == []
 
@@ -1093,7 +1121,7 @@ async def test_a_failed_edit_shows_no_diff_and_a_read_never_asks_for_one() -> No
     async with app.run_test(size=(140, 40)) as pilot:
         await _submit(pilot, "read")
         await pilot.pause(0.3)
-        (card,) = app.query(Disclosure)
+        (card,) = app.tab.query(Disclosure)
         assert card.status == "done"
     assert reading.diff_lookups == []
 
@@ -1110,7 +1138,7 @@ async def test_a_diff_that_cannot_be_fetched_never_leaves_the_card_spinning() ->
     async with app.run_test(size=(140, 40)) as pilot:
         await _submit(pilot, "go")
         await pilot.pause(0.3)
-        (card,) = app.query(Disclosure)
+        (card,) = app.tab.query(Disclosure)
         assert card.status == "done"
 
 
@@ -1155,3 +1183,110 @@ async def test_ctrl_g_with_nothing_changed_says_so_and_without_a_session_does_no
         await pilot.press("ctrl+g")
         await pilot.pause(0.2)
         assert not isinstance(fresh.screen, ChangesScreen)
+
+
+# ── tabs, queued edits, titles, context ──────────────────────────────────────
+async def test_up_arrow_takes_back_the_last_queued_message_to_edit() -> None:
+    gate = asyncio.Event()
+    application = FakeApplication(events=[event(EventType.RUN_STARTED)], gate=gate)
+    app = _app(application)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await _submit(pilot, "first")
+        await _submit(pilot, "also do x")
+        assert [b.text for b in app.tab.queued] == ["also do x"]
+        await pilot.press("up")
+        await _settle(pilot)
+        assert application.withdrawn == [("run-1", "also do x")]
+        assert app.tab.queued == []
+        assert len(app.tab.query(UserMessage)) == 1  # the queued bubble is gone
+        assert app.query_one("#prompt", PromptArea).text == "also do x"
+
+        application.withdraw_ok = False  # too late: the model has read it
+        await _submit(pilot, "and y")
+        await pilot.press("up")
+        await _settle(pilot)
+        assert [b.text for b in app.tab.queued] == ["and y"]
+        assert app.query_one("#prompt", PromptArea).text == ""
+        gate.set()
+        await _settle(pilot)
+
+
+async def test_a_background_tab_keeps_its_own_conversation() -> None:
+    gate = asyncio.Event()
+    app = _app(FakeApplication(events=[event(EventType.RUN_STARTED)], gate=gate))
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await _submit(pilot, "long job")
+        first = app.tab
+        await pilot.press("ctrl+n")
+        await _settle(pilot, 3)
+        second = app.tab
+
+        app.handle_event(event(EventType.ASSISTANT_MESSAGE, content="finished it"), first)
+        app.handle_event(event(EventType.RUN_COMPLETED), first)
+        await _settle(pilot)
+
+        assert app.tab is second  # nothing pulled the view away
+        assert len(first.query(AgentMessage)) == 1 and len(second.query(AgentMessage)) == 0
+        assert first.outcome == "done" and not first.running
+        gate.set()
+        await _settle(pilot)
+
+
+async def test_close_tab_keeps_the_other_and_refuses_a_running_one() -> None:
+    gate = asyncio.Event()
+    app = _app(FakeApplication(events=[event(EventType.RUN_STARTED)], gate=gate))
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await _submit(pilot, "busy")
+        working = app.tab
+        await _submit(pilot, "/close")
+        assert app._tabs == [working]  # a running tab is not closed
+        await pilot.press("ctrl+n")
+        await _settle(pilot, 3)
+        await _submit(pilot, "/close")
+        await _settle(pilot, 3)
+        assert app._tabs == [working] and app.tab is working
+        gate.set()
+        await _settle(pilot)
+
+
+class _TitlingApplication(FakeApplication):
+    async def get_session(self, session_id: str) -> Any:
+        return SimpleNamespace(id=session_id, title="Darker Panels")
+
+
+async def test_the_small_models_title_replaces_the_first_message() -> None:
+    application = _TitlingApplication(
+        events=[event(EventType.RUN_STARTED), event(EventType.RUN_COMPLETED)]
+    )
+    app = _app(application)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await _submit(pilot, "make the panels slightly darker please")
+        await _settle(pilot)
+        assert app.tab.title == "Darker Panels"
+        assert "Darker Panels" in _tabs_text(app)
+
+
+async def test_context_is_the_size_the_model_reported_for_the_main_run() -> None:
+    gate = asyncio.Event()
+    app = _app(FakeApplication(events=[event(EventType.RUN_STARTED)], gate=gate))
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await _submit(pilot, "hi")
+        assert "~" in str(app.query_one("#sb-context").render())  # an estimate so far
+        app.handle_event(event(EventType.MODEL_USAGE, run_id="run-1", input_tokens=35_800))
+        app.handle_event(
+            event(EventType.MODEL_USAGE, run_id="run-1", input_tokens=90, purpose="title")
+        )
+        app.handle_event(
+            event(EventType.MODEL_USAGE, run_id="child", parent_run_id="run-1", input_tokens=5)
+        )
+        await _settle(pilot)
+        side = str(app.query_one("#sb-context").render())
+        assert "35.8K" in side and "~" not in side
+        assert "context" not in str(app.query_one("#sb-activity").render())  # shown once
+        gate.set()
+        await _settle(pilot)

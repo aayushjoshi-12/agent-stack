@@ -276,6 +276,10 @@ class Application:
         """Inject a message into a running run (P20); ``False`` for unknown/finished."""
         return await self.run_manager.send_input(run_id, message)
 
+    async def withdraw_input(self, run_id: str, message: str) -> bool:
+        """Take back a queued message the run has not read yet; ``False`` once it has."""
+        return await self.run_manager.withdraw_input(run_id, message)
+
     async def get_run(self, run_id: str) -> Run | None:
         """Fetch a run's persisted record, or ``None``."""
         return await self.run_manager.get_run(run_id)

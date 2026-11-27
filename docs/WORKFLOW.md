@@ -133,6 +133,18 @@ A phase may start only when every phase it depends on has passed its acceptance 
 | P26 Approval | P20, P25 |
 | P27 Observability/invariants | all |
 | P28 Hardening | all |
+| P33 Queued messages, TUI tabs | P20, P23 |
+| P34 TUI refactor | P33 |
+| P35 Tool timeouts | P03, P14 |
+| P36 Structured auto-approval | P26 |
+| P37 Prompt caching | P01, P31 |
+| P38 `web_screenshot` | P15 (P44 for image results) |
+| P39 Web multi-turn rewind | P24, P30 |
+| P40 Gateway rate limits | P24, P25 |
+| P41 `/export` | P34 (TUI part) |
+| P42 OpenTelemetry | P08, P27 |
+| P43 MCP client | P02, P26 |
+| P44 Images in | P34, P38 |
 
 ---
 

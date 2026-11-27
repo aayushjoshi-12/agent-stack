@@ -26,12 +26,12 @@ lists every theme.
 ## Layout
 
 ```
-HeaderBar   ◆ agent-stack · task title ......... run state · model        height 1
+TabBar      [ ⠋ First task tit... ] [ Second ] [ + ]                     height 3
 #body       conversation (1fr)                  │ sidebar (36 / 42 wide)
-              #chat  (VerticalScroll)           │   SESSION · CONTEXT meter
-              #composer (multi-line)            │   ACTIVITY · SUBAGENTS
-              #hints  "auto mode" (only when on)  │   WORKSPACE (path, branch)
-Footer      esc cancel · ^n new · ^b sidebar · f1 help ........ ^p palette
+              #chats (one Conversation per tab) │   SESSION · CONTEXT meter
+              #composer (multi-line)            │   ACTIVITY (status, tools, spend) · SUBAGENTS
+                                                │   MODEL · APPROVALS · WORKSPACE (path, branch)
+Footer      esc cancel · ^n new tab · ^b sidebar · f1 help ...... ^p palette
 ```
 
 ## Responsive
@@ -41,9 +41,9 @@ Textual breakpoints put classes on the screen (`HORIZONTAL_BREAKPOINTS`,
 
 | Class | When | Effect |
 |---|---|---|
-| `-narrow` | < 100 cols | sidebar and model name hidden, tighter gutters |
+| `-narrow` | < 100 cols | sidebar hidden, narrower tabs, tighter gutters |
 | `-normal` / `-wide` | 100 to 139 / 140+ | sidebar 36 / 42 wide |
-| `-short` | < 24 rows | hints, welcome and row spacing dropped |
+| `-short` | < 24 rows | one-row tab bar; welcome and row spacing dropped |
 | `-show-sidebar` / `-hide-sidebar` | `ctrl+b` | explicit override of the width default |
 
 ## Conversation rows (`widgets.py`)
@@ -66,43 +66,62 @@ events stay out of the parent conversation.
 
 `PromptArea` is a multi-line `TextArea` (1 to 8 lines). `enter` sends; `ctrl+j` (works in every terminal), `shift+enter`
 or `alt+enter` (modern terminals) inserts a newline; `up`/`down` walk the sent history from the first/last line;
-`pageup`/`pagedown` scroll the conversation. While a run is active, submitting is refused with a
-notification and the text is kept.
+`pageup`/`pagedown` scroll the conversation. While a run is active, a plain message is queued
+into it (`send_input`): it shows dimmed as "queued" and moves into the conversation when the model
+reads it, before its next step or, if it came during the final step, by the run continuing. `up` on
+an empty prompt takes the last queued message back (`withdraw_input`) to edit and resend, or to
+clear; once the model has read it, it cannot be taken back. If the run is stopped first, unread
+messages go back into the prompt. Built-in `/commands` work during a run; a skill waits for it.
 
 ## Conversations
 
 A launch always opens a **fresh draft**, never the last chat. Nothing is stored until the first
 message is sent (`Application.new_session` then runs), so opening and quitting leaves no empty
-conversation behind. `ctrl+n` returns to a fresh draft the same way; the conversation you leave is
-kept. `ctrl+o` (or the palette's *Switch conversation…*) opens `SessionPicker`: the principal's
-sessions, most recent first, the current one marked. Enter replays the stored history (user text,
-assistant text, tool calls with their arguments) into the chat; `d` then `d` again deletes the
-highlighted conversation for good (moving the highlight cancels the first press), and deleting the
-open one returns to a fresh draft. The first message of a session is saved as its title.
-Switching and new/delete are refused while a run is active. Reasoning and tool output are not
+conversation behind.
+
+Each open conversation is a **tab** (`tabs.py`): a `Conversation` pane that holds its own run
+state, so a run keeps going while another tab is shown; its events go to the pane that started it.
+`ctrl+n` (or `+`, or `/new`) opens a new tab with a fresh draft; on an empty tab it does nothing.
+`alt+1`..`alt+9`, `ctrl+pageup`/`ctrl+pagedown` or a click switch tabs; `/close` closes one (not
+while it runs; the conversation stays stored). Each tab keeps its unsent prompt text. A background
+tab that needs an approval comes to the front with the question. The tab label is the title cut
+to 24 columns with `...`, behind a spinner while it runs or `?` while it waits for you.
+
+`ctrl+o` (or the palette's *Switch conversation…*) opens `SessionPicker`: the principal's
+sessions, most recent first, the current one marked. Enter shows the conversation's tab if it is
+open, else replays the stored history (user text, assistant text, tool calls with their arguments)
+into an empty tab or a new one; `d` then `d` again deletes the highlighted conversation for good
+(moving the highlight cancels the first press). Deleting an open one closes its tab (or empties
+it, if it is the last); a running one is refused. The first message is saved as the title until
+the small model names the conversation; the tab picks that name up when the first run ends. Reasoning and tool output are not
 stored, so a replayed conversation shows neither. Data crosses the boundary as gateway-neutral
 `SessionSummary` and `HistoryItem` (in `gateways/base.py`); the TUI never touches the store.
 
 ## Approvals
 
 When a gated tool call needs a decision (`approval.required`, from the parent run or a child), the
-card shows `? awaiting approval`, the header says `? needs your approval`, and `ApprovalScreen`
+card shows `? awaiting approval`, the sidebar says `needs your approval`, and `ApprovalScreen`
 opens with the tool and its command or arguments. `y` approves; `n` or `esc` rejects; Enter does
 nothing, so a stray key cannot approve a command. The answer goes through
-`Application.decide_approval`. If the run ends while a dialog is open, the dialog closes. The set
+`Application.decide_approval`. If the run ends while its dialog is open, the dialog closes. The set
 of gated tools is `AGENT_STACK_APPROVAL_TOOLS`.
 
-## Header and sidebar
+## Tab bar and sidebar
 
-The header shows the run state (`● idle`, `⠋ working 12s`, `◌ cancelling…`, `✓ done 12s`,
-`■ cancelled`, `✗ failed`). The sidebar shows the session, an **estimated** context meter
-(about 4 chars per token against `AGENT_STACK_CONTEXT_WINDOW`, default 1M for the default model; amber at 70%, red at 90%), tool-call count,
-the last four subagents, and the workspace with the git branch.
+The tab bar holds only the tabs. The sidebar shows, for the tab on screen: the session; one
+context meter against `AGENT_STACK_CONTEXT_WINDOW` (default 1M for the default model; amber at
+70%, red at 90%), which is the input size the model reported for the conversation's last main call
+(subagent and title calls excluded), or a `~` estimate (about 4 chars per token) before the first
+report; activity (run state `⠋ working 12s`, `cancelling…`, `needs your approval`,
+`✓ done in 12s`, `■ cancelled`, `✗ failed`; tool-call count; spend); the last four subagents.
+At the bottom: the model, the approval mode (`auto` in amber, else `ask`) and the workspace with
+the git branch.
 
 ## Keys
 
 `enter` send · `shift+enter`/`ctrl+j` newline · `esc` cancel run or focus prompt ·
-`ctrl+c` cancel, then quit · `ctrl+q` quit · `ctrl+n` new conversation · `ctrl+o` switch conversation · `ctrl+b` sidebar (a second press returns to automatic) ·
+`ctrl+c` cancel, then quit · `ctrl+q` quit · `ctrl+n` new tab · `alt+1`..`9` go to tab ·
+`ctrl+pageup`/`ctrl+pagedown` previous / next tab · `ctrl+o` switch conversation · `ctrl+b` sidebar (a second press returns to automatic) ·
 `ctrl+t` theme · `ctrl+p` palette · `f1` help overlay.
 
 ## Performance

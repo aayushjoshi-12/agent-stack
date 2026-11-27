@@ -2,10 +2,13 @@
 
 Drives the :class:`Application`: the conversation streams user and assistant messages,
 collapsible thinking and tool cards (live spinner, duration, capped shell output) and
-subagent rows; a context sidebar shows session, context usage and activity; a footer
-lists the keys that matter now and ``F1`` opens the full list. It touches only
+subagent rows; a context sidebar shows session, context usage, activity, model and mode; a
+footer lists the keys that matter now and ``F1`` opens the full list. It touches only
 ``Application``, ``gateways.base`` and ``core.events``: every run goes through
 ``Application.send_message`` and every cancel through ``Application.cancel_run``.
+
+Each open conversation is a tab (:mod:`tabs`). A tab's run keeps going while another tab is
+shown: every run's events are routed to the :class:`Conversation` that started it.
 
 Layout is responsive through Textual breakpoints (ADR 012): the screen gets
 ``-narrow``/``-normal``/``-wide`` and ``-short``/``-tall`` classes that the stylesheet
@@ -26,18 +29,19 @@ from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.command import Hit, Hits, Provider
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical
 from textual.markup import escape
-from textual.widgets import Footer, OptionList, Static
+from textual.widgets import ContentSwitcher, Footer, OptionList
 from textual.widgets.option_list import Option
 
 from agent_stack.app.application import Application, IdentityResolver
 from agent_stack.core.events import AgentEvent, EventType
-from agent_stack.gateways.base import MessageEnvelope, SessionUsage, usage_summary
+from agent_stack.gateways.base import MessageEnvelope, usage_summary
 from agent_stack.gateways.tui.render import (
     tool_args_lines,
     tool_detail,
 )
+from agent_stack.gateways.tui.tabs import Conversation, TabBar, ellipsize
 from agent_stack.gateways.tui.theme import DARK, DEFAULT_THEME, LIGHT, THEMES
 from agent_stack.gateways.tui.widgets import (
     AgentMessage,
@@ -45,7 +49,6 @@ from agent_stack.gateways.tui.widgets import (
     BranchesScreen,
     ChangesScreen,
     Disclosure,
-    HeaderBar,
     HelpScreen,
     Notice,
     PromptArea,
@@ -70,9 +73,11 @@ _COMMAND_RE = re.compile(r"^/[A-Za-z][\w-]*(\s|$)")
 #: Two Escapes within this many seconds count as "esc esc".
 _DOUBLE_ESC_SECONDS = 0.8
 
-
 #: Tools whose calls change files; their cards show a diff once they finish.
 _FILE_TOOLS = frozenset({"write_file", "edit_file"})
+
+#: Columns a tab's title gets in the tab bar before it ends in "...".
+_TAB_TITLE = 24
 
 
 class TuiCommands(Provider):
@@ -83,7 +88,10 @@ class TuiCommands(Provider):
         app = cast("TuiApp", self.app)
         commands: list[tuple[str, Any]] = [
             ("Cancel current run", app.action_cancel_run),
-            ("New conversation", app.action_new_session),
+            ("New tab", app.action_new_session),
+            ("Close this tab", app.action_close_tab),
+            ("Next tab", app.action_next_tab),
+            ("Previous tab", app.action_previous_tab),
             ("Switch conversation…", app.action_switch_session),
             ("Switch approval mode (ask / auto)", app.action_toggle_approval_mode),
             ("Rewind to an earlier message…", app.action_rewind),
@@ -122,7 +130,10 @@ class TuiApp(App[None]):
     BINDINGS: ClassVar[list[Any]] = [
         Binding("ctrl+c", "cancel_or_quit", "cancel/quit", show=False, priority=True),
         Binding("escape", "escape_or_focus", "cancel", key_display="esc"),
-        Binding("ctrl+n", "new_session", "new"),
+        Binding("ctrl+n", "new_session", "new tab"),
+        Binding("ctrl+pagedown", "next_tab", "next tab", show=False),
+        Binding("ctrl+pageup", "previous_tab", "previous tab", show=False),
+        *(Binding(f"alt+{n}", f"go_to_tab({n - 1})", f"tab {n}", show=False) for n in range(1, 10)),
         Binding("ctrl+o", "switch_session", "chats"),
         Binding("ctrl+g", "show_changes", "files"),
         Binding("ctrl+b", "toggle_sidebar", "sidebar"),
@@ -142,7 +153,6 @@ class TuiApp(App[None]):
         super().__init__()
         self.application = application
         self._principal = IdentityResolver().resolve("tui", principal)
-        self._session_id = session_id
         self._resume = resume  # open ``session_id``'s history at startup
 
         for theme in THEMES:
@@ -151,48 +161,34 @@ class TuiApp(App[None]):
         self.theme = wanted if wanted in self.available_themes else DEFAULT_THEME
 
         self._last_escape = 0.0
-        self._active_run_id: str | None = None
-        self._run_active = False
-        self._cancel_sent = False
-        self._run_started = 0.0
-        self._last_outcome = ""  # "" | "done" | "failed" | "cancelled"
-        self._last_elapsed = 0.0
-        self._task_title: str | None = None
-        self._tokens = 0
-        self._usage = SessionUsage()  # what this conversation has cost so far (all runs)
-        self._file_paths: dict[str, str] = {}  # write/edit call id -> the path it touches
         self._branch = ""
         self._sidebar_override: bool | None = None
-        self._last_child_id: str | None = None
-
-        self.cards: dict[str, Disclosure] = {}
-        self.subagent_rows: dict[str, SubagentRow] = {}
-        self._tools_run = 0
         self._titles: dict[str, str] = {}
-        self._awaiting = 0  # approval requests currently open
         self._tasks: set[asyncio.Task[None]] = set()
+        self._tab_seq = 0
+        self.tab = self._new_conversation()  # the tab on screen
+        self.tab.session_id = session_id
+        self._tabs = [self.tab]
 
     # ── layout ────────────────────────────────────────────────────────────────
     def compose(self) -> ComposeResult:
-        yield HeaderBar()
+        yield TabBar(id="tabs")
         with Horizontal(id="body"):
             with Vertical(id="conversation"):
-                yield VerticalScroll(Welcome(), id="chat")
+                yield ContentSwitcher(self.tab, id="chats", initial=self.tab.id)
                 with Vertical(id="composer"):
                     yield OptionList(id="completions")
                     yield PromptArea(id="prompt")
-                yield Static("", id="hints")
             yield Sidebar(id="sidebar")
         yield Footer()
 
     async def on_mount(self) -> None:
-        self.query_one(HeaderBar).set_model(self.application.get_model())
         self.query_one("#prompt", PromptArea).focus()
         self.set_interval(0.1, self._tick)
         self._refresh_all()
         self._spawn(self._load_branch())
-        if self._resume and self._session_id is not None:  # started with a conversation to continue
-            self._spawn(self._resume_session(self._session_id))
+        if self._resume and self.tab.session_id is not None:  # a conversation to continue
+            self._spawn(self._resume_session(self.tab.session_id))
 
     # ── the prompt keeps the keyboard ─────────────────────────────────────────
     def on_mouse_down(self) -> None:
@@ -221,21 +217,26 @@ class TuiApp(App[None]):
         session = await self.application.get_session(session_id)
         if session is None:
             self.notify(f"No conversation {session_id}.", severity="error")
-            self._session_id = None
+            self.tab.session_id = None
             return
         self._titles[session_id] = session.title or ""
-        await self._open_session(session_id)
+        await self._open_session(session_id, here=True)
 
     @property
     def session_title(self) -> str | None:
-        return self._task_title
+        return self.tab.title
 
     @property
     def resume_command(self) -> str | None:
         """How to come back to this conversation, once it has anything in it."""
-        if self._session_id is None or (self._task_title is None and not self._tokens):
+        if self.tab.session_id is None or (self.tab.title is None and not self.tab.tokens):
             return None
-        return f"agent-stack resume {self._session_id}"
+        return f"agent-stack resume {self.tab.session_id}"
+
+    @property
+    def queued_count(self) -> int:
+        """Messages in this tab waiting for the run to read them (up arrow takes one back)."""
+        return len(self.tab.queued)
 
     def on_unmount(self) -> None:
         for task in list(self._tasks):
@@ -261,11 +262,82 @@ class TuiApp(App[None]):
             self._branch = branch
             self._refresh_sidebar()
 
-    # ── input ─────────────────────────────────────────────────────────────────
+    # ── tabs ──────────────────────────────────────────────────────────────────
+    def _new_conversation(self) -> Conversation:
+        self._tab_seq += 1
+        return Conversation(id=f"chat-{self._tab_seq}")
+
+    def _show_tab(self, tab: Conversation) -> None:
+        """Put ``tab`` on screen; the prompt keeps each tab's unsent text."""
+        prompt = self.query_one("#prompt", PromptArea)
+        if tab is not self.tab:
+            self.tab.draft = prompt.text
+            prompt.load_text(tab.draft)
+            prompt.move_cursor(prompt.document.end)
+        self.tab = tab
+        self.query_one("#chats", ContentSwitcher).current = tab.id
+        self._refresh_all()
+        prompt.focus()
+
+    async def _add_tab(self) -> Conversation:
+        tab = self._new_conversation()
+        tab.display = False  # the switcher shows it once it is current
+        await self.query_one("#chats", ContentSwitcher).mount(tab)
+        self._tabs.append(tab)
+        self._show_tab(tab)
+        return tab
+
+    async def _replace_tab(self, old: Conversation) -> Conversation:
+        """A fresh, empty pane in ``old``'s place (the stored conversation is untouched)."""
+        tab = self._new_conversation()
+        tab.display = False
+        await self.query_one("#chats", ContentSwitcher).mount(tab, after=old)
+        self._tabs[self._tabs.index(old)] = tab
+        self._show_tab(tab)
+        await old.remove()
+        return tab
+
+    async def action_new_session(self) -> None:
+        """Open a new tab with a fresh conversation (stored when its first message is sent)."""
+        if self.tab.blank:
+            self.query_one("#prompt", PromptArea).focus()
+            return
+        await self._add_tab()
+
+    async def action_close_tab(self) -> None:
+        """Close this tab; its conversation stays stored and can be reopened (ctrl+o)."""
+        if self._busy():
+            return
+        old = self.tab
+        if len(self._tabs) == 1:
+            await self._replace_tab(old)
+            return
+        at = self._tabs.index(old)
+        self._tabs.remove(old)
+        self._show_tab(self._tabs[min(at, len(self._tabs) - 1)])
+        await old.remove()
+
+    def action_go_to_tab(self, index: int) -> None:
+        if 0 <= index < len(self._tabs):
+            self._show_tab(self._tabs[index])
+
+    def action_next_tab(self) -> None:
+        self.action_go_to_tab((self._tabs.index(self.tab) + 1) % len(self._tabs))
+
+    def action_previous_tab(self) -> None:
+        self.action_go_to_tab((self._tabs.index(self.tab) - 1) % len(self._tabs))
+
+    async def on_tab_bar_picked(self, message: TabBar.Picked) -> None:
+        if message.index < 0:
+            await self.action_new_session()
+        else:
+            self.action_go_to_tab(message.index)
+
     # ── slash commands ────────────────────────────────────────────────────────
     def _builtins(self) -> dict[str, tuple[str, Any]]:
         return {
-            "new": ("start a new conversation", self.action_new_session),
+            "new": ("start a new conversation in a new tab", self.action_new_session),
+            "close": ("close this tab (the conversation stays stored)", self.action_close_tab),
             "sessions": ("open an earlier conversation", self.action_switch_session),
             "rewind": ("go back to an earlier message", self.action_rewind),
             "branches": ("draw this conversation's branches", self.action_show_branches),
@@ -352,12 +424,12 @@ class TuiApp(App[None]):
 
     async def _compact(self, focus: str) -> None:
         """``/compact [focus]``: replace the conversation so far with a saved summary."""
-        if self._session_id is None:
+        if self.tab.session_id is None:
             self.notify("Nothing to compact yet.")
             return
         self.notify("Compacting the conversation…")
         try:
-            count = await self.application.compact_session(self._session_id, focus)
+            count = await self.application.compact_session(self.tab.session_id, focus)
         except Exception as exc:
             self.notify(f"Cannot compact: {exc}", severity="error")
             return
@@ -377,7 +449,6 @@ class TuiApp(App[None]):
         except Exception as exc:
             self.notify(f"Cannot switch model: {exc}", severity="error")
             return
-        self.query_one(HeaderBar).set_model(now)
         self.notify(f"Model: {now} (from the next message on)")
         self._refresh_all()
 
@@ -399,18 +470,27 @@ class TuiApp(App[None]):
         self.notify(text, severity="warning" if now == "auto" else "information", timeout=6)
         self._refresh_all()
 
+    # ── input ─────────────────────────────────────────────────────────────────
     async def on_prompt_area_submitted(self, event: PromptArea.Submitted) -> None:
         text = event.text
         if text in _QUIT_WORDS:
             self.exit()
             return
+        command = bool(_COMMAND_RE.match(text.strip()))
+        if self.tab.running and not command:
+            await self._queue_input(text)
+            return
+        prompt = self.query_one("#prompt", PromptArea)
+        if command and text.strip()[1:].split()[0].lower() in self._builtins():
+            self.query_one("#completions", OptionList).display = False
+            prompt.clear_text()
+            await self._run_slash(text)
+            return
         if self._busy():
             return
         self.query_one("#completions", OptionList).display = False
-        self.query_one("#prompt", PromptArea).clear_text()
-        if _COMMAND_RE.match(text.strip()):
-            if await self._run_slash(text):
-                return
+        prompt.clear_text()
+        if command:
             names = {c.name.lower().replace("_", "-") for c in self.application.slash_commands()}
             if text.strip()[1:].split()[0].lower().replace("_", "-") not in names:
                 self.notify(
@@ -435,11 +515,11 @@ class TuiApp(App[None]):
 
     async def action_show_branches(self) -> None:
         """Draw the branches of the open conversation."""
-        if self._session_id is None:
+        if self.tab.session_id is None:
             self.notify("Nothing to show yet.")
             return
         try:
-            text = await self.application.timeline.tree_text(self._session_id)
+            text = await self.application.timeline.tree_text(self.tab.session_id)
         except Exception as exc:
             self.notify(f"Cannot draw the branches: {exc}", severity="error")
             return
@@ -447,16 +527,17 @@ class TuiApp(App[None]):
 
     async def action_make_reference(self) -> None:
         """Name the last finished turn so another conversation can open it."""
-        if self._session_id is None:
+        session_id = self.tab.session_id
+        if session_id is None:
             self.notify("Nothing to reference yet.")
             return
         try:
             timeline = self.application.timeline
-            done = [t for t in await timeline.turns(self._session_id) if t.completed_event_id]
+            done = [t for t in await timeline.turns(session_id) if t.completed_event_id]
             if not done:
                 self.notify("Nothing has finished in this conversation yet.")
                 return
-            reference = await timeline.reference(self._session_id, str(done[-1].index))
+            reference = await timeline.reference(session_id, str(done[-1].index))
         except Exception as exc:
             self.notify(f"Cannot make a reference: {exc}", severity="error")
             return
@@ -467,61 +548,88 @@ class TuiApp(App[None]):
         )
 
     async def _submit_prompt(self, text: str) -> None:
-        self._remove_welcome()
-        if self._session_id is None:
-            # A launch (or ctrl+n) is only a draft: the session is stored on first message,
-            # so opening and quitting never leaves an empty conversation behind.
-            self._session_id = await self.application.new_session(self._principal)
-        if self._task_title is None:
-            self._task_title = text
-            await self._name_session(text)
-        self._bump_tokens(text)
-        self._chat().mount(UserMessage(text))
+        tab = self.tab
+        self._remove_welcome(tab)
+        if tab.session_id is None:
+            # A new tab is only a draft: the session is stored on first message, so opening
+            # and quitting never leaves an empty conversation behind.
+            tab.session_id = await self.application.new_session(self._principal)
+        if tab.title is None:
+            tab.title = text
+            await self._name_session(tab.session_id, text)
+        self._bump_tokens(tab, text)
+        tab.mount(UserMessage(text))
         delegated = _parse_delegation(text)
         if delegated is not None:
             # Honest delegation: the app can only start a run on the wired agent, so the
             # named subagent is reached by asking the model to delegate to it (P20).
             name, task = delegated
             text = f"Delegate this task to the `{name}` subagent: {task}"
-        await self._start_run(text)
+        await self._start_run(tab, text)
+
+    async def _queue_input(self, text: str) -> None:
+        """Send a message into the working run; the model reads it before its next step."""
+        tab = self.tab
+        if not await self.application.send_input(tab.run_id or "", text):
+            self.notify("The run had just finished. Press enter to send it.", severity="warning")
+            return
+        self.query_one("#prompt", PromptArea).clear_text()
+        bubble = UserMessage(text, queued=True)
+        tab.queued.append(bubble)
+        tab.mount(bubble)
+
+    async def action_edit_queued(self) -> None:
+        """Take the latest queued message back into the prompt (edit it, or clear it to drop it)."""
+        tab = self.tab
+        if not tab.queued:
+            return
+        bubble = tab.queued[-1]
+        if not await self.application.withdraw_input(tab.run_id or "", bubble.text):
+            self.notify("The agent has already read that message.")
+            return
+        tab.queued.remove(bubble)
+        await bubble.remove()
+        prompt = self.query_one("#prompt", PromptArea)
+        prompt.load_text(bubble.text)
+        prompt.move_cursor(prompt.document.end)
 
     def _busy(self) -> bool:
-        """True (after telling the user) while a run is active: one thing at a time."""
-        if self._run_active:
+        """True (after telling the user) while this tab's run is active."""
+        if self.tab.running:
             self.notify("A run is in progress. Press esc to cancel it first.", severity="warning")
-        return self._run_active
+        return self.tab.running
 
-    async def _name_session(self, text: str) -> None:
+    async def _name_session(self, session_id: str, text: str) -> None:
         """Persist the first message as the session's title so it is findable later."""
         try:
-            await self.application.set_session_title(self._session_id or "", text[:80])
+            await self.application.set_session_title(session_id, text[:80])
         except Exception:  # a cosmetic title must never block the message
             return
 
-    async def _start_run(self, text: str) -> None:
+    async def _start_run(self, tab: Conversation, text: str) -> None:
         envelope = MessageEnvelope(
-            principal=self._principal, session=self._session_id or "", text=text
+            principal=self._principal, session=tab.session_id or "", text=text
         )
         handle = await self.application.send_message(envelope)
-        self._active_run_id = handle.run_id
-        self._run_active = True
-        self._cancel_sent = False
-        self._run_started = time.monotonic()
+        tab.run_id = handle.run_id
+        tab.running = True
+        tab.cancel_sent = False
+        tab.run_started = time.monotonic()
         self._refresh_all()
-        self._spawn(self._consume(handle))
+        self._spawn(self._consume(tab, handle))
 
-    async def _consume(self, handle: Any) -> None:
+    async def _consume(self, tab: Conversation, handle: Any) -> None:
         try:
             async for event in handle.events():
-                self.handle_event(event)
-            if self._run_active and self._active_run_id == handle.run_id:
+                self.handle_event(event, tab)
+            if tab.running and tab.run_id == handle.run_id:
                 # The stream ended with no terminal event: a hard cancel publishes none.
-                self._finish_run("failed")
+                self._finish_run(tab, "failed")
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # a broken run must not tear down the UI
             self.notify(str(exc), severity="error")
-            self._finish_run("failed")
+            self._finish_run(tab, "failed")
 
     def _spawn(self, coro: Any) -> None:
         task = asyncio.create_task(coro)
@@ -529,84 +637,91 @@ class TuiApp(App[None]):
         task.add_done_callback(self._tasks.discard)
 
     # ── event routing ─────────────────────────────────────────────────────────
-    def handle_event(self, event: AgentEvent) -> None:
-        """Route one runtime event to the conversation, header and sidebar."""
-        if len(self.query("#chat")) == 0:
-            # The screen has been torn down (quit or test teardown) while a stream
-            # was still live; drop the event rather than touching dead widgets.
+    def handle_event(self, event: AgentEvent, tab: Conversation | None = None) -> None:
+        """Route one runtime event to its tab's conversation, the tab bar and the sidebar."""
+        tab = tab or self.tab
+        if not tab.is_attached:
+            # The tab was closed, or the screen torn down (quit or test teardown), while a
+            # stream was still live; drop the event rather than touching dead widgets.
             return
         if event.type is EventType.MODEL_USAGE:
             # Every run counts, a subagent's included: they are all this conversation's spend.
-            self._usage = self._usage.plus(event.data)
+            tab.usage = tab.usage.plus(event.data)
+            if event.run_id == tab.run_id and event.data.get("purpose") != "title":
+                tab.context = int(event.data.get("input_tokens", 0) or 0) or tab.context
             self._refresh_all()
             return
         if event.type is EventType.APPROVAL_REQUIRED:
-            self._on_approval_required(event)  # from any run: a child can be blocked too
+            self._on_approval_required(tab, event)  # from any run: a child can be blocked too
         elif event.type is EventType.APPROVAL_RESOLVED:
-            self._on_approval_resolved(event)
+            self._on_approval_resolved(tab, event)
         elif event.type is EventType.APPROVAL_AUTO:
             self._on_approval_auto(event)
         elif event.type is EventType.SUBAGENT_STARTED:
-            self._on_subagent_started(event)
+            self._on_subagent_started(tab, event)
         elif event.type is EventType.SUBAGENT_COMPLETED:
-            self._on_subagent_completed(event)
+            self._on_subagent_completed(tab, event)
         elif event.type is EventType.CONTEXT_COMPACTED and event.parent_run_id is None:
-            self._chat().mount(
+            tab.mount(
                 Notice(f"context compacted: {event.data.get('messages', 0)} messages summarised")
             )
-        elif event.parent_run_id is not None and event.run_id != self._active_run_id:
+        elif event.parent_run_id is not None and event.run_id != tab.run_id:
             pass  # child-run detail stays out of the parent conversation
         else:
-            self._on_main_event(event)
+            self._on_main_event(tab, event)
 
-    def _on_main_event(self, event: AgentEvent) -> None:
+    def _on_main_event(self, tab: Conversation, event: AgentEvent) -> None:
         etype = event.type
         if etype is EventType.RUN_STARTED:
-            self._active_run_id = event.run_id
-            if not self._run_active:
-                self._run_active = True
-                self._run_started = time.monotonic()
+            tab.run_id = event.run_id
+            if not tab.running:
+                tab.running = True
+                tab.run_started = time.monotonic()
         elif etype is EventType.MODEL_REASONING:
-            self._on_reasoning(event)
+            self._on_reasoning(tab, event)
         elif etype is EventType.ASSISTANT_MESSAGE:
-            self._on_assistant(event)
+            self._on_assistant(tab, event)
         elif etype is EventType.TOOL_STARTED:
-            self._on_tool_started(event)
+            self._on_tool_started(tab, event)
         elif etype is EventType.TOOL_OUTPUT:
-            card = self.cards.get(str(event.data.get("tool_call_id")))
+            card = tab.cards.get(str(event.data.get("tool_call_id")))
             if card is not None:
                 card.append(str(event.data.get("chunk", "")))
         elif etype is EventType.TOOL_COMPLETED:
             call_id = str(event.data.get("tool_call_id"))
-            card = self.cards.get(call_id)
+            card = tab.cards.get(call_id)
             if card is not None:
                 ok = event.data.get("ok", True)  # older events carry no flag
-                if ok and call_id in self._file_paths:
+                if ok and call_id in tab.file_paths:
                     # settle after the diff arrives, so the card opens on what changed
-                    self._spawn(self._finish_with_diff(card, call_id, event))
+                    self._spawn(self._finish_with_diff(tab, card, call_id, event))
                 else:
                     card.finish("done" if ok else "failed")
+        elif etype is EventType.INPUT_RECEIVED:
+            self._on_input_received(tab, str(event.data.get("text", "")))
         elif etype is EventType.RUN_FAILED:
-            self._on_failed(event)
+            self._on_failed(tab, event)
         elif etype is EventType.RUN_COMPLETED:
-            self._finish_run("done")  # a successful run adds no row to the conversation
+            self._finish_run(tab, "done")  # a successful run adds no row to the conversation
         if etype is not EventType.TOOL_OUTPUT:  # output only moves the card; the tick repaints it
             self._refresh_all()
 
-    def _on_approval_required(self, event: AgentEvent) -> None:
+    def _on_approval_required(self, tab: Conversation, event: AgentEvent) -> None:
         """Pause on the card and ask the human; the answer goes back through the Application."""
         call_id = str(event.data.get("tool_call_id", ""))
         tool = str(event.data.get("tool", "tool"))
         args = event.data.get("args")
-        card = self.cards.get(call_id)
+        card = tab.cards.get(call_id)
         if card is not None:
             card.await_approval()
-        self._awaiting += 1
+        tab.awaiting += 1
         detail = tool_detail(args) if tool == "run_command" else tool_args_lines(args)
         approval_id = str(event.data.get("approval_id", ""))
 
         def answer(approved: bool | None) -> None:
-            if not self._run_active:
+            if screen in tab.dialogs:
+                tab.dialogs.remove(screen)
+            if not tab.running:
                 return  # the run ended (cancelled) while the dialog was open
             try:
                 self.application.decide_approval(
@@ -619,7 +734,11 @@ class TuiApp(App[None]):
             except Exception as exc:  # a refused decision must not take the UI down
                 self.notify(str(exc), severity="warning")
 
-        self.push_screen(ApprovalScreen(tool, detail, str(event.data.get("note", ""))), answer)
+        if tab is not self.tab:
+            self._show_tab(tab)  # what is being approved is on screen behind the question
+        screen = ApprovalScreen(tool, detail, str(event.data.get("note", "")))
+        tab.dialogs.append(screen)
+        self.push_screen(screen, answer)
         self._refresh_all()
 
     def _on_approval_auto(self, event: AgentEvent) -> None:
@@ -633,35 +752,36 @@ class TuiApp(App[None]):
             self.notify(f"auto mode blocked {tool}: {reason}", severity="error", timeout=10)
         # "ask" is followed by the usual question, which shows the reason
 
-    def _on_approval_resolved(self, event: AgentEvent) -> None:
-        self._awaiting = max(0, self._awaiting - 1)
-        card = self.cards.get(str(event.data.get("tool_call_id", "")))
+    def _on_approval_resolved(self, tab: Conversation, event: AgentEvent) -> None:
+        tab.awaiting = max(0, tab.awaiting - 1)
+        card = tab.cards.get(str(event.data.get("tool_call_id", "")))
         if card is not None and event.data.get("status") == "approved":
             card.resume_running()
         self._refresh_all()
 
-    def _close_approval_dialogs(self) -> None:
-        """Dismiss any open approval dialog (the run it belonged to is over)."""
-        while isinstance(self.screen, ApprovalScreen):
+    def _close_approval_dialogs(self, tab: Conversation) -> None:
+        """Dismiss the tab's open approval dialogs (the run they belonged to is over)."""
+        while self.screen in tab.dialogs:
             self.screen.dismiss(False)
+        tab.dialogs.clear()
 
-    def _on_reasoning(self, event: AgentEvent) -> None:
+    def _on_reasoning(self, tab: Conversation, event: AgentEvent) -> None:
         text = str(event.data.get("text", ""))
         if not text.strip():
             return
-        self._bump_tokens(text)
-        self._remove_welcome()
-        self._chat().mount(Disclosure("think", "thinking", body=text))
+        self._bump_tokens(tab, text)
+        self._remove_welcome(tab)
+        tab.mount(Disclosure("think", "thinking", body=text))
 
-    def _on_assistant(self, event: AgentEvent) -> None:
+    def _on_assistant(self, tab: Conversation, event: AgentEvent) -> None:
         content = str(event.data.get("content", ""))
         if not content.strip():
             return
-        self._bump_tokens(content)
-        self._remove_welcome()
-        self._chat().mount(AgentMessage(content))
+        self._bump_tokens(tab, content)
+        self._remove_welcome(tab)
+        tab.mount(AgentMessage(content))
 
-    def _on_tool_started(self, event: AgentEvent) -> None:
+    def _on_tool_started(self, tab: Conversation, event: AgentEvent) -> None:
         name = str(event.data.get("tool", "tool"))
         args = event.data.get("args")
         card = Disclosure(
@@ -672,59 +792,82 @@ class TuiApp(App[None]):
             running=True,
             opened=name == "run_command",
         )
-        self._remove_welcome()
-        self._chat().mount(card)
-        self._tools_run += 1
+        self._remove_welcome(tab)
+        tab.mount(card)
+        tab.tools_run += 1
         call_id = str(event.data.get("tool_call_id", ""))
         if call_id:
-            self.cards[call_id] = card
+            tab.cards[call_id] = card
             path = args.get("path") if isinstance(args, Mapping) else None
             if name in _FILE_TOOLS and isinstance(path, str):
-                self._file_paths[call_id] = path
+                tab.file_paths[call_id] = path
 
-    def _on_failed(self, event: AgentEvent) -> None:
-        self._chat().mount(Notice(f"error: {event.data.get('error', 'run failed')}"))
-        self._finish_run("failed")
+    def _on_failed(self, tab: Conversation, event: AgentEvent) -> None:
+        tab.mount(Notice(f"error: {event.data.get('error', 'run failed')}"))
+        self._finish_run(tab, "failed")
 
-    def _on_subagent_started(self, event: AgentEvent) -> None:
+    def _on_subagent_started(self, tab: Conversation, event: AgentEvent) -> None:
         child = str(event.data.get("child_run_id", ""))
         name = str(event.data.get("agent_name", "subagent"))
         if child:
-            self._last_child_id = child
+            tab.last_child_id = child
         row = SubagentRow(name)
-        self._chat().mount(row)
+        tab.mount(row)
         if child:
-            self.subagent_rows[child] = row
+            tab.subagent_rows[child] = row
         self._refresh_sidebar()
 
-    def _on_subagent_completed(self, event: AgentEvent) -> None:
+    def _on_subagent_completed(self, tab: Conversation, event: AgentEvent) -> None:
         child = str(event.data.get("child_run_id", ""))
         status = str(event.data.get("status", "completed"))
-        row = self.subagent_rows.get(child)
+        row = tab.subagent_rows.get(child)
         if row is not None:
             row.finish(status)
         self._refresh_sidebar()
 
-    def _finish_run(self, outcome: str) -> None:
-        if not self._run_active and outcome == "failed":
+    def _on_input_received(self, tab: Conversation, text: str) -> None:
+        """A queued message reached the model: show it where it was read."""
+        bubble = next((b for b in tab.queued if b.text == text), None)
+        if bubble is None:
             return
-        self._close_approval_dialogs()
-        self._awaiting = 0
-        self._last_elapsed = time.monotonic() - self._run_started if self._run_started else 0.0
-        self._last_outcome = "cancelled" if self._cancel_sent and outcome == "failed" else outcome
-        self._run_active = False
-        self._cancel_sent = False
-        for card in self.cards.values():
+        tab.queued.remove(bubble)
+        bubble.remove()
+        tab.mount(UserMessage(text))
+
+    def _finish_run(self, tab: Conversation, outcome: str) -> None:
+        if not tab.running and outcome == "failed":
+            return
+        if tab.queued:  # a stopped run never read them: hand them back to edit or resend
+            text = "\n\n".join(b.text for b in tab.queued)
+            if tab is self.tab:
+                prompt = self.query_one("#prompt", PromptArea)
+                prompt.load_text(f"{text}\n\n{prompt.text}".strip())
+            else:
+                tab.draft = f"{text}\n\n{tab.draft}".strip()
+            for bubble in tab.queued:
+                bubble.remove()
+            tab.queued.clear()
+        self._close_approval_dialogs(tab)
+        tab.awaiting = 0
+        tab.elapsed = time.monotonic() - tab.run_started if tab.run_started else 0.0
+        tab.outcome = "cancelled" if tab.cancel_sent and outcome == "failed" else outcome
+        tab.running = False
+        tab.cancel_sent = False
+        for card in tab.cards.values():
             if card.status == "running":
                 card.finish("done")
             elif card.status == "waiting":  # the run ended while it was asking
                 card.finish("failed")
         self._refresh_all()
-        self._spawn(self._sync_usage())
+        self._spawn(self._sync_usage(tab))
+        if not tab.named:
+            self._spawn(self._sync_title(tab))
 
-    async def _finish_with_diff(self, card: Disclosure, call_id: str, event: AgentEvent) -> None:
+    async def _finish_with_diff(
+        self, tab: Conversation, card: Disclosure, call_id: str, event: AgentEvent
+    ) -> None:
         """Fill a write/edit card with the diff of what that call changed, then settle it."""
-        path = self._file_paths.pop(call_id, "")
+        path = tab.file_paths.pop(call_id, "")
         try:
             change = await self.application.changed_file(
                 event.session_id, path, event.run_id, latest_only=True
@@ -738,140 +881,159 @@ class TuiApp(App[None]):
 
     async def action_show_changes(self) -> None:
         """Open the list of files the agent created or edited in this conversation."""
-        if self._session_id is None:
+        if self.tab.session_id is None:
             self.notify("Nothing has been changed yet.", severity="information")
             return
         try:
-            files = await self.application.changed_files(self._session_id)
+            files = await self.application.changed_files(self.tab.session_id)
         except Exception as exc:
             self.notify(f"Could not read the changes: {exc}", severity="error")
             return
         self.push_screen(ChangesScreen(files))
 
-    async def _sync_usage(self) -> None:
+    async def _sync_usage(self, tab: Conversation) -> None:
         """Replace the running total with the durable one (it also holds subagent runs)."""
-        session_id = self._session_id
+        session_id = tab.session_id
         if session_id is None:
             return
         try:
             usage = await self.application.session_usage(session_id)
         except Exception:  # a cost display must never break the conversation
             return
-        if self._session_id == session_id:
-            self._usage = usage
+        if tab.session_id == session_id:
+            tab.usage = usage
             self._refresh_all()
 
-    # ── conversation helpers ──────────────────────────────────────────────────
-    def _chat(self) -> VerticalScroll:
-        return self.query_one("#chat", VerticalScroll)
+    async def _sync_title(self, tab: Conversation, tries: int = 5) -> None:
+        """Pick up the title the small model gave the conversation (it lands in the background)."""
+        session_id = tab.session_id
+        for attempt in range(tries):
+            if session_id is None or tab.session_id != session_id:
+                return
+            with contextlib.suppress(Exception):  # a title is cosmetic
+                session = await self.application.get_session(session_id)
+                title = session.title if session is not None else ""
+                if title and title != (tab.title or "")[:80]:
+                    tab.title, tab.named = title, True
+                    self._refresh_all()
+                    return
+            if attempt + 1 < tries:
+                await asyncio.sleep(2)
 
-    def _remove_welcome(self) -> None:
+    # ── conversation helpers ──────────────────────────────────────────────────
+    def _remove_welcome(self, tab: Conversation) -> None:
         """First content ends the empty state and starts following the output.
 
         The chat is anchored only once there is a conversation: an anchored container
         bottom-aligns short content, which would push the welcome panel to the bottom.
         """
-        for welcome in self.query(Welcome):
+        for welcome in tab.query(Welcome):
             welcome.remove()
-        chat = self._chat()
-        if not chat.is_anchored:
-            chat.anchor()  # follow new output unless the user scrolls up
+        if not tab.is_anchored:
+            tab.anchor()  # follow new output unless the user scrolls up
 
-    def _bump_tokens(self, text: str) -> None:
-        """Approximate context usage: ~4 chars per token."""
-        self._tokens += max(1, len(text) // 4)
+    def _bump_tokens(self, tab: Conversation, text: str) -> None:
+        """Approximate context usage until the model reports it: ~4 chars per token."""
+        tab.tokens += max(1, len(text) // 4)
         self._refresh_sidebar()
 
-    # ── header / sidebar / hints ──────────────────────────────────────────────
+    # ── tab bar / sidebar ─────────────────────────────────────────────────────
     def _tick(self) -> None:
         now = time.monotonic()
-        for card in self.cards.values():
-            card.tick(now)
-        for row in self.subagent_rows.values():
-            row.tick(now)
-        if self._run_active:
-            self._refresh_header(now)
+        for tab in self._tabs:
+            for card in tab.cards.values():
+                card.tick(now)
+            for row in tab.subagent_rows.values():
+                row.tick(now)
+        if any(tab.running for tab in self._tabs):
+            self._refresh_tabs(now)
+        if self.tab.running:
+            self._refresh_sidebar(now)
 
     def _refresh_all(self) -> None:
-        if len(self.query(HeaderBar)) == 0:
+        if len(self.query(TabBar)) == 0:
             return  # fires in the gap between screen teardown and app unmount
-        self._refresh_header()
+        self._refresh_tabs()
         self._refresh_sidebar()
-        self._refresh_hints()
+        self._refresh_prompt()
 
-    def _refresh_header(self, now: float | None = None) -> None:
-        if len(self.query(HeaderBar)) == 0:
+    def _refresh_tabs(self, now: float | None = None) -> None:
+        bars = self.query(TabBar)
+        if not bars:
             return
-        header = self.query_one(HeaderBar)
-        header.set_title(self._task_title or "New conversation")
         now = time.monotonic() if now is None else now
-        if self._run_active and self._cancel_sent:
-            state = "[$warning]◌ cancelling…[/]"
-        elif self._run_active and self._awaiting:
-            state = "[$warning]? needs your approval[/]"
-        elif self._run_active:
-            state = f"[$accent]{spinner_frame(now)} working {format_duration(now - self._run_started)}[/]"
-        elif self._last_outcome == "done":
-            state = f"[$success]✓ done {format_duration(self._last_elapsed)}[/]"
-        elif self._last_outcome == "cancelled":
-            state = "[$warning]■ cancelled[/]"
-        elif self._last_outcome == "failed":
-            state = "[$error]✗ failed[/]"
-        else:
-            state = "[$text-muted]● idle[/]"
-        header.set_state(state)
+        labels = []
+        for tab in self._tabs:
+            if tab.running:
+                mark = "? " if tab.awaiting else f"{spinner_frame(now)} "
+            else:
+                mark = "✗ " if tab.outcome == "failed" else ""
+            labels.append(mark + ellipsize(tab.title or "New conversation", _TAB_TITLE))
+        bars.first(TabBar).show(labels, self._tabs.index(self.tab))
 
-    def _sidebar_state(self) -> SidebarState:
-        running = sum(1 for c in self.cards.values() if c.status == "running")
-        if self._run_active:
-            word = (
-                "cancelling"
-                if self._cancel_sent
-                else "awaiting approval"
-                if self._awaiting
-                else "working"
+    def _status(self, now: float | None = None) -> str:
+        """This tab's run state, as markup: working (with time), waiting, done, failed…"""
+        tab = self.tab
+        now = time.monotonic() if now is None else now
+        if tab.running and tab.cancel_sent:
+            return "[$warning]cancelling…[/]"
+        if tab.running and tab.awaiting:
+            return "[$warning]needs your approval[/]"
+        if tab.running:
+            return (
+                f"[$accent]{spinner_frame(now)} working {format_duration(now - tab.run_started)}[/]"
             )
-        else:
-            word = self._last_outcome or "idle"
+        if tab.outcome == "done":
+            return f"[$success]✓ done in {format_duration(tab.elapsed)}[/]"
+        if tab.outcome == "cancelled":
+            return "[$warning]■ cancelled[/]"
+        if tab.outcome == "failed":
+            return "[$error]✗ failed[/]"
+        return "[$text-muted]idle[/]"
+
+    def _sidebar_state(self, now: float | None = None) -> SidebarState:
+        tab = self.tab
+        running = sum(1 for c in tab.cards.values() if c.status == "running")
         return SidebarState(
-            title=self._task_title or "New conversation",
-            session=f"session {self._session_id}" if self._session_id else "not saved yet",
-            tokens=self._tokens,
+            title=tab.title or "New conversation",
+            session=f"session {tab.session_id}" if tab.session_id else "not saved yet",
+            tokens=tab.context or tab.tokens,
+            estimated=not tab.context,
             window=self.application.config.context_window,
-            tools_run=self._tools_run,
+            tools_run=tab.tools_run,
             tools_running=running,
-            subagents=[(r.agent_name, r.outcome) for r in self.subagent_rows.values()],
+            subagents=[(r.agent_name, r.outcome) for r in tab.subagent_rows.values()],
             workspace=_short_path(self.application.config.workspace, 28),
             branch=self._branch,
-            state=word,
-            cost=usage_summary(self._usage) if self._usage.calls else "",
+            state=self._status(now),
+            cost=usage_summary(tab.usage, context=False) if tab.usage.calls else "",
             mode=self.application.get_approval_mode(),
+            model=self.application.get_model(),
         )
 
-    def _refresh_sidebar(self) -> None:
+    def _refresh_sidebar(self, now: float | None = None) -> None:
         if len(self.query("#sidebar")) == 0:
             return
-        self.query_one(Sidebar).render_state(self._sidebar_state())
+        self.query_one(Sidebar).render_state(self._sidebar_state(now))
 
-    def _refresh_hints(self) -> None:
-        if len(self.query("#hints")) == 0:
-            return
-        # only the auto-mode flag: model, cost and keys are in the header, sidebar and footer
-        hints = self.query_one("#hints", Static)
-        hints.update("[bold $warning]auto mode[/]")
-        hints.display = self.application.get_approval_mode() == "auto"
+    def _refresh_prompt(self) -> None:
         prompt = self.query_one("#prompt", PromptArea)
-        prompt.placeholder = "Working…" if self._run_active else "Ask anything…"
+        prompt.placeholder = (
+            "Working… type to queue a message (up arrow takes the last one back)"
+            if self.tab.running
+            else "Ask anything…"
+        )
 
     # ── actions ──────────────────────────────────────────────────────────────
     async def action_cancel_run(self) -> None:
-        if self._active_run_id is not None and self._run_active and not self._cancel_sent:
-            self._cancel_sent = True
+        tab = self.tab
+        if tab.run_id is not None and tab.running and not tab.cancel_sent:
+            tab.cancel_sent = True
             self._refresh_all()
-            await self.application.cancel_run(self._active_run_id)
+            await self.application.cancel_run(tab.run_id)
 
     async def action_cancel_or_quit(self) -> None:
-        if self._run_active and not self._cancel_sent:
+        if self.tab.running and not self.tab.cancel_sent:
             await self.action_cancel_run()
         else:
             self.exit()
@@ -882,7 +1044,7 @@ class TuiApp(App[None]):
         A second Esc within a moment clears what is typed, or, with an empty prompt, opens the
         rewind picker (the Claude Code habit).
         """
-        if self._run_active and not self._cancel_sent:
+        if self.tab.running and not self.tab.cancel_sent:
             await self.action_cancel_run()
             return
         prompt = self.query_one("#prompt", PromptArea)
@@ -900,18 +1062,19 @@ class TuiApp(App[None]):
         """Pick an earlier message and go back to it (conversation, code, or both)."""
         if self._busy():
             return
-        if self._session_id is None:
+        session_id = self.tab.session_id
+        if session_id is None:
             self.notify("Nothing to rewind to: this conversation has no messages yet.")
             return
         try:
-            turns = await self.application.timeline.lineage(self._session_id)
+            turns = await self.application.timeline.lineage(session_id)
         except Exception as exc:  # a conversation with no event log, say
             self.notify(f"Cannot rewind here: {exc}", severity="error")
             return
         turns = [t for t in turns if t.turn.user_text]
         if not turns:
             self.notify(
-                f"Nothing to rewind to: no earlier messages found for {self._session_id}.",
+                f"Nothing to rewind to: no earlier messages found for {session_id}.",
                 severity="warning",
             )
             return
@@ -919,10 +1082,10 @@ class TuiApp(App[None]):
 
     async def action_restore_files(self) -> None:
         """Put the folder in this conversation's file state (after opening another one)."""
-        if self._busy() or self._session_id is None:
+        if self._busy() or self.tab.session_id is None:
             return
         try:
-            result = await self.application.timeline.restore_files(self._session_id)
+            result = await self.application.timeline.restore_files(self.tab.session_id)
         except Exception as exc:
             self.notify(f"Could not restore files: {exc}", severity="error")
             return
@@ -955,7 +1118,7 @@ class TuiApp(App[None]):
             self._spawn(self._rewind(*choice))
 
     async def _rewind(self, target: Any, mode: str) -> None:
-        current = self._session_id
+        current = self.tab.session_id
         if current is None:
             return
         try:
@@ -970,7 +1133,7 @@ class TuiApp(App[None]):
             return
         if outcome.session_id != current:
             self._titles[outcome.session_id] = "rewound"
-            await self._open_session(outcome.session_id)
+            await self._open_session(outcome.session_id, here=True)
         moved = len(outcome.files.moved)
         text = (
             f"Rewound. {moved} file{'s' if moved != 1 else ''} restored." if moved else "Rewound."
@@ -984,84 +1147,73 @@ class TuiApp(App[None]):
             prompt.focus()
 
     def action_scroll_chat(self, key: str) -> None:
-        chat = self._chat()
         if key == "pageup":
-            chat.scroll_page_up()
+            self.tab.scroll_page_up()
         else:
-            chat.scroll_page_down()
-
-    async def _reset_conversation(self) -> None:
-        """Empty the screen and per-conversation counters (the stored session is untouched)."""
-        chat = self._chat()
-        chat.release_anchor()
-        await chat.remove_children()  # awaited: the old Welcome shares its id
-        await chat.mount(Welcome())
-        self.cards.clear()
-        self.subagent_rows.clear()
-        self._tools_run = 0
-        self._task_title = None
-        self._tokens = 0
-        self._usage = SessionUsage()
-        self._last_outcome = ""
-        self._last_child_id = None
-
-    async def action_new_session(self) -> None:
-        """Start a fresh stored conversation; the current one stays in the picker."""
-        if self._busy():
-            return
-        self._session_id = None  # a draft; stored when the first message is sent
-        await self._reset_conversation()
-        self._refresh_all()
-        self.query_one("#prompt", PromptArea).focus()
+            self.tab.scroll_page_down()
 
     async def action_switch_session(self) -> None:
         """Open the conversation picker."""
-        if self._busy():
-            return
         sessions = await self.application.list_sessions(self._principal)
         self._titles = {s.id: s.title for s in sessions}
         self.push_screen(
-            SessionPicker(sessions, self._session_id, self._delete_session),
+            SessionPicker(sessions, self.tab.session_id, self._delete_session),
             self._on_session_picked,
         )
 
     async def _delete_session(self, session_id: str) -> None:
-        """Delete a stored conversation; deleting the open one returns to a fresh draft."""
+        """Delete a stored conversation; a tab showing it closes (or empties, if it is the last)."""
+        tab = next((t for t in self._tabs if t.session_id == session_id), None)
+        if tab is not None and tab.running:
+            self.notify("That conversation is running. Cancel it first.", severity="warning")
+            return
         await self.application.delete_session(session_id)
         self._titles.pop(session_id, None)
-        if session_id == self._session_id:
-            self._session_id = None
-            await self._reset_conversation()
-            self._refresh_all()
+        if tab is not None:
+            if len(self._tabs) == 1:
+                await self._replace_tab(tab)
+            else:
+                self._tabs.remove(tab)
+                if tab is self.tab:
+                    self._show_tab(self._tabs[0])
+                await tab.remove()
+                self._refresh_all()
         self.notify("Conversation deleted.")
 
     def _on_session_picked(self, session_id: str | None) -> None:
-        if session_id is not None and session_id != self._session_id:
+        if session_id is not None and session_id != self.tab.session_id:
             self._spawn(self._open_session(session_id))
 
-    async def _open_session(self, session_id: str) -> None:
-        """Switch to a stored conversation and replay its history into the chat."""
+    async def _open_session(self, session_id: str, *, here: bool = False) -> None:
+        """Show a stored conversation: its tab if one is open, else a tab with its history.
+
+        ``here`` loads it into this tab (a rewind's branch, the conversation to resume);
+        otherwise an empty tab is reused and anything else stays open in its own tab.
+        """
+        existing = next((t for t in self._tabs if t.session_id == session_id), None)
+        if existing is not None and not here:
+            self._show_tab(existing)
+            return
         history = await self.application.session_history(session_id)
-        self._session_id = session_id
-        await self._reset_conversation()
+        tab = await (self._replace_tab(self.tab) if here or self.tab.blank else self._add_tab())
+        tab.session_id = session_id
         with contextlib.suppress(Exception):  # the cost is informational; history matters more
-            self._usage = await self.application.session_usage(session_id)
+            tab.usage = await self.application.session_usage(session_id)
+            tab.context = tab.usage.last_input_tokens
         title = self._titles.get(session_id, "")
-        self._task_title = None if title in ("", "Untitled") else title
-        chat = self._chat()
+        tab.title = None if title in ("", "Untitled") else title
+        tab.named = tab.title is not None
         if history:
-            self._remove_welcome()
+            self._remove_welcome(tab)
         for item in history:
             if item.kind == "user":
-                chat.mount(UserMessage(item.text))
+                tab.mount(UserMessage(item.text))
             elif item.kind == "assistant":
-                chat.mount(AgentMessage(item.text))
+                tab.mount(AgentMessage(item.text))
             elif item.kind == "compaction":
-                chat.mount(
-                    Disclosure("think", "context compacted", "summary above", body=item.text)
-                )
+                tab.mount(Disclosure("think", "context compacted", "summary above", body=item.text))
             elif item.kind == "tool":
-                chat.mount(
+                tab.mount(
                     Disclosure(
                         "tool",
                         item.text,
@@ -1069,9 +1221,9 @@ class TuiApp(App[None]):
                         body=tool_args_lines(item.args),
                     )
                 )
-            self._tokens += max(1, len(item.text) // 4)
+            tab.tokens += max(1, len(item.text) // 4)
         self._refresh_all()
-        self.call_after_refresh(chat.scroll_end, animate=False)
+        self.call_after_refresh(tab.scroll_end, animate=False)
         self.query_one("#prompt", PromptArea).focus()
         await self._warn_if_files_differ(session_id)
 
@@ -1096,8 +1248,8 @@ class TuiApp(App[None]):
         self.push_screen(HelpScreen())
 
     async def action_interrupt_subagent(self) -> None:
-        if self._last_child_id is not None:
-            await self.application.cancel_run(self._last_child_id)
+        if self.tab.last_child_id is not None:
+            await self.application.cancel_run(self.tab.last_child_id)
 
 
 def _short(text: str, width: int) -> str:

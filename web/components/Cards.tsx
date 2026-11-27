@@ -190,10 +190,36 @@ export function AssistantBubble({ text, depth = 0 }: { text: string; depth?: num
   );
 }
 
-export function UserBubble({ text }: { text: string }) {
+export function UserBubble({
+  text,
+  queued = false,
+  onEdit,
+  onCancel,
+}: {
+  text: string;
+  queued?: boolean;
+  /** A queued message only: take it back into the composer / drop it. */
+  onEdit?: () => void;
+  onCancel?: () => void;
+}) {
   return (
-    <section className="ml-auto max-w-[85%] border-2 border-line bg-yellow p-3 text-on-yellow shadow-[4px_4px_0_var(--line)]" aria-label="You">
-      <div className="mb-1 text-xs font-bold uppercase tracking-wide">you</div>
+    <section
+      className={`ml-auto max-w-[85%] border-2 border-line bg-yellow p-3 text-on-yellow shadow-[4px_4px_0_var(--line)] ${queued ? "opacity-70" : ""}`}
+      aria-label={queued ? "You (queued)" : "You"}
+    >
+      <div className="mb-1 flex items-baseline gap-3 text-xs font-bold uppercase tracking-wide">
+        <span className="flex-1">{queued ? "you · queued" : "you"}</span>
+        {onEdit && (
+          <button type="button" className="underline" onClick={onEdit}>
+            edit
+          </button>
+        )}
+        {onCancel && (
+          <button type="button" className="underline" onClick={onCancel}>
+            cancel
+          </button>
+        )}
+      </div>
       <p className="whitespace-pre-wrap break-words">{text}</p>
     </section>
   );

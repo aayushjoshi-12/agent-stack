@@ -113,27 +113,26 @@ async def test_shift_tab_and_slash_mode_switch_auto_mode_and_show_it() -> None:
         await pilot.press("shift+tab")
         await _settle(pilot)
         assert fake.get_approval_mode() == "auto"
-        hints = app.query_one("#hints")
-        assert "auto mode" in str(hints.render()) and hints.display
+        assert "auto" in str(app.query_one("#sb-mode").render())  # in the sidebar, not the composer
         prompt = app.query_one("#prompt", PromptArea)
         prompt.load_text("/mode ask")
         await pilot.press("enter")
         await _settle(pilot)
         assert fake.get_approval_mode() == "ask"
-        assert not app.query_one("#hints").display  # ask mode: no line at all
+        assert "ask" in str(app.query_one("#sb-mode").render())
 
 
 async def test_the_prompt_keeps_the_keyboard_after_clicks_and_stray_typing() -> None:
     app, _ = _app()
     async with app.run_test(size=(120, 40)) as pilot:
         prompt = app.query_one("#prompt", PromptArea)
-        app.query_one("#chat").focus()
+        app.tab.focus()
         await _settle(pilot)
         await pilot.press("h", "i")
         await _settle(pilot)
         assert app.focused is prompt and prompt.text == "hi"
 
-        await pilot.click("#chat")
+        await pilot.click(app.tab)
         await _settle(pilot)
         assert app.focused is prompt
 

@@ -165,8 +165,11 @@ def format_tokens(count: int) -> str:
     return f"{count / 1_000_000:.1f}M".replace(".0M", "M")
 
 
-def usage_summary(usage: SessionUsage) -> str:
-    """One line every gateway shows: cost, tokens, calls; flags unpriced calls honestly."""
+def usage_summary(usage: SessionUsage, *, context: bool = True) -> str:
+    """One line every gateway shows: cost, tokens, calls; flags unpriced calls honestly.
+
+    ``context=False`` leaves out the context size, for a gateway that shows it elsewhere.
+    """
     if usage.calls == 0:
         return "no model calls yet"
     cost = format_cost(usage.cost_usd) if usage.priced_calls else "cost unknown"
@@ -177,7 +180,7 @@ def usage_summary(usage: SessionUsage) -> str:
         f"{format_tokens(usage.output_tokens)} out · {usage.calls} calls"
         + (
             f" · context {format_tokens(usage.last_input_tokens)}"
-            if usage.last_input_tokens
+            if usage.last_input_tokens and context
             else ""
         )
     )

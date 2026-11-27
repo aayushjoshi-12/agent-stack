@@ -38,7 +38,6 @@ __all__ = [
     "ApprovalScreen",
     "ChangesScreen",
     "Disclosure",
-    "HeaderBar",
     "HelpScreen",
     "Notice",
     "PromptArea",
@@ -88,8 +87,14 @@ def spinner_frame(now: float) -> str:
 class UserMessage(Static):
     """What the user typed: a raised panel with an accent bar."""
 
-    def __init__(self, text: str) -> None:
-        super().__init__(escape(text), classes="user-message")
+    def __init__(self, text: str, *, queued: bool = False) -> None:
+        shown = escape(text) + (
+            "\n[dim]queued: read at the agent's next step · up arrow to edit or cancel[/]"
+            if queued
+            else ""
+        )
+        super().__init__(shown, classes="user-message -queued" if queued else "user-message")
+        self.text = text
 
 
 class AgentMessage(Markdown):
@@ -456,6 +461,10 @@ class PromptArea(TextArea):
             event.stop()
             event.prevent_default()
             await self.app.run_action(f"scroll_chat('{key}')")
+        elif key == "up" and not self.text and int(getattr(self.app, "queued_count", 0)) > 0:
+            event.stop()
+            event.prevent_default()
+            await self.app.run_action("edit_queued")
         elif key == "up" and self.cursor_location[0] == 0 and self._history:
             event.stop()
             event.prevent_default()
@@ -492,32 +501,6 @@ class PromptArea(TextArea):
 
 
 # ── chrome: header, sidebar, welcome, help ───────────────────────────────────
-class HeaderBar(Horizontal):
-    """Brand + session title on the left; run state and model on the right."""
-
-    def compose(self):  # type: ignore[no-untyped-def]
-        yield Static("◆ agent-stack", id="brand")
-        yield Static("", id="title")
-        yield Static("", id="run-state")
-        yield Static("", id="model")
-
-    def _set(self, selector: str, markup: str) -> None:
-        # The repaint tick can fire while the app is tearing down and the children are
-        # already gone; a missing child is then simply nothing to update.
-        for widget in self.query(selector):
-            if isinstance(widget, Static):
-                widget.update(markup)
-
-    def set_title(self, title: str) -> None:
-        self._set("#title", escape(title))
-
-    def set_model(self, model: str) -> None:
-        self._set("#model", escape(model))
-
-    def set_state(self, markup: str) -> None:
-        self._set("#run-state", markup)
-
-
 @dataclass
 class SidebarState:
     """Everything the sidebar shows; the app rebuilds this on change."""
@@ -525,6 +508,8 @@ class SidebarState:
     title: str = "New conversation"
     session: str = ""
     tokens: int = 0
+    #: ``tokens`` is a rough count of the text, not yet a size the model reported.
+    estimated: bool = True
     window: int = 200_000
     tools_run: int = 0
     tools_running: int = 0
@@ -534,10 +519,11 @@ class SidebarState:
     state: str = "idle"
     cost: str = ""
     mode: str = "ask"
+    model: str = ""
 
 
 class Sidebar(Vertical):
-    """The context panel: session, context usage, activity, subagents, workspace."""
+    """The context panel: session, context, activity, subagents; model, mode and workspace below."""
 
     BAR = 26
 
@@ -547,6 +533,8 @@ class Sidebar(Vertical):
         yield Static("", id="sb-activity", classes="sb-section")
         yield Static("", id="sb-subagents", classes="sb-section")
         yield Static("", id="sb-spacer")
+        yield Static("", id="sb-model", classes="sb-section")
+        yield Static("", id="sb-mode", classes="sb-section")
         yield Static("", id="sb-workspace", classes="sb-section")
 
     def render_state(self, s: SidebarState) -> None:
@@ -558,14 +546,15 @@ class Sidebar(Vertical):
             f"[$foreground-muted]SESSION[/]\n[bold]{escape(s.title)}[/]\n"
             f"[$foreground-muted]{escape(s.session)}[/]"
         )
+        approx = "~" if s.estimated else ""
         self.query_one("#sb-context", Static).update(
             f"[$foreground-muted]CONTEXT[/]\n{bar}\n"
-            f"{s.tokens / 1000:.1f}K / {s.window // 1000}K [$foreground-muted]· {pct}%[/]"
+            f"{approx}{s.tokens / 1000:.1f}K / {s.window // 1000}K [$foreground-muted]· {pct}%[/]"
         )
         running = f"  [$accent]{s.tools_running} running[/]" if s.tools_running else ""
         self.query_one("#sb-activity", Static).update(
-            f"[$foreground-muted]ACTIVITY[/]\n{s.tools_run} tool call{'' if s.tools_run == 1 else 's'}{running}\nstatus: {s.state}"
-            + ("\napprovals: [bold $warning]auto[/]" if s.mode == "auto" else "\napprovals: ask")
+            f"[$foreground-muted]ACTIVITY[/]\n{s.state}\n"
+            f"{s.tools_run} tool call{'' if s.tools_run == 1 else 's'}{running}"
             + (f"\n[$foreground-muted]spent[/] {escape(s.cost)}" if s.cost else "")
         )
         if s.subagents:
@@ -582,6 +571,11 @@ class Sidebar(Vertical):
         where = f"{escape(s.workspace)}" + (
             f"\n[$foreground-muted]⎇ {escape(s.branch)}[/]" if s.branch else ""
         )
+        self.query_one("#sb-model", Static).update(
+            f"[$foreground-muted]MODEL[/]\n{escape(s.model)}"
+        )
+        mode = "[bold $warning]auto[/]" if s.mode == "auto" else "ask"
+        self.query_one("#sb-mode", Static).update(f"[$foreground-muted]APPROVALS[/]\n{mode}")
         self.query_one("#sb-workspace", Static).update(f"[$foreground-muted]WORKSPACE[/]\n{where}")
 
 
@@ -610,6 +604,7 @@ HELP = (
             ("pageup / pagedown", "scroll the conversation"),
             ("esc", "cancel the run, or return to the prompt"),
             ("esc esc", "rewind: go back to an earlier message (clears typed text first)"),
+            ("up", "on an empty prompt during a run: take back the last queued message"),
             ("/", "commands and skills: type / for a list, tab completes"),
             (
                 "shift+tab",
@@ -622,8 +617,10 @@ HELP = (
     (
         "App",
         (
-            ("ctrl+p", "command palette (themes, new conversation, …)"),
-            ("ctrl+n", "new conversation (the current one is kept)"),
+            ("ctrl+p", "command palette (themes, tabs, …)"),
+            ("ctrl+n", "new tab (other tabs keep running)"),
+            ("alt+1..9", "go to tab 1 to 9 (or click it)"),
+            ("ctrl+pgup / pgdn", "previous / next tab"),
             ("ctrl+o", "switch to an earlier conversation"),
             ("ctrl+g", "files the agent changed, with their diffs"),
             ("ctrl+b", "show or hide the context sidebar"),

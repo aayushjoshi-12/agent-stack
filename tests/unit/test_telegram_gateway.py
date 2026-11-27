@@ -259,7 +259,7 @@ async def test_a_redelivered_update_is_acted_on_once() -> None:
     assert len(application.sent) == 1
 
 
-async def test_a_second_message_during_a_run_is_refused() -> None:
+async def test_a_message_during_a_run_is_queued_into_it() -> None:
     gate = asyncio.Event()
     application = FakeApplication(events=[event(EventType.RUN_STARTED)], gate=gate)
     gateway, api = _gateway(application)
@@ -267,10 +267,12 @@ async def test_a_second_message_during_a_run_is_refused() -> None:
     await gateway.handle_update(_message("long task"))
     await asyncio.sleep(0.05)
     await gateway.handle_update(_message("and another"))
-    await gateway.handle_update(_message("/new"))
+    await gateway.handle_update(_message("/new"))  # a command still waits for the run
 
     assert len(application.sent) == 1
-    assert sum("in progress" in t for t in api.texts()) == 2
+    assert [m for _, m in application.inputs] == ["and another"]
+    assert any("Queued" in t for t in api.texts())
+    assert sum("in progress" in t for t in api.texts()) == 1
     gate.set()
     await _settle(gateway)
 

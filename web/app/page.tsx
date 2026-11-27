@@ -62,6 +62,8 @@ export default function Page() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryRow[]>([]);
   const [pendingUser, setPendingUser] = useState<string | null>(null);
+  /** Messages sent while the run worked that the model has not read yet. */
+  const [queued, setQueued] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [stopping, setStopping] = useState(false);
   const [usage, setUsage] = useState<UsageInfo | null>(null);
@@ -128,6 +130,12 @@ export default function Page() {
       const id = activeRef.current;
       setStopping(false);
       setPendingUser(null);
+      if (unreadRef.current.length) {
+        // A stopped run never read them: hand them back to edit or resend.
+        draftCount.current += 1;
+        setDraft({ text: unreadRef.current.join("\n\n"), n: draftCount.current });
+      }
+      setQueued([]);
       if (id) runBySession.current.delete(id);
       if (id && phase === "completed" && live.state.completedEventId) setForkable({ sessionId: id, eventId: live.state.completedEventId });
       void (async () => {
@@ -297,6 +305,21 @@ export default function Page() {
     async (text: string) => {
       if (!conn) return;
       setError("");
+      const working = activeRef.current ? runBySession.current.get(activeRef.current) : undefined;
+      if (running && working) {
+        try {
+          const { accepted } = await api.input(conn, working, text);
+          if (accepted) setQueued((q) => [...q, text]);
+          else {
+            draftCount.current += 1;
+            setDraft({ text, n: draftCount.current });
+            setNotice("The run had just finished; your message is back in the box to send.");
+          }
+        } catch (e) {
+          fail(e);
+        }
+        return;
+      }
       try {
         let id = activeRef.current;
         if (!id) {
@@ -316,8 +339,48 @@ export default function Page() {
         fail(e);
       }
     },
-    [conn, live, refreshSessions, fail],
+    [conn, live, running, refreshSessions, fail],
   );
+
+  // Queued messages the model has read now show in the timeline; the rest stay "queued".
+  const unread = useMemo(() => {
+    const left = queued.slice();
+    for (const item of live.state.items) {
+      const at = item.kind === "user" ? left.indexOf(item.text) : -1;
+      if (at >= 0) left.splice(at, 1);
+    }
+    return left;
+  }, [queued, live.state.items]);
+  const unreadRef = useRef(unread);
+
+  // Take a queued message back before the model reads it: into the composer to edit, or gone.
+  const withdraw = useCallback(
+    async (text: string, edit: boolean) => {
+      const working = activeRef.current ? runBySession.current.get(activeRef.current) : undefined;
+      if (!conn || !working) return;
+      try {
+        const { withdrawn } = await api.withdraw(conn, working, text);
+        if (!withdrawn) {
+          setNotice("The agent has already read that message.");
+          return;
+        }
+        setQueued((q) => {
+          const at = q.lastIndexOf(text);
+          return at < 0 ? q : [...q.slice(0, at), ...q.slice(at + 1)];
+        });
+        if (edit) {
+          draftCount.current += 1;
+          setDraft({ text, n: draftCount.current });
+        }
+      } catch (e) {
+        fail(e);
+      }
+    },
+    [conn, fail],
+  );
+  useEffect(() => {
+    unreadRef.current = unread;
+  }, [unread]);
 
   const onRewound = useCallback(
     (result: RewindResult) => {
@@ -575,8 +638,19 @@ export default function Page() {
                   return <FailureCard key={item.key} text={item.text} />;
                 case "notice":
                   return <p key={item.key} className="code text-soft">↺ {item.text}</p>;
+                case "user":
+                  return <UserBubble key={item.key} text={item.text} />;
               }
             })}
+            {unread.map((text, i) => (
+              <UserBubble
+                key={`q${i}`}
+                text={text}
+                queued
+                onEdit={() => void withdraw(text, true)}
+                onCancel={() => void withdraw(text, false)}
+              />
+            ))}
             {live.state.phase === "cancelled" && <p className="code text-soft">■ stopped. Nothing is running and no further calls will be made.</p>}
           </div>
         </div>

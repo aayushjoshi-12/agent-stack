@@ -57,7 +57,7 @@ async def test_double_escape_opens_the_picker_and_rewinds_code_and_conversation(
         await _settle(pilot)
 
         assert (w.workspace / "a.txt").read_text() == "v1\n"  # code put back
-        assert app._session_id not in (None, "s1")  # now in the fork
+        assert app.tab.session_id not in (None, "s1")  # now in the fork
         prompt = app.query_one("#prompt", PromptArea)
         assert prompt.text == "change a"  # the rewound message, ready to edit
 
@@ -103,7 +103,7 @@ async def test_opening_the_original_warns_and_the_palette_action_restores_its_fi
         await _settle(pilot)
         await pilot.press("enter", "enter")  # rewind code + conversation
         await _settle(pilot)
-        fork = app._session_id
+        fork = app.tab.session_id
         assert (w.workspace / "a.txt").read_text() == "v1\n" and fork != "s1"
 
         await app._open_session("s1")  # as the chats picker does
@@ -140,7 +140,7 @@ async def test_branches_screen_reference_copy_and_pasting_a_reference_opens_it(
         app.query_one("#prompt", PromptArea).load_text(ref)
         await pilot.press("enter")
         await _settle(pilot)
-        assert app._session_id not in (None, "s1")  # a fork of s1 is now open
+        assert app.tab.session_id not in (None, "s1")  # a fork of s1 is now open
         assert len(await w.app.session_store.get_messages("s1")) == before  # nothing was sent
 
 

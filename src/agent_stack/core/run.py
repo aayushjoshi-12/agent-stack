@@ -139,7 +139,7 @@ class RunManager:
         self._tokens: dict[str, CancellationToken] = {}
         self._pumps: dict[str, asyncio.Task[None]] = {}
         self._queues: dict[str, asyncio.Queue[AgentEvent | None]] = {}
-        self._inboxes: dict[str, asyncio.Queue[str]] = {}
+        self._inboxes: dict[str, list[str]] = {}
         self._progress: dict[str, _Progress] = {}
         self._agent_names: dict[str, str] = {}
 
@@ -177,9 +177,7 @@ class RunManager:
 
         token = CancellationToken()
         self._tokens[run.id] = token
-        self._inboxes[run.id] = asyncio.Queue()
-        if request.notes:
-            self._inboxes[run.id].put_nowait(request.notes)  # drained before the first model call
+        self._inboxes[run.id] = []
         self._agent_names[run.id] = runtime.agent.name
 
         run.status = RunStatus.RUNNING
@@ -247,7 +245,8 @@ class RunManager:
                     counters=self._record_counters(run),
                     checkpoint_store=self._checkpoint_store,
                     parent_run_id=request.parent_run_id,
-                    inbox=lambda: self._drain_inbox(run.id),
+                    inbox=lambda close: self._drain_inbox(run.id, close=close),
+                    notes=request.notes,
                 )
             run.status = RunStatus.COMPLETED
             return result
@@ -379,13 +378,21 @@ class RunManager:
     async def send_input(self, run_id: str, message: str) -> bool:
         """Inject ``message`` into a running run's inbox.
 
-        Returns ``False`` for an unknown or already-finished run; the runtime drains the
-        inbox at the top of each loop iteration (before the model call).
+        Returns ``False`` for an unknown run or one past its final answer; the runtime drains
+        the inbox before each model call and once more before it finishes.
         """
         inbox = self._inboxes.get(run_id)
         if inbox is None:
             return False
-        inbox.put_nowait(message)
+        inbox.append(message)
+        return True
+
+    async def withdraw_input(self, run_id: str, message: str) -> bool:
+        """Take back a message ``send_input`` queued; ``False`` once the model has read it."""
+        inbox = self._inboxes.get(run_id)
+        if inbox is None or message not in inbox:
+            return False
+        del inbox[len(inbox) - 1 - inbox[::-1].index(message)]  # the latest copy
         return True
 
     async def start_subagent(
@@ -448,14 +455,19 @@ class RunManager:
         """Fetch the persisted records of a parent's child runs (for the UI)."""
         return await self._run_store.list_runs(parent_run_id)
 
-    def _drain_inbox(self, run_id: str) -> list[str]:
-        """Non-blocking read of a run's pending injected messages."""
+    def _drain_inbox(self, run_id: str, *, close: bool = False) -> list[str]:
+        """Non-blocking read of a run's pending injected messages.
+
+        ``close`` (the run is about to finish) removes an empty inbox in the same step, so a
+        later ``send_input`` returns ``False`` instead of landing where nothing reads it.
+        """
         inbox = self._inboxes.get(run_id)
         if inbox is None:
             return []
-        items: list[str] = []
-        while not inbox.empty():
-            items.append(inbox.get_nowait())
+        items = inbox[:]
+        inbox.clear()
+        if close and not items:
+            del self._inboxes[run_id]
         return items
 
     async def _publish_subagent_started(

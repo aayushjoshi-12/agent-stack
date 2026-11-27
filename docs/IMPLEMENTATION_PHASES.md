@@ -1524,6 +1524,246 @@ opening a chat at the matched message.
 
 ---
 
+## Phase 33 — Queued messages and TUI tabs ✅
+
+**Goal.** A message sent while the agent works is not refused: it reaches the model at its next
+step. The TUI holds several conversations at once, each running on its own.
+
+**Deliverables**
+- Runtime: every run's inbox is drained before each model call and once more after the final
+  answer; a message found then is answered in the same run. An empty final check closes the
+  inbox, so a later `send_input` returns `False` instead of being lost. `input.received` is
+  emitted for each message read. `RunManager.withdraw_input` / `Application.withdraw_input` take
+  back a message the model has not read. Monitor notes are passed to the runtime directly, no
+  longer through the inbox.
+- Gateways: TUI, web (`POST /runs/{id}/input`, `…/input/withdraw`) and Telegram queue a message
+  into the working run. TUI and web show it as "queued" until it is read, can take it back to edit
+  or cancel (TUI: up arrow on an empty prompt; web: edit / cancel buttons), and hand unread ones
+  back to the composer when a run is stopped.
+- TUI tabs (`gateways/tui/tabs.py`): each open conversation is a `Conversation` pane holding its
+  own run state; events route to the pane that started the run. The top bar is only tabs (title
+  cut with `...`, spinner while running, `?` while waiting). `ctrl+n` new tab, `alt+1..9`,
+  `ctrl+pageup/pagedown`, `/close`. The sidebar shows one context meter (the size the model last
+  reported for the main run, `~` estimate before that), status, spend, then model, approval mode
+  and workspace. The small model's title replaces the first message once it lands.
+
+**Acceptance**
+- `test_a_message_that_arrives_during_the_final_step_is_answered_in_the_same_run`,
+  `test_send_input_is_refused_once_the_run_is_past_its_final_answer` (incl. withdraw)
+- TUI: queue into a run, up arrow takes one back, unread return on stop, a background tab keeps
+  its own conversation, `/close`, title sync, context from the model's report
+- Telegram: a message during a run is queued
+
+---
+
+## Phase 34 — TUI refactor (split `app.py`)
+
+**Goal.** `gateways/tui/app.py` (~1100 lines) and `widgets.py` (~950) become modules a reader
+can hold in their head, with no behaviour change.
+
+**Deliverables**
+- Split by concern, for example: event routing / rendering of a run into a `Conversation`
+  (`conversation.py` or on `tabs.Conversation`), session/tab management, slash commands and
+  actions, sidebar/tab-bar refresh; `widgets.py` split into rows/cards, chrome (sidebar, welcome,
+  help) and modal screens. `app.py` stays the composition of those and the bindings.
+- No new abstraction layers: plain modules and functions; the public surface (`TuiApp`,
+  `TuiCommands`, the widget classes tests import) keeps working or tests are updated with it.
+- Update `docs/design/tui.md` for the new module map.
+
+**Acceptance**
+- `make check` green with the TUI tests unchanged in what they assert (imports may move).
+- No module in `gateways/tui/` over ~450 lines; a screenshot of the TUI (two tabs, a running
+  tool card, queued message, sidebar) looks identical before and after.
+
+---
+
+## Phase 35 — Tool timeouts, configurable and proven
+
+**Goal.** No tool call can hang a run. A per-call timeout exists (`AgentLimits.tool_timeout_seconds`,
+300 s, enforced in `ToolExecutor`) but is not configurable and is not proven for the tools that
+can actually hang.
+
+**Deliverables**
+- `AGENT_STACK_TOOL_TIMEOUT` (seconds, `off` allowed) in `AppConfig`, wired to the agent limits;
+  `.env.example` documents it.
+- Per-tool overrides where it matters (e.g. a tool can declare a longer default; `run_command`
+  keeps its own `timeout` argument but never exceeds the cap), and the cut-off kills the process
+  group of a running command, not just the asyncio task.
+- The model gets a clear tool result on timeout ("timed out after Ns; output so far: …") and the
+  run continues.
+
+**Acceptance**
+- tests: a tool that sleeps past the cap returns the timeout result and the run goes on;
+  `run_command` with `sleep 999` is killed (no orphan process); `off` disables the cap.
+
+---
+
+## Phase 36 — Auto-approval with structured output
+
+**Goal.** The auto-mode classifier's answer is parsed by LangChain's `with_structured_output`
+into a typed verdict, not fished out of free text with a regex.
+
+**Deliverables**
+- `approval/auto.py`: a Pydantic (or TypedDict) schema `{verdict: allow|deny|ask, reason: str}`;
+  the classifier calls `model.with_structured_output(schema)`; `parse_verdict` and its regex go.
+- A model that cannot do structured output (no tool calling / JSON mode) or returns something
+  invalid gives `ask` (the human decides), never `allow`.
+- The rule layer before the classifier is unchanged.
+
+**Acceptance**
+- tests with the fake model: allow / deny / ask round-trip; an invalid or failing structured call
+  becomes `ask`; a real-LLM smoke (`@pytest.mark.llm` or `tmp/smoke_tests`) against the small model.
+
+---
+
+## Phase 37 — Prompt caching
+
+**Goal.** Repeated prefixes (system prompt, tool schemas, earlier turns) are served from the
+provider's prompt cache, and the cache reads show in usage and cost.
+
+**Deliverables**
+- Anthropic (`anthropic:` models): `cache_control` breakpoints on the system prompt and on the
+  last message (or tools + system + rolling last turn, within the 4-breakpoint limit).
+- OpenRouter: `cache_control` breakpoints for models that need them (Anthropic, Gemini via
+  OpenRouter); providers that cache automatically (OpenAI, DeepSeek, …) need nothing but their
+  cached tokens must be reported. Research which OpenRouter models take explicit breakpoints.
+- Kept in `models/` and the one place messages are handed to the model; the runtime stays
+  provider-neutral. Cache reads/writes in `model.usage` (`cache_read_tokens` already exists) and
+  shown in the cost line.
+
+**Acceptance**
+- unit tests on the message transform (breakpoints placed, ≤4, nothing else changed);
+  smoke: two calls in a row on an OpenRouter Anthropic model and on the default model report
+  cache reads on the second call.
+
+---
+
+## Phase 38 — `web_screenshot` tool (Playwright)
+
+**Goal.** For web work the agent can look at a page it is building.
+
+**Deliverables**
+- `tools/builtins/screenshot.py`: `web_screenshot(url, width?, height?, full_page?)` with
+  Playwright (Chromium, headless). The PNG is saved as an artifact; the tool result carries the
+  path and, where the model accepts images, the image itself (coordinate with P44; until then,
+  the path and page title/console errors as text).
+- Same URL safety as `web_fetch` (no cloud metadata / link-local), but `localhost` allowed (the
+  dev server is the point). Gated like other networked tools.
+- Playwright as an optional extra (`uv sync --extra browser` + `playwright install chromium`);
+  the tool is left out with a clear message when it is not installed.
+
+**Acceptance**
+- test against a local `http.server` page: a PNG artifact exists with the right size; console
+  errors are reported; a blocked URL is refused.
+
+---
+
+## Phase 39 — Multi-turn rewind in the web UI
+
+**Goal.** In the web UI you rewind from the conversation itself, to any earlier turn, as in the
+TUI's `esc esc` picker: every earlier user message has a rewind action (conversation, code or
+both), and the rewound message comes back into the composer to edit.
+
+**Deliverables**
+- `web/`: a rewind control on each past user message in the chat (and keyboard: `esc esc` opens
+  the picker at the latest turn); turns across the fork lineage (`/sessions/{id}/turns`), the
+  existing `/rewind` endpoint; file-conflict notice as today.
+- `HistoryPanel`'s rewind tab stays as the list view.
+
+**Acceptance**
+- `npm test` for the turn ↔ message mapping; a smoke against the real server: rewind 3 turns
+  back, both modes, the composer holds the old prompt and the files are restored.
+
+---
+
+## Phase 40 — Rate limiting on the gateways
+
+**Goal.** A buggy or hostile client cannot hammer the API or the model bill.
+
+**Deliverables**
+- A small in-process token-bucket limiter (no new infrastructure) applied per principal:
+  web API (messages, inputs, everything else at a looser rate; `429` with `Retry-After`),
+  Telegram (per chat: messages and button presses; a polite "slow down" reply, at most once a
+  window). Limits in `AppConfig` (`AGENT_STACK_RATE_*`), `off` allowed.
+
+**Acceptance**
+- tests: burst over the limit → 429 / refusal, recovery after the window, separate principals
+  have separate buckets; the SSE stream itself is not limited.
+
+---
+
+## Phase 41 — Export a conversation (`/export`)
+
+**Goal.** `/export md` or `/export json` writes the conversation to a file.
+
+**Deliverables**
+- `Application.export_session(session_id, fmt)` → text: Markdown (title, messages, tool calls
+  with arguments and results folded) or JSON (the stored messages, redacted as the transcript is).
+- `/export [md|json] [path]` in the TUI (writes to the workspace, default
+  `<title>-<date>.md`), web (download), Telegram (sends the file), line REPL.
+
+**Acceptance**
+- unit tests for both formats (round-trip of the JSON, Markdown contains every user message and
+  tool call); gateway tests for each `/export`.
+
+---
+
+## Phase 42 — OpenTelemetry tracing
+
+**Goal.** A run can be followed in any OTLP backend: one trace per run, spans for model calls,
+tool calls and subagents.
+
+**Deliverables**
+- Optional extra (`opentelemetry-sdk`, OTLP exporter); off unless `OTEL_EXPORTER_OTLP_ENDPOINT`
+  (or `AGENT_STACK_OTEL=1`) is set. Spans: `run` (session, agent, model), `model.call` (tokens,
+  cost, cache reads), `tool.call` (name, ok, duration; arguments redacted as in the event log),
+  `subagent` as a child of the parent's tool span. Built from the existing event bus where
+  possible, so the runtime does not grow tracing code.
+
+**Acceptance**
+- tests with the in-memory span exporter: span tree for a run with a tool call and a subagent;
+  nothing exported or imported when off; redaction holds.
+
+---
+
+## Phase 43 — MCP client
+
+**Goal.** Tools from MCP servers are tools of the agent.
+
+**Deliverables**
+- Config: `.mcp.json` / `mcp.json` in the workspace and `~/.agent-stack/mcp.json`
+  (`{"mcpServers": {name: {command, args, env} | {url, headers}}}`, the Claude Code shape);
+  stdio and streamable HTTP transports (official `mcp` SDK or `langchain-mcp-adapters`).
+- Each server's tools are registered as `mcp__<server>__<tool>`, gated by the approval flow like
+  other side-effecting tools; servers start lazily and are stopped on shutdown; a server that
+  fails to start is reported, never fatal.
+- A gateway command/listing (`/mcp`) shows servers, status and tool counts.
+
+**Acceptance**
+- test against a tiny stdio MCP server written in the test: its tool appears, is called with
+  arguments, its result reaches the model; a broken server is skipped with a warning.
+
+---
+
+## Phase 44 — Images in (multimodal input)
+
+**Goal.** A user can give the agent images, at least: the model sees them as image content.
+
+**Deliverables**
+- Message content with image blocks (base64 data URL, PNG/JPEG/WebP/GIF, size-capped and
+  downscaled) through `send_message`, stored with the transcript (image files under the session's
+  `artifacts/`, referenced from the message, not inlined in JSONL), replayed on later turns.
+- TUI: attach by path or paste/drag a file path (`@image.png` or a pasted path) with a chip in
+  the composer; web: file picker, paste and drag-and-drop; Telegram: photos and image documents.
+- A model without vision gets a clear error (or a text note) instead of a crash. `read_file` on an
+  image and `web_screenshot` (P38) return the image to the model where it can take one.
+
+**Acceptance**
+- tests: an image reaches the model as an image block; survives a restart (stored, replayed);
+  each gateway's attach path; a smoke with a vision model describing a test image.
+
+---
+
 # Appendix A — Target file tree
 
 Grow into this; do not create it all up front.

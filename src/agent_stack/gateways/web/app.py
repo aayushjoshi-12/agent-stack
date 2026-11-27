@@ -510,6 +510,18 @@ def create_app(application: Application, settings: WebSettings) -> FastAPI:
             "parent_run_id": run.parent_run_id,
         }
 
+    @api.post("/runs/{run_id}/input", dependencies=auth)
+    async def send_input(run_id: str, body: MessageBody) -> dict[str, bool]:
+        """Queue a message into a working run; ``accepted`` is false once it has finished."""
+        await owned_run(run_id)
+        return {"accepted": await application.send_input(run_id, body.text)}
+
+    @api.post("/runs/{run_id}/input/withdraw", dependencies=auth)
+    async def withdraw_input(run_id: str, body: MessageBody) -> dict[str, bool]:
+        """Take back a queued message; ``withdrawn`` is false once the model has read it."""
+        await owned_run(run_id)
+        return {"withdrawn": await application.withdraw_input(run_id, body.text)}
+
     @api.post("/runs/{run_id}/cancel", dependencies=auth)
     async def cancel(run_id: str) -> dict[str, Any]:
         """Stop a run and every subagent it started, so nothing keeps calling the model.

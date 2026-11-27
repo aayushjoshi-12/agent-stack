@@ -54,6 +54,9 @@ class EventType(StrEnum):
     # The conversation so far was summarised and the summary saved in its place (P31). Data:
     # ``messages`` (how many were summarised) and ``auto`` (False for a /compact). Not terminal.
     CONTEXT_COMPACTED = "context.compacted"
+    # A message sent while the run was working reached the model (it was queued, then read at
+    # the next model call). Data: ``text``. Not terminal.
+    INPUT_RECEIVED = "input.received"
 
 
 @dataclass(frozen=True)

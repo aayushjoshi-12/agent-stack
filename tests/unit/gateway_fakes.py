@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from langchain_core.messages import AIMessage
@@ -137,6 +138,8 @@ class FakeApplication:
         self.sent: list[tuple[Any, str, str | None]] = []
         self.cancelled: list[str] = []
         self.inputs: list[tuple[str, str]] = []
+        self.withdrawn: list[tuple[str, str]] = []
+        self.withdraw_ok = True  # False: the run already read it
         self._run_counter = 0
         self._session_counter = 0
         self.sessions: list[SessionSummary] = []
@@ -169,6 +172,10 @@ class FakeApplication:
         self.inputs.append((run_id, message))
         return True
 
+    async def withdraw_input(self, run_id: str, message: str) -> bool:
+        self.withdrawn.append((run_id, message))
+        return self.withdraw_ok
+
     async def get_run(self, run_id: str) -> None:
         return None
 
@@ -176,8 +183,8 @@ class FakeApplication:
         return []
 
     async def get_session(self, session_id: str) -> Any:
-        known = {s.id for s in self.sessions}
-        return object() if session_id in known else None
+        found = next((s for s in self.sessions if s.id == session_id), None)
+        return None if found is None else SimpleNamespace(id=found.id, title=found.title)
 
     # -- conversations (new / list / title / history) ----------------------
     async def new_session(self, principal: str) -> str:
