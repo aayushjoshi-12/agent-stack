@@ -13,6 +13,7 @@ from agent_stack.core.event_bus import EventBus
 from agent_stack.core.locks import SessionLockManager
 from agent_stack.core.runtime import AgentRuntime
 from agent_stack.core.session import SessionStore
+from agent_stack.models.caching import with_prompt_cache
 from agent_stack.models.factory import build_model
 from agent_stack.tools.executor import ToolExecutor
 from agent_stack.tools.registry import ToolRegistry
@@ -54,7 +55,9 @@ class AgentFactory:
 
     def create(self, agent: Agent) -> AgentRuntime:
         model = build_model(agent.model)
-        model_with_tools = cast(BaseChatModel, model.bind_tools(list(agent.tools)))
+        model_with_tools = cast(
+            BaseChatModel, with_prompt_cache(model.bind_tools(list(agent.tools)), agent.model)
+        )
         registry = ToolRegistry(agent.tools)
         executor = ToolExecutor(
             registry,

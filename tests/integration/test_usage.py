@@ -68,6 +68,35 @@ async def test_every_model_call_emits_usage_and_the_session_total_adds_them_up(
     assert (usage.input_tokens, usage.output_tokens) == (1100, 70)
 
 
+async def test_prompt_cache_reads_and_writes_are_totalled_and_shown(tmp_path: Path) -> None:
+    def cached(read: int, write: int) -> AIMessage:
+        message = priced(tin=2000)
+        assert message.usage_metadata is not None
+        message.usage_metadata["input_token_details"] = {
+            "cache_read": read,
+            "cache_creation": write,
+        }
+        return message
+
+    model = FakeChatModel([cached(0, 1800), cached(1800, 0)])
+    app = _application(tmp_path, model)
+    run_ids = [await _run(app, "s1"), await _run(app, "s1")]
+    events = [
+        e
+        for run_id in run_ids
+        for e in await app.replay(run_id=run_id)
+        if e.type is EventType.MODEL_USAGE
+    ]
+    usage = await app.session_usage("s1")
+
+    assert [(e.data["cache_read_tokens"], e.data["cache_write_tokens"]) for e in events] == [
+        (0, 1800),
+        (1800, 0),
+    ]
+    assert (usage.cache_read_tokens, usage.cache_write_tokens) == (1800, 1800)
+    assert "4k in (1.8k cached) · " in usage_summary(usage)
+
+
 async def test_an_unpriced_call_is_counted_but_never_guessed(tmp_path: Path) -> None:
     app = _application(tmp_path, FakeChatModel([priced(cost=None)]))
 

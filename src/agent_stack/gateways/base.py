@@ -110,6 +110,10 @@ class SessionUsage:
     last_input_tokens: int = 0
     output_tokens: int = 0
     reasoning_tokens: int = 0
+    #: Input tokens served from the provider's prompt cache (a part of ``input_tokens``).
+    cache_read_tokens: int = 0
+    #: Input tokens written to the prompt cache (Anthropic-style caches charge for writes).
+    cache_write_tokens: int = 0
     cost_usd: float = 0.0
     #: Priced spend per model name, so a split between a main and a small model is visible.
     by_model: Mapping[str, float] = field(default_factory=dict)
@@ -125,6 +129,9 @@ class SessionUsage:
             last_input_tokens=int(data.get("input_tokens", 0) or 0),
             output_tokens=self.output_tokens + int(data.get("output_tokens", 0) or 0),
             reasoning_tokens=self.reasoning_tokens + int(data.get("reasoning_tokens", 0) or 0),
+            cache_read_tokens=self.cache_read_tokens + int(data.get("cache_read_tokens", 0) or 0),
+            cache_write_tokens=self.cache_write_tokens
+            + int(data.get("cache_write_tokens", 0) or 0),
             cost_usd=self.cost_usd + (float(cost) if isinstance(cost, (int, float)) else 0.0),
             by_model=_add_model_cost(self.by_model, data.get("model"), cost),
         )
@@ -176,7 +183,9 @@ def usage_summary(usage: SessionUsage, *, context: bool = True) -> str:
     if 0 < usage.priced_calls < usage.calls:
         cost += f" (+{usage.calls - usage.priced_calls} unpriced)"
     return (
-        f"{cost} · {format_tokens(usage.input_tokens)} in · "
+        f"{cost} · {format_tokens(usage.input_tokens)} in"
+        + (f" ({format_tokens(usage.cache_read_tokens)} cached)" if usage.cache_read_tokens else "")
+        + " · "
         f"{format_tokens(usage.output_tokens)} out · {usage.calls} calls"
         + (
             f" · context {format_tokens(usage.last_input_tokens)}"

@@ -120,6 +120,7 @@ def usage_data(message: AIMessage) -> dict[str, Any] | None:
         "output_tokens": int(meta.get("output_tokens", 0)),
         "reasoning_tokens": int(output_details.get("reasoning", 0) or 0),
         "cache_read_tokens": int(input_details.get("cache_read", 0) or 0),
+        "cache_write_tokens": int(input_details.get("cache_creation", 0) or 0),
         "cost_usd": cost,
     }
 

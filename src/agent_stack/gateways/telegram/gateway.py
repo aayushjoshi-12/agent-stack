@@ -784,6 +784,8 @@ class TelegramGateway:
             input_tokens=after.input_tokens - before.input_tokens,
             output_tokens=after.output_tokens - before.output_tokens,
             reasoning_tokens=after.reasoning_tokens - before.reasoning_tokens,
+            cache_read_tokens=after.cache_read_tokens - before.cache_read_tokens,
+            cache_write_tokens=after.cache_write_tokens - before.cache_write_tokens,
             cost_usd=after.cost_usd - before.cost_usd,
         )
 

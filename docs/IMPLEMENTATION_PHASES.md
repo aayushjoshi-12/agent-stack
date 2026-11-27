@@ -1642,25 +1642,35 @@ real-model check is `tmp/smoke_tests/P36-structured-approval-smoke.py`.
 
 ---
 
-## Phase 37 — Prompt caching
+## Phase 37 — Prompt caching ✅
 
 **Goal.** Repeated prefixes (system prompt, tool schemas, earlier turns) are served from the
 provider's prompt cache, and the cache reads show in usage and cost.
 
-**Deliverables**
-- Anthropic (`anthropic:` models): `cache_control` breakpoints on the system prompt and on the
-  last message (or tools + system + rolling last turn, within the 4-breakpoint limit).
-- OpenRouter: `cache_control` breakpoints for models that need them (Anthropic, Gemini via
-  OpenRouter); providers that cache automatically (OpenAI, DeepSeek, …) need nothing but their
-  cached tokens must be reported. Research which OpenRouter models take explicit breakpoints.
-- Kept in `models/` and the one place messages are handed to the model; the runtime stays
-  provider-neutral. Cache reads/writes in `model.usage` (`cache_read_tokens` already exists) and
-  shown in the cost line.
+**Built** ([ADR 017](decisions/017-prompt-cache-breakpoints.md))
+- `models/caching.py`: `add_cache_breakpoints` puts `cache_control: {"type": "ephemeral"}` on the
+  system message (caches tools + system) and on the last message with text (rolling): 2 of
+  Anthropic's 4. It copies the two messages it marks; stored messages are never touched.
+  `with_prompt_cache(model, name)` puts it in front of the tool-bound model as a
+  `RunnableLambda`; `AgentFactory.create` applies it after `bind_tools`, so the loop call and the
+  compaction call both get it and the runtime stays provider-neutral.
+- Breakpoints only for `anthropic:*`, `openrouter:anthropic/*`, `openrouter:qwen/*` (explicit-only
+  caches). OpenAI, DeepSeek, Grok, Moonshot, Groq, Z.AI cache automatically; Gemini 2.5+ is left
+  to its free implicit cache (an explicit rolling breakpoint would pay a write every turn).
+- `ChatOpenRouter` already maps `prompt_tokens_details.cached_tokens` / `cache_write_tokens` to
+  `input_token_details.cache_read` / `cache_creation`; `usage_data` now also records
+  `cache_write_tokens`. `SessionUsage` totals `cache_read_tokens` / `cache_write_tokens` (Telegram's
+  per-run delta too) and `usage_summary` shows `12.2k in (6.1k cached)`.
+- langchain-anthropic is not installed, so `anthropic:` models are untested live; the same
+  content-block `cache_control` is its native format.
 
 **Acceptance**
-- unit tests on the message transform (breakpoints placed, ≤4, nothing else changed);
-  smoke: two calls in a row on an OpenRouter Anthropic model and on the default model report
-  cache reads on the second call.
+- `tests/unit/test_prompt_caching.py`: breakpoints on system + last text message, at most two,
+  list content marks only its last text block, inputs never mutated, only explicit-cache providers
+  wrapped; `tests/integration/test_usage.py`: cache reads/writes totalled and in the cost line.
+- Smoke (two calls in a row, real prompt + tools ~6k tokens): Claude Haiku 4.5 via OpenRouter
+  read 6104 cached tokens on call 2 (cost $0.0077 -> $0.00065); default DeepSeek V4 Pro read 5376
+  automatically ($0.0047 -> $0.0011); a tool-loop run and Qwen 3.8 Flash cache too.
 
 ---
 
