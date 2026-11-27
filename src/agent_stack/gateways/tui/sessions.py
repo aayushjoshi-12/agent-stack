@@ -91,12 +91,15 @@ class SessionsMixin(App[None]):
         await self._add_tab()
 
     async def action_close_tab(self) -> None:
-        """Close this tab; its conversation stays stored and can be reopened (ctrl+o)."""
+        """Close this tab (``exit`` or ``/close``); closing the last one leaves the app.
+
+        The conversation stays stored and can be reopened (ctrl+o).
+        """
         if self._busy():
             return
         old = self.tab
         if len(self._tabs) == 1:
-            await self._replace_tab(old)
+            self.exit()
             return
         at = self._tabs.index(old)
         self._tabs.remove(old)

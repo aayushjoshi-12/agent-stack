@@ -101,8 +101,8 @@ conversation behind.
 Each open conversation is a **tab** (`tabs.py`): a `Conversation` pane that holds its own run
 state, so a run keeps going while another tab is shown; its events go to the pane that started it.
 `ctrl+n` (or `+`, or `/new`) opens a new tab with a fresh draft; on an empty tab it does nothing.
-`alt+1`..`alt+9`, `ctrl+pageup`/`ctrl+pagedown` or a click switch tabs; `/close` closes one (not
-while it runs; the conversation stays stored). Each tab keeps its unsent prompt text. A background
+`alt+1`..`alt+9`, `ctrl+pageup`/`ctrl+pagedown` or a click switch tabs; `exit` or `/close` closes one (not
+while it runs; the conversation stays stored), and on the last tab leaves the app; `quit` leaves at once. Each tab keeps its unsent prompt text. A background
 tab that needs an approval comes to the front with the question. The tab label is the title cut
 to 24 columns with `...`, behind a spinner while it runs or `?` while it waits for you.
 

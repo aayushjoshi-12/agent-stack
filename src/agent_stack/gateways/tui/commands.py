@@ -23,7 +23,9 @@ if TYPE_CHECKING:
     from agent_stack.app.application import Application
     from agent_stack.gateways.tui.tabs import Conversation
 
-_QUIT_WORDS = frozenset({"exit", "quit"})
+#: Typed on their own: ``exit`` closes this tab (the app, on the last one); ``quit`` leaves.
+_CLOSE_WORDS = frozenset({"exit", "/exit"})
+_QUIT_WORDS = frozenset({"quit"})
 
 #: ``/name`` or ``/name args``, but not a path such as ``/etc/hosts``.
 _COMMAND_RE = re.compile(r"^/[A-Za-z][\w-]*(\s|$)")
@@ -58,7 +60,7 @@ class CommandsMixin(App[None]):
     def _builtins(self) -> dict[str, tuple[str, Any]]:
         return {
             "new": ("start a new conversation in a new tab", self.action_new_session),
-            "close": ("close this tab (the conversation stays stored)", self.action_close_tab),
+            "close": ("close this tab; on the last tab, leave (also: exit)", self.action_close_tab),
             "sessions": ("open an earlier conversation", self.action_switch_session),
             "rewind": ("go back to an earlier message", self.action_rewind),
             "branches": ("draw this conversation's branches", self.action_show_branches),
@@ -240,7 +242,11 @@ class CommandsMixin(App[None]):
     # ── input ─────────────────────────────────────────────────────────────────
     async def on_prompt_area_submitted(self, event: PromptArea.Submitted) -> None:
         text = event.text
-        if text in _QUIT_WORDS:
+        if text.strip() in _CLOSE_WORDS:
+            self.query_one("#prompt", PromptArea).clear_text()
+            await self.action_close_tab()
+            return
+        if text.strip() in _QUIT_WORDS:
             self.exit()
             return
         command = bool(_COMMAND_RE.match(text.strip()))

@@ -1370,6 +1370,23 @@ async def test_close_tab_keeps_the_other_and_refuses_a_running_one() -> None:
         await _settle(pilot)
 
 
+async def test_exit_closes_the_tab_and_the_app_on_the_last_one() -> None:
+    app = _app()
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await _submit(pilot, "first")
+        await _settle(pilot)
+        await pilot.press("ctrl+n")
+        await _settle(pilot, 3)
+        assert len(app._tabs) == 2
+        await _submit(pilot, "exit")
+        await _settle(pilot, 3)
+        assert len(app._tabs) == 1 and app.is_running
+        await _submit(pilot, "exit")
+        await _settle(pilot, 3)
+        assert not app.is_running
+
+
 class _TitlingApplication(FakeApplication):
     async def get_session(self, session_id: str) -> Any:
         return SimpleNamespace(id=session_id, title="Darker Panels")
