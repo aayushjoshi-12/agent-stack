@@ -14,7 +14,7 @@ test("formatWhen says today, yesterday, or the date", () => {
   const now = new Date(2026, 10, 25, 15, 0);
   assert.equal(formatWhen(new Date(2026, 10, 25, 9, 5).toISOString(), now), "today 09:05");
   assert.equal(formatWhen(new Date(2026, 10, 24, 22, 30).toISOString(), now), "yesterday 22:30");
-  assert.match(formatWhen(new Date(2026, 10, 14, 7, 21).toISOString(), now), /^14 Nov 07:21$/);
+  assert.match(formatWhen(new Date(2026, 10, 14, 7, 21).toISOString(), now), /^(14 Nov|Nov 14) 07:21$/); // the viewer's locale picks the order
   assert.match(formatWhen(new Date(2025, 9, 21, 7, 21).toISOString(), now), /2025 07:21$/);
   assert.equal(formatWhen(null), "");
   assert.equal(formatWhen("garbage"), "");
