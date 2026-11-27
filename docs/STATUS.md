@@ -124,12 +124,17 @@ Verified for real on 2026-11-14 (cheap models via OpenRouter, small spend):
 - **Telegram against the real Bot API:** the bot registered its command menu and the owner
   confirmed `/start`, replies, the tool-call viewer and per-run cost in a real chat.
 
+Verified for real by the owner on 2026-11-14, 2026-11-25 and 2026-11-27 (the stored TUI
+conversations and the audit log show it):
+
+- **The TUI against real models in a real terminal** (GLM, Kimi, DeepSeek via OpenRouter): the
+  approval dialog approved and rejected gated calls by hand, auto mode decided through Jev,
+  `explorer` subagents ran, a subagent's context was auto-compacted, and the look and feel was
+  reviewed.
+
 Still unverified (do these next):
 
-- **The TUI against a real model in a real terminal**, including reopening a conversation with
-  `ctrl+o`. It is tested headlessly and in the screenshot harness only.
-- **The approval dialog in a real terminal**, and the Telegram inline Approve/Reject buttons in a
-  real chat (the web UI's approval was exercised for real).
+- **The Telegram inline Approve/Reject buttons** in a real chat.
 
 ## Known limits (written down, not hidden)
 

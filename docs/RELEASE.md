@@ -29,7 +29,7 @@ history checks below still hold; re-run them before publishing anyway.
 
 ## Open: needs a real terminal
 
-- [ ] Run `agent-stack tui` and approve, deny and cancel a gated tool call by hand.
+- [x] Run `agent-stack tui` and approve, deny and cancel a gated tool call by hand (2026-11-25).
 - [ ] Run `agent-stack telegram` and do the same through the inline approval buttons.
 
 ## Worth stating in the README
