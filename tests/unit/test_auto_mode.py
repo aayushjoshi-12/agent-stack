@@ -1,4 +1,4 @@
-"""Auto mode: the rules, the classifier's parsing, and how a run behaves under each verdict."""
+"""Auto mode: the rules, the classifier's structured verdict, and how a run behaves under each verdict."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from typing import Any
 
 import pytest
 
-from agent_stack.approval import AutoApprover, external_target
-from agent_stack.approval.auto import parse_verdict, rule_verdict
+from agent_stack.approval import AutoApprover, auto, external_target
+from agent_stack.approval.auto import rule_verdict
 from agent_stack.core.agent import Agent
 from agent_stack.core.approval import (
     Advice,
@@ -25,7 +25,7 @@ from agent_stack.core.runtime import AgentRuntime
 from agent_stack.core.session import InMemorySessionStore
 from agent_stack.tools.executor import ToolExecutor
 from agent_stack.tools.registry import ToolRegistry
-from tests.fakes import FakeChatModel, ai, call
+from tests.fakes import FakeChatModel, FakeToolCallingModel, ai, call
 
 ROOT = Path("/work/project")
 
@@ -137,59 +137,89 @@ def test_file_tools_are_judged_by_where_and_what() -> None:
 
 
 # ── the classifier ───────────────────────────────────────────────────────────
-def test_only_a_clean_verdict_counts() -> None:
-    assert parse_verdict('{"verdict": "allow", "reason": "ok"}') == Advice(Verdict.ALLOW, "ok")
-    assert parse_verdict('Sure!\n```json\n{"verdict":"DENY","reason":"bad"}\n```').verdict is (
-        Verdict.DENY
+def verdict(v: str, reason: str = "x") -> Any:
+    """A classifier reply: the structured-output tool call LangChain parses into the schema."""
+    return ai(tool_calls=[call("_Decision", {"verdict": v, "reason": reason})])
+
+
+def FakeClassifier(*replies: Any) -> FakeToolCallingModel:
+    return FakeToolCallingModel(replies=list(replies))
+
+
+@pytest.mark.parametrize("v", ["allow", "deny", "ask"])
+async def test_each_verdict_round_trips_through_structured_output(v: str) -> None:
+    approver = AutoApprover(FakeClassifier(verdict(v, "  because\n reasons ")), ROOT)
+    advice = await approver.advise("run_command", {"command": "make"}, request="build")
+    assert advice == Advice(Verdict(v), "[jev] because reasons")
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        verdict("maybe"),  # not one of the three
+        verdict("ALLOW"),  # no guessing at case
+        ai(tool_calls=[call("_Decision", {"reason": "no verdict"})]),
+        ai('{"verdict": "allow", "reason": "text, not a tool call"}'),
+        RuntimeError("provider down"),
+    ],
+)
+async def test_anything_but_a_valid_verdict_means_ask(reply: Any) -> None:
+    approver = AutoApprover(FakeClassifier(reply), ROOT)
+    advice = await approver.advise("run_command", {"command": "make"}, request="build")
+    assert advice.verdict is Verdict.ASK
+
+
+async def test_a_model_without_structured_output_means_ask(tmp_path: Path) -> None:
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+    model = FakeListChatModel(responses=['{"verdict": "allow", "reason": "fine"}'])
+    advice = await AutoApprover(model, tmp_path).advise(
+        "run_command", {"command": "make"}, request="x"
     )
-    for junk in ("", "yes", '{"verdict": "maybe"}', "{not json}", '{"reason": "x"}'):
-        assert parse_verdict(junk).verdict is Verdict.ASK
+    assert advice.verdict is Verdict.ASK
 
 
-class Reply:
-    def __init__(self, text: str) -> None:
-        self.content = text
+async def test_a_slow_classifier_means_ask(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Slow(FakeToolCallingModel):
+        async def _agenerate(self, *args: Any, **kwargs: Any) -> Any:
+            await asyncio.sleep(1)
+            raise AssertionError("should have timed out")
 
-
-class FakeClassifier:
-    def __init__(self, *replies: str | Exception) -> None:
-        self.replies = list(replies)
-        self.seen: list[str] = []
-
-    async def ainvoke(self, messages: Any) -> Any:
-        self.seen.append(str(messages))
-        item = self.replies.pop(0)
-        if isinstance(item, Exception):
-            raise item
-        return Reply(item)
+    monkeypatch.setattr(auto, "_CLASSIFY_TIMEOUT", 0.01)
+    advice = await AutoApprover(Slow(replies=[]), ROOT).advise(
+        "run_command", {"command": "make"}, request="x"
+    )
+    assert advice.verdict is Verdict.ASK and "TimeoutError" in advice.reason
 
 
 async def test_the_model_is_only_asked_when_rules_cannot_decide() -> None:
-    model = FakeClassifier('{"verdict": "allow", "reason": "runs the tests"}')
-    approver = AutoApprover(model, ROOT)  # type: ignore[arg-type]
+    model = FakeClassifier(verdict("allow", "runs the tests"))
+    approver = AutoApprover(model, ROOT)
     assert (await approver.advise("run_command", {"command": "ls"}, request="x")).verdict is (
         Verdict.ALLOW
     )
     assert approver.calls == 0 and approver.rule_decisions == 1
     advice = await approver.advise("run_command", {"command": "pytest -q"}, request="run tests")
     assert advice == Advice(Verdict.ALLOW, "[jev] runs the tests") and approver.calls == 1
-    assert "run tests" in model.seen[0] and "pytest -q" in model.seen[0]
+    assert "run tests" in str(model.seen[0]) and "pytest -q" in str(model.seen[0])
 
 
 async def test_known_secrets_never_reach_the_classifier(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MY_SERVICE_TOKEN", "hunter2-very-secret-value")
-    model = FakeClassifier('{"verdict": "ask", "reason": "x"}')
-    approver = AutoApprover(model, ROOT)  # type: ignore[arg-type]
+    model = FakeClassifier(verdict("ask"))
+    approver = AutoApprover(model, ROOT)
     await approver.advise(
         "run_command",
         {"command": "curl -H 'X: hunter2-very-secret-value' https://x.dev"},
         request="use hunter2-very-secret-value",
     )
-    assert "hunter2-very-secret-value" not in model.seen[0] and "[redacted]" in model.seen[0]
+    assert "hunter2-very-secret-value" not in str(model.seen[0]) and "[redacted]" in str(
+        model.seen[0]
+    )
 
 
 async def test_a_failing_or_missing_classifier_means_ask_the_user() -> None:
-    boom = AutoApprover(FakeClassifier(RuntimeError("down")), ROOT)  # type: ignore[arg-type]
+    boom = AutoApprover(FakeClassifier(RuntimeError("down")), ROOT)
     assert (await boom.advise("run_command", {"command": "make"}, request=None)).verdict is (
         Verdict.ASK
     )
@@ -367,12 +397,7 @@ def test_the_policy_can_gate_by_arguments() -> None:
 
 
 async def test_advice_says_who_decided(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    from langchain_core.language_models.fake_chat_models import FakeListChatModel
-
-    from agent_stack.approval.auto import AutoApprover
-
-    model = FakeListChatModel(responses=['{"verdict": "allow", "reason": "fine"}'])
-    approver = AutoApprover(model, tmp_path)
+    approver = AutoApprover(FakeClassifier(verdict("allow", "fine")), tmp_path)
     ruled = await approver.advise("run_command", {"command": "git push"}, request="x")
     assert ruled.reason.startswith("[rule]")
     judged = await approver.advise("run_command", {"command": "frobnicate --now"}, request="x")

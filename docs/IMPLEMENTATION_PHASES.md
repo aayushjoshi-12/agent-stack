@@ -1610,7 +1610,7 @@ lost the output so far, and was not proven for the tools that can actually hang.
 
 ---
 
-## Phase 36 — Auto-approval with structured output
+## Phase 36 — Auto-approval with structured output ✅
 
 **Goal.** The auto-mode classifier's answer is parsed by LangChain's `with_structured_output`
 into a typed verdict, not fished out of free text with a regex.
@@ -1625,6 +1625,20 @@ into a typed verdict, not fished out of free text with a regex.
 **Acceptance**
 - tests with the fake model: allow / deny / ask round-trip; an invalid or failing structured call
   becomes `ask`; a real-LLM smoke (`@pytest.mark.llm` or `tmp/smoke_tests`) against the small model.
+
+**Done:** `approval/auto.py` has a Pydantic `_Decision {verdict: Literal["allow","deny","ask"],
+reason: str}`; the classifier calls `model.with_structured_output(_Decision,
+method="function_calling")` under a 30 s `asyncio.wait_for`. Any exception (no structured-output
+support, timeout, provider error, a verdict outside the three, a missing field) or a non-`_Decision`
+result (no tool call came back) gives `ask`; `parse_verdict`, `_text` and the regex are gone, and
+the prompt no longer asks for JSON. Method: `function_calling` (ChatOpenRouter's default; both it
+and `json_schema` returned valid verdicts on `typesafe/jev-router` and `z-ai/glm-5.3-flash`;
+`json_mode` is not an OpenRouter method). Rules unchanged. Tests: `tests/fakes.py`
+`FakeToolCallingModel`, a real `BaseChatModel` with scripted replies, so LangChain's own
+`with_structured_output` parsing runs; `tests/unit/test_auto_mode.py` covers the allow/deny/ask
+round-trip, invalid / text-only / raising / non-tool-calling / slow classifiers → `ask`. No
+`@pytest.mark.llm` test (nothing deselects that marker, so it would run in `make check`); the
+real-model check is `tmp/smoke_tests/P36-structured-approval-smoke.py`.
 
 ---
 

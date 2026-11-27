@@ -13,7 +13,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
+from pydantic import Field
 
 
 def ai(
@@ -57,6 +60,33 @@ class FakeChatModel:
                 "scripted (possible runaway loop)."
             )
         return self._responses.pop(0)
+
+
+class FakeToolCallingModel(BaseChatModel):
+    """A real `BaseChatModel` with scripted replies and a no-op `bind_tools`.
+
+    Being a real chat model, LangChain's own `with_structured_output` runs on it (bind the schema
+    as a tool, parse the reply's tool call into the schema), so tests exercise the production
+    parsing path. Script a structured answer as `ai(tool_calls=[call("SchemaName", {...})])`; an
+    `Exception` in the script is raised instead.
+    """
+
+    replies: list[Any]
+    seen: list[list[BaseMessage]] = Field(default_factory=list)
+
+    @property
+    def _llm_type(self) -> str:
+        return "fake-tool-calling"
+
+    def bind_tools(self, tools: Any, **kwargs: Any) -> Any:
+        return self
+
+    def _generate(self, messages: list[BaseMessage], *args: Any, **kwargs: Any) -> ChatResult:
+        self.seen.append(list(messages))
+        reply = self.replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return ChatResult(generations=[ChatGeneration(message=reply)])
 
 
 class SleepTool:
