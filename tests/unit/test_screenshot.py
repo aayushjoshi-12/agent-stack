@@ -7,6 +7,7 @@ import struct
 import threading
 from collections.abc import Iterator
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -74,7 +75,25 @@ browser = pytest.mark.skipif(
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
+    hosts: ClassVar[list[str]] = []  # the Host of every request that reached the server
+
     def do_GET(self) -> None:
+        _Handler.hosts.append(self.headers["Host"])
+        if self.path == "/moved":
+            self.send_response(302)
+            self.send_header("Location", "/via")
+            self.end_headers()
+            return
+        if self.path == "/via":
+            self.send_response(301)
+            self.send_header("Location", "/landed")
+            self.end_headers()
+            return
+        if self.path == "/chain":  # an allowed hop first, then the blocked one
+            self.send_response(302)
+            self.send_header("Location", "/metadata")
+            self.end_headers()
+            return
         if self.path == "/metadata":
             self.send_response(302)
             # 0.0.0.0 is refused but still answers locally, so the test does not wait on a timeout
@@ -92,6 +111,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
 @pytest.fixture
 def server() -> Iterator[str]:
+    _Handler.hosts.clear()
     httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
@@ -120,11 +140,26 @@ async def test_screenshot_saves_a_png_and_reports_console_errors(
 
 @pytest.mark.integration
 @browser
-async def test_a_redirect_to_metadata_is_blocked(server: str, tmp_path: Path) -> None:
+@pytest.mark.parametrize("path", ["/metadata", "/chain"])
+async def test_a_redirect_to_a_blocked_address_is_never_requested(
+    server: str, tmp_path: Path, path: str
+) -> None:
     (web_screenshot,) = screenshot_tools(LocalArtifactStore(tmp_path))
-    out = await web_screenshot.ainvoke({"url": server + "/metadata"})
-    assert out.startswith("Error:") and "0.0.0.0" in out, out
+    out = await web_screenshot.ainvoke({"url": server + path})
+    assert out.startswith("Error: refused http://0.0.0.0:"), out
+    assert "link-local, cloud metadata or reserved address" in out
+    assert not any(host.startswith("0.0.0.0") for host in _Handler.hosts), _Handler.hosts
     assert not list(tmp_path.glob("*.png"))
+
+
+@pytest.mark.integration
+@browser
+async def test_an_allowed_redirect_chain_is_followed_to_the_real_url(
+    server: str, tmp_path: Path
+) -> None:
+    (web_screenshot,) = screenshot_tools(LocalArtifactStore(tmp_path))
+    _, text = await web_screenshot.ainvoke({"url": server + "/moved"})
+    assert f"URL: {server}/landed" in text["text"] and "Title: Dev page" in text["text"]
 
 
 async def test_a_blocked_url_is_refused_before_a_browser_starts(tmp_path: Path) -> None:

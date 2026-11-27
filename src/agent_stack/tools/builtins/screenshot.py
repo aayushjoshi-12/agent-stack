@@ -7,8 +7,9 @@ Headless Chromium through Playwright, an optional extra::
 Without Playwright the tool is left out (one log line says how to add it). The URL rules are
 ``web_fetch``'s with one difference: loopback and private LAN hosts are allowed, since a local
 dev server is the point. Link-local (cloud metadata), multicast, unspecified and reserved
-addresses stay refused, for the page URL and for every request the page makes (redirects,
-scripts, images, fetches). The PNG is stored as an artifact; the model gets the image itself
+addresses stay refused, for the page URL and for every request the page makes (scripts, images,
+fetches). Chromium's own redirects skip Playwright's routes, so the tool follows each redirect
+itself and checks the next hop before it is requested. The PNG is stored as an artifact; the model gets the image itself
 (P44) with its path and the page details, or only the text when the PNG is over the 5 MB cap.
 """
 
@@ -20,6 +21,7 @@ import importlib.util
 import ipaddress
 import logging
 from typing import Any
+from urllib.parse import urljoin
 
 from langchain_core.tools import BaseTool, tool
 
@@ -40,6 +42,8 @@ _MAX_ERROR_CHARS = 300
 _NAV_TIMEOUT_MS = 30_000
 _IDLE_TIMEOUT_MS = 5_000
 _TOTAL_TIMEOUT_S = 60.0
+_MAX_REDIRECTS = 10
+_REFUSED = "a link-local, cloud metadata or reserved address"
 
 
 def _allowed(address: str) -> bool:
@@ -57,7 +61,7 @@ def _allowed(address: str) -> bool:
 
 def check_screenshot_url(url: str, resolver: Resolver = _resolve) -> str:
     """``url`` if it is http(s) and points at a public, loopback or private LAN address."""
-    return check_url(url, resolver, _allowed)
+    return check_url(url, resolver, _allowed, refused=_REFUSED)
 
 
 def screenshot_tools(
@@ -74,7 +78,7 @@ def screenshot_tools(
 
         verdicts: dict[str, bool] = {}
         blocked: list[str] = []
-        redirects: list[str] = []
+        moved: list[str] = []  # where a redirected page load really ends
         errors: list[str] = []
 
         async def allowed(request_url: str) -> bool:
@@ -88,23 +92,40 @@ def screenshot_tools(
                     verdicts[request_url] = False
             return verdicts[request_url]
 
+        def is_page_load(request: Request) -> bool:
+            try:
+                return request.is_navigation_request() and request.frame.parent_frame is None
+            except PlaywrightError:  # a request with no frame (a worker's)
+                return False
+
         async def guard(route: Route) -> None:
-            if await allowed(route.request.url):
-                await route.continue_()
+            request = route.request
+            if not request.url.startswith(("http://", "https://")):
+                await route.continue_()  # data:, blob: and the like never reach the network
+                return
+            hop = request.url
+            for _ in range(_MAX_REDIRECTS + 1):
+                if not hop.startswith(("http://", "https://")) or not await allowed(hop):
+                    blocked.append(hop)
+                    await route.abort("blockedbyclient")
+                    return
+                try:
+                    response = await route.fetch(url=hop, max_redirects=0)
+                except PlaywrightError:  # unreachable, refused, reset: fail it as Chromium would
+                    await route.abort("failed")
+                    return
+                location = response.headers.get("location")
+                if not (300 <= response.status < 400 and location):
+                    break
+                hop = urljoin(hop, location)
             else:
-                blocked.append(route.request.url)
-                await route.abort("blockedbyclient")
-
-        def on_request(request: Request) -> None:
-            # Routes never see redirect hops, so those are checked after the load instead.
-            if request.redirected_from is not None:
-                redirects.append(request.url)
-
-        async def blocked_redirect() -> str | None:
-            for hop in redirects:
-                if not await allowed(hop):
-                    return f"Error: refused: a redirect led to {hop}, a blocked address; nothing was saved"
-            return None
+                await route.abort("failed")  # a redirect loop
+                return
+            if hop != request.url and is_page_load(request):
+                moved.append(hop)  # load the end of the chain itself, so page.url is right
+                await route.abort("aborted")
+                return
+            await route.fulfill(response=response)
 
         def note(text: str) -> None:
             if len(errors) < _MAX_ERRORS:
@@ -125,26 +146,30 @@ def screenshot_tools(
                     viewport={"width": width, "height": height}, service_workers="block"
                 )
                 await context.route("**/*", guard)
-                context.on("request", on_request)
                 page = await context.new_page()
                 page.on("console", on_console)
                 page.on("pageerror", lambda exc: note(f"page error: {exc}"))
-                try:
-                    response = await page.goto(url, wait_until="load", timeout=_NAV_TIMEOUT_MS)
-                except PlaywrightError as exc:
-                    if refused := await blocked_redirect():
-                        return refused
-                    if blocked:
-                        return f"Error: refused {blocked[0]}: it points at a blocked address"
-                    return f"Error: could not load {url}: {str(exc).splitlines()[0]}"
+                target = url
+                for _ in range(_MAX_REDIRECTS):
+                    moved.clear()
+                    try:
+                        response = await page.goto(
+                            target, wait_until="load", timeout=_NAV_TIMEOUT_MS
+                        )
+                        break
+                    except PlaywrightError as exc:
+                        if moved:
+                            target = moved[-1]
+                            continue
+                        if blocked:
+                            return f"Error: refused {blocked[0]}: it points at {_REFUSED}"
+                        return f"Error: could not load {url}: {str(exc).splitlines()[0]}"
+                else:
+                    return f"Error: could not load {url}: too many redirects"
                 # a page that keeps a connection open never goes idle; shoot it anyway
                 with contextlib.suppress(PlaywrightError):
                     await page.wait_for_load_state("networkidle", timeout=_IDLE_TIMEOUT_MS)
-                if refused := await blocked_redirect():
-                    return refused
                 png = await page.screenshot(full_page=full_page, type="png")
-                if refused := await blocked_redirect():
-                    return refused
                 title = await page.title()
                 final = page.url
             finally:
