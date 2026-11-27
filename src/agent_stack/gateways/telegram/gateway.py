@@ -80,6 +80,7 @@ _COMMANDS = [
     ("model", "Show or switch the model: /model provider:name"),
     ("compact", "Summarise the conversation to free context: /compact [focus]"),
     ("cost", "What this conversation has cost so far"),
+    ("mcp", "MCP servers: state and tool counts"),
     ("status", "Where you are and what is running"),
     ("cancel", "Stop the current run"),
     ("help", "Show this list"),
@@ -102,6 +103,7 @@ _HELP = (
     "/compact [focus]  summarise the conversation so far to free context\n"
     "/<skill> [request]  run a skill (type / to see them)\n"
     "/cost  what this conversation has cost (tokens and dollars)\n"
+    "/mcp  the MCP servers, their state and tool counts\n"
     "/status  where you are and what is running\n"
     "/cancel  stop the current run"
 )
@@ -461,6 +463,10 @@ class TelegramGateway:
             await self._cmd_cost(chat)
         elif command == "/status":
             await self._cmd_status(chat)
+        elif command == "/mcp":
+            servers = await self._app.mcp_servers()
+            lines = [s.line() for s in servers] or ["No MCP servers (add them to .mcp.json)."]
+            await self._say(chat, "\n".join(lines))
         elif chat.busy:
             await self._queue_input(chat, text)
         else:

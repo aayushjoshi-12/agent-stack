@@ -63,6 +63,7 @@ class CommandsMixin(App[None]):
             "mode": ("approval mode: /mode auto or /mode ask", None),
             "model": ("show or switch the model: /model provider:name", None),
             "compact": ("summarise the conversation to free context: /compact [focus]", None),
+            "mcp": ("MCP servers: state and tool counts", self.action_show_mcp),
             "help": ("keyboard shortcuts", self.action_help),
             "quit": ("leave (prints how to continue)", self.action_quit_app),
         }
@@ -155,6 +156,16 @@ class CommandsMixin(App[None]):
             if count
             else "Nothing new to compact."
         )
+
+    def action_show_mcp(self) -> None:
+        """``/mcp``: list the MCP servers (starting them can take a while; the UI stays live)."""
+
+        async def show() -> None:
+            servers = await self.application.mcp_servers()
+            lines = [s.line() for s in servers] or ["No MCP servers (add them to .mcp.json)."]
+            self.notify("\n".join(lines), title="MCP servers", timeout=15)
+
+        self._spawn(show())
 
     def _switch_model(self, wanted: str) -> None:
         """``/model`` shows the model; ``/model provider:name`` switches it for the next runs."""

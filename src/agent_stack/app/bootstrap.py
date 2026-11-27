@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -50,6 +51,7 @@ from agent_stack.tools.builtins.screenshot import screenshot_tools
 from agent_stack.tools.builtins.terminal import run_command_tool
 from agent_stack.tools.builtins.todos import todo_tools
 from agent_stack.tools.builtins.web import web_tools
+from agent_stack.tools.mcp import McpManager, load_mcp_config
 
 load_dotenv()
 
@@ -211,6 +213,10 @@ def build_application(config: AppConfig | None = None) -> Application:
     )
 
     monitors = MonitorService(workspace)
+    # MCP servers (P43): only configured here; they start on the first message, off the wiring path.
+    mcp_servers = load_mcp_config(workspace, resolved.home, os.environ)
+    mcp = McpManager(mcp_servers, workspace / ".agent" / "logs") if mcp_servers else None
+    outside = resolved.external_access == "ask"
     app_holder: list[Application] = []  # filled once the application exists (tools need it)
 
     explorer = Agent(
@@ -255,8 +261,13 @@ def build_application(config: AppConfig | None = None) -> Application:
         tool_policy=ToolPolicy(
             frozenset(resolved.approval_tools),
             dynamic=(
-                (lambda tool, args: external_target(tool, args, workspace) is not None)
-                if resolved.external_access == "ask"
+                (
+                    lambda tool, args: (
+                        bool(mcp and mcp.gated(tool))
+                        or (outside and external_target(tool, args, workspace) is not None)
+                    )
+                )
+                if outside or mcp
                 else None
             ),
         ),
@@ -301,6 +312,7 @@ def build_application(config: AppConfig | None = None) -> Application:
         approval_mode=approval_mode,
         skills=skills,
         chat_index=ChatSearchIndex(db, conversation),
+        mcp=mcp,
     )
     app_holder.append(application)
     return application

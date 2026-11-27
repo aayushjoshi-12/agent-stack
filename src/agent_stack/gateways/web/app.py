@@ -380,6 +380,11 @@ def create_app(
     async def get_model() -> dict[str, str]:
         return {"model": application.get_model()}
 
+    @api.get("/mcp", dependencies=auth)
+    async def mcp_servers() -> list[dict[str, Any]]:
+        """The MCP servers: name, transport, state, tool count, error (starts them if needed)."""
+        return [vars(s) for s in await application.mcp_servers()]
+
     @api.put("/model", dependencies=auth)
     async def set_model(body: ModelBody) -> dict[str, str]:
         try:

@@ -61,6 +61,7 @@ from agent_stack.observability.redact import env_secrets, redact
 from agent_stack.persistence.event_log import EventLogStore
 from agent_stack.persistence.search import ChatSearchIndex
 from agent_stack.skills import SkillRegistry
+from agent_stack.tools.mcp import McpManager, McpServerStatus
 
 
 @dataclass
@@ -90,6 +91,9 @@ class Application:
     skills: SkillRegistry | None = None
     #: Ranked full-text search over every conversation (``find_chats``); None: no search.
     chat_index: ChatSearchIndex | None = None
+    #: MCP servers; started on the first message (or ``/mcp``), their tools join the main agent.
+    mcp: McpManager | None = None
+    _mcp_started: asyncio.Task[None] | None = field(default=None, repr=False)
     _background: set[asyncio.Task[None]] = field(default_factory=set, repr=False)
 
     async def send_message(
@@ -106,6 +110,7 @@ class Application:
         """
         if parent_run_id is None:  # a subagent runs inside its parent's already-checked budget
             await self._check_budget(envelope.session)
+            await self.start_mcp()
         text = envelope.text
         if parent_run_id is None:
             text = self.expand_slash(text) or text  # "/skill args" carries the skill with it
@@ -202,6 +207,30 @@ class Application:
             self.agent = agent
         return self.agent.model
 
+    async def start_mcp(self) -> None:
+        """Start the MCP servers once and give their tools to the main agent (never raises)."""
+        if self.mcp is None:
+            return
+        if self._mcp_started is None:
+            self._mcp_started = asyncio.ensure_future(self._load_mcp(self.mcp))
+        await asyncio.shield(self._mcp_started)
+
+    async def _load_mcp(self, mcp: McpManager) -> None:
+        try:
+            tools = await mcp.start()
+        except Exception:
+            _LOG.exception("MCP servers failed to start")
+            return
+        if tools:
+            agent = replace(self.agent, tools=(*self.agent.tools, *tools))
+            self.run_manager.use_runtime(self.factory.create(agent))
+            self.agent = agent
+
+    async def mcp_servers(self) -> list[McpServerStatus]:
+        """The configured MCP servers with their state and tool counts (starts them if needed)."""
+        await self.start_mcp()
+        return self.mcp.status() if self.mcp is not None else []
+
     @property
     def chats(self) -> ChatLibrary:
         """Find, read and question old conversations."""
@@ -216,6 +245,8 @@ class Application:
         """Wait for side work (conversation titling) to finish; for shutdown and tests."""
         if self.monitors is not None:
             await self.monitors.stop_all()
+        if self.mcp is not None:
+            await self.mcp.close()
         while self._background:
             await asyncio.gather(*list(self._background), return_exceptions=True)
 

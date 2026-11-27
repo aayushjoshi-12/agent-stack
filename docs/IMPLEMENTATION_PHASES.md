@@ -1802,22 +1802,38 @@ tool calls and subagents.
 
 ---
 
-## Phase 43 — MCP client
+## Phase 43 — MCP client ✅
 
-**Goal.** Tools from MCP servers are tools of the agent.
+**Goal.** Tools from MCP servers are tools of the agent. Decision record: ADR 018.
 
 **Deliverables**
-- Config: `.mcp.json` / `mcp.json` in the workspace and `~/.agent-stack/mcp.json`
-  (`{"mcpServers": {name: {command, args, env} | {url, headers}}}`, the Claude Code shape);
-  stdio and streamable HTTP transports (official `mcp` SDK or `langchain-mcp-adapters`).
-- Each server's tools are registered as `mcp__<server>__<tool>`, gated by the approval flow like
-  other side-effecting tools; servers start lazily and are stopped on shutdown; a server that
-  fails to start is reported, never fatal.
-- A gateway command/listing (`/mcp`) shows servers, status and tool counts.
+- `tools/mcp.py`: config in the Claude Code shape (`{"mcpServers": {name: {command, args, env} |
+  {url, headers}}}`, optional `"trusted": true`) from `~/.agent-stack/mcp.json` then
+  `<workspace>/.mcp.json` (workspace wins per name); `${VAR}` expanded from the environment
+  (bootstrap passes it in). Official `mcp` SDK 2.x (`mcp.Client`) as a regular dependency, stdio and
+  streamable HTTP; `langchain-mcp-adapters` not used (a second dependency for ~30 lines).
+- `McpManager`: starts every server at once, each in its own holder task, bounded by 30 s; a server
+  that fails to start or list tools is logged and reported (`failed: <reason>`), never fatal. stdio
+  stderr goes to `.agent/logs/mcp-<name>.log`. Tools are `StructuredTool`s named
+  `mcp__<server>__<tool>` with the server's JSON schema; text results, `is_error` -> error result;
+  the P35 per-call timeout applies.
+- Lifecycle: `build_application` only reads config; `Application.start_mcp()` (once, shared) runs
+  on the first message or `/mcp`, and the tools join the main agent by rebuilding its runtime (the
+  `/model` path; subagents do not get them). `drain_background()` closes the servers; loop teardown
+  ends them otherwise (checked: no orphan process).
+- Approval: `ToolPolicy.dynamic` gates `mcp__*` tools of untrusted servers; in auto mode no rule
+  matches them, so the classifier decides.
+- `/mcp` in the TUI (`commands.py`, a notification) and Telegram; `GET /mcp` (JSON) on the web API.
 
 **Acceptance**
-- test against a tiny stdio MCP server written in the test: its tool appears, is called with
-  arguments, its result reaches the model; a broken server is skipped with a warning.
+- `tests/integration/test_mcp.py`: a stdio `MCPServer` written in the test (run via
+  `sys.executable`): `mcp__test__add` is bound, called with arguments through the executor and its
+  result reaches the fake model as a ToolMessage; a broken server is `failed` and the run still
+  works; servers `stopped` after `drain_background`; untrusted tools need approval and go to the
+  classifier, trusted ones do not; `${VAR}` expansion; workspace config overrides home.
+- Smoke (`tmp/smoke_tests/P43-mcp-smoke.py`): real bootstrap with `uvx mcp-server-time` and a broken
+  server; one real run on `openrouter:z-ai/glm-5.3-flash` calls `mcp__time__get_current_time` through
+  the approval gate and answers from its result; no server process left.
 
 ---
 
