@@ -151,6 +151,19 @@ async def test_cancelling_a_waiting_run_marks_the_request_cancelled() -> None:
         await waiter
 
     assert request.status is ApprovalStatus.CANCELLED
+    assert broker._requests == {}  # finished requests are not kept
+
+
+async def test_a_decided_request_is_forgotten_once_its_run_has_the_answer() -> None:
+    broker = ApprovalBroker()
+    request = _request(broker)
+    waiter = asyncio.create_task(broker.wait(request.id))
+    broker.decide(request.id, run_id="r1", session_id="s1", principal="u1", approve=True)
+
+    assert await waiter is ApprovalStatus.APPROVED
+    assert broker._requests == {} and broker._waiters == {}
+    with pytest.raises(ApprovalError, match="unknown approval"):  # still refused: no replay
+        broker.decide(request.id, run_id="r1", session_id="s1", principal="u1", approve=True)
 
 
 # ── the runtime ──────────────────────────────────────────────────────────────

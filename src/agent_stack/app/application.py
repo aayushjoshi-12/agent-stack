@@ -65,6 +65,7 @@ from agent_stack.monitor import MonitorService
 from agent_stack.observability.metrics import Metrics
 from agent_stack.observability.redact import env_secrets, redact
 from agent_stack.persistence.event_log import EventLogStore
+from agent_stack.persistence.gc import StorageCollector
 from agent_stack.persistence.search import ChatSearchIndex
 from agent_stack.persistence.serializers import message_to_record, record_text, record_to_json
 from agent_stack.skills import SkillRegistry
@@ -100,6 +101,8 @@ class Application:
     chat_index: ChatSearchIndex | None = None
     #: MCP servers; started on the first message (or ``/mcp``), their tools join the main agent.
     mcp: McpManager | None = None
+    #: Removes what deleted chats left behind (``agent-stack gc``, P50); None: not wired.
+    storage_gc: StorageCollector | None = None
     _mcp_started: asyncio.Task[None] | None = field(default=None, repr=False)
     _background: set[asyncio.Task[None]] = field(default_factory=set, repr=False)
 

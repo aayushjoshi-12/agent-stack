@@ -20,12 +20,12 @@ from agent_stack.core.changes import ChangeEntry, FileDiff, make_diff
 if TYPE_CHECKING:
     from agent_stack.persistence.sqlite import SqliteDatabase
 
-__all__ = ["LocalChangeStore"]
+__all__ = ["LocalChangeStore", "snapshot_dir"]
 
 _UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
 
 
-def _session_dir(root: Path, session_id: str) -> Path:
+def snapshot_dir(root: Path, session_id: str) -> Path:
     """A directory name for a session id (ids contain ``:``), unique even after sanitising."""
     digest = hashlib.sha1(session_id.encode(), usedforsecurity=False).hexdigest()[:8]
     return root / f"{_UNSAFE.sub('_', session_id)[:80]}-{digest}"
@@ -69,7 +69,7 @@ class LocalChangeStore:
         after: str,
         created_at: str,
     ) -> None:
-        directory = _session_dir(self._root, session_id)
+        directory = snapshot_dir(self._root, session_id)
         name = uuid.uuid4().hex
         after_ref = f"{name}.after"
         before_ref = f"{name}.before" if before is not None else None
@@ -136,11 +136,11 @@ class LocalChangeStore:
                     None
                     if first["before_ref"] is None
                     else (
-                        _session_dir(self._root, str(first["session_id"])) / first["before_ref"]
+                        snapshot_dir(self._root, str(first["session_id"])) / first["before_ref"]
                     ).read_text(encoding="utf-8")
                 )
                 after = (
-                    _session_dir(self._root, str(last["session_id"])) / last["after_ref"]
+                    snapshot_dir(self._root, str(last["session_id"])) / last["after_ref"]
                 ).read_text(encoding="utf-8")
             except OSError:
                 return None  # a snapshot was removed by hand
@@ -177,7 +177,7 @@ class LocalChangeStore:
         def read() -> list[ChangeEntry]:
             found: list[ChangeEntry] = []
             for row in rows:
-                directory = _session_dir(self._root, str(row["session_id"]))
+                directory = snapshot_dir(self._root, str(row["session_id"]))
                 try:
                     before = (
                         None
@@ -223,5 +223,5 @@ class LocalChangeStore:
 
     async def delete_session(self, session_id: str) -> None:
         await self._db.execute("DELETE FROM file_changes WHERE session_id = ?", (session_id,))
-        directory = _session_dir(self._root, session_id)
+        directory = snapshot_dir(self._root, session_id)
         await asyncio.to_thread(shutil.rmtree, directory, True)

@@ -143,3 +143,40 @@ payloads" above for that one table.
 - `test_session_dir_deleted_with_session`
 - `test_sqlite_has_no_message_payload_columns`
 - Integration: send messages, restart the process, `read()` returns the full history.
+
+## 9. Lifecycle: what deletion and GC remove (P50)
+
+Deletion cannot be undone, so the rules keep anything a conversation, a branch or a running
+process can still reach.
+
+**Deleting a chat** (`Application.delete_session`, every gateway's delete) removes its folder
+(transcripts, images, nested subagent folders), its rows in every session-keyed table
+(`sessions`, `runs`, `checkpoints`, `todos`, `event_log`, `chat_fts`, ...), its file changes and
+their snapshots, and its subagents' sessions: every session whose id starts with `<chat id>::`
+or, before P46, `<one of its run ids>::` (rows, and the old flat folder). It does not remove
+branches forked from it: each branch is its own conversation with its own copy of the
+transcript. Workspace artifacts are left to the next GC.
+
+**`agent-stack gc`** reports what is left behind; `agent-stack gc --apply` deletes it. It never
+runs by itself. Its rules:
+
+1. A session with a `sessions` row is kept, unless it is a subagent session whose chat (the id's
+   first `::` segment) is neither a session nor a run of a kept session: nothing can open it.
+2. Rows of a session with no `sessions` row are deleted, with its snapshots and its folder (the
+   rows show this index owned it).
+3. A folder the index has no trace of is reported and kept: with `AGENT_STACK_DB` it may belong
+   to another index. Delete it by hand if it does not.
+4. A workspace artifact (`.agent/artifacts/`) is deleted when no `transcript.jsonl` under
+   `sessions/` (any folder, indexed or not; branches and subagents included) and no `event_log`
+   row of a kept session mentions its id. Leftover `.tmp-*` files count as unreferenced.
+5. A change snapshot folder (`.agent/changes/`) is deleted when no session and no
+   `file_changes` row maps to it.
+6. Anything touched in the last 24 hours (a file modified, an event logged) is kept: a run in
+   another process may have stored an artifact before its messages are saved at the run's end.
+
+**Event-log retention.** Events live exactly as long as their conversation. Replay, fork and
+rewind points, history and cost totals read old events, so a kept chat keeps its whole
+timeline; deleting the chat and rule 2 are the bound. There is no time- or count-based pruning.
+
+**Approvals.** The broker forgets a request as soon as the waiting run has its answer (approved,
+rejected or cancelled); deciding it again is refused as unknown.

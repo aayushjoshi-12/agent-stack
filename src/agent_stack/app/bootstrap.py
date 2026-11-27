@@ -37,6 +37,7 @@ from agent_stack.observability.tracing import tracing_from_env
 from agent_stack.persistence.changes import LocalChangeStore
 from agent_stack.persistence.conversation import FileConversationStore
 from agent_stack.persistence.event_log import EventStoreBus, SqliteEventLogStore
+from agent_stack.persistence.gc import StorageCollector
 from agent_stack.persistence.search import ChatSearchIndex
 from agent_stack.persistence.sqlite import (
     SqliteCheckpointStore,
@@ -331,6 +332,15 @@ def build_application(config: AppConfig | None = None) -> Application:
         skills=skills,
         chat_index=ChatSearchIndex(db, conversation),
         mcp=mcp,
+        storage_gc=StorageCollector(
+            db,
+            session_store,
+            conversation,
+            change_store,
+            sessions_root=sessions_root / "sessions",
+            artifacts_root=artifacts.root,
+            changes_root=workspace / ".agent" / "changes",
+        ),
     )
     app_holder.append(application)
     return application

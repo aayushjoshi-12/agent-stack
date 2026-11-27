@@ -149,6 +149,7 @@ A phase may start only when every phase it depends on has passed its acceptance 
 | P46 Subagent conversations in their chat | P09, P20 |
 | P47 Web subagent panel | P24, P45, P46 |
 | P48 No step cap, subagent reports, TUI subagent screen | P06, P20, P46 |
+| P50 Storage lifecycle (delete and gc) | P09, P15, P29, P30, P46 |
 
 ---
 

@@ -37,6 +37,19 @@ _RUN_COLUMNS = (
 )
 
 
+#: Tables whose rows belong to one session (``session_id``), besides ``sessions`` itself.
+SESSION_TABLES = (
+    "runs",
+    "message_index",
+    "artifacts_index",
+    "checkpoints",
+    "todos",
+    "event_log",
+    "chat_fts",  # the search index's copy of its text (P32)
+    "chat_fts_state",
+)
+
+
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -575,18 +588,33 @@ class SqliteSessionStore:
         await self._conversation.append_messages(session_id, messages)
 
     async def delete(self, session_id: str) -> None:
+        """Delete a chat and its subagents' sessions (rows, and a pre-P46 flat folder)."""
+        for member in [session_id, *await self.subagent_sessions(session_id)]:
+            await self._delete_one(member)
+
+    async def subagent_sessions(self, session_id: str) -> list[str]:
+        """Ids of the sessions a chat's subagents ran in: ``<chat>::...``, or before P46
+        ``<one of its run ids>::...``."""
+        prefixes = [f"{session_id}::"] + [
+            f"{row['id']}::"
+            for row in await self._db.query(
+                "SELECT id FROM runs WHERE session_id = ?", (session_id,)
+            )
+        ]
+        found: set[str] = set()
+        for prefix in prefixes:
+            for table, column in (("sessions", "id"), ("event_log", "session_id")):
+                rows = await self._db.query(
+                    f"SELECT DISTINCT {column} AS id FROM {table} WHERE substr({column}, 1, ?) = ?",
+                    (len(prefix), prefix),
+                )
+                found.update(str(row["id"]) for row in rows)
+        return sorted(found)
+
+    async def _delete_one(self, session_id: str) -> None:
         await self._conversation.delete(session_id)
         await self._db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-        for table in (
-            "runs",
-            "message_index",
-            "artifacts_index",
-            "checkpoints",
-            "todos",
-            "event_log",
-            "chat_fts",  # the search index's copy of its text (P32)
-            "chat_fts_state",
-        ):
+        for table in SESSION_TABLES:
             await self._db.execute(f"DELETE FROM {table} WHERE session_id = ?", (session_id,))
         # tool_executions rows belong to runs (no session column): drop the orphans above.
         await self._db.execute(

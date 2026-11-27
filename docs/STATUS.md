@@ -103,7 +103,8 @@ automatic memory extraction. Not yet run against a real model: compaction (tests
 - **P29/P30 gaps (the phases themselves are done).** Not built, by choice: payload
   `offset` pointers into `transcript.jsonl` and a `branch_id` column (a branch is its own
   session, so `session_id` is the key; the log keeps redacted, capped event data instead of
-  offsets); branch merge/diff and dead-branch GC. (A TUI/Web "fork here" affordance was listed
+  offsets); branch merge/diff. (Dead-branch GC: every branch is a listed conversation, so none
+  is unreachable; P50's `agent-stack gc` removes the data no session reaches.) (A TUI/Web "fork here" affordance was listed
   here as not built; it was built later with the history work: rewind pickers, branches views,
   the web History panel and "Fork a branch from here".)
   Branch granularity: messages are saved when a run ends, so forking at an event inside a run
@@ -139,12 +140,13 @@ Still unverified (do these next):
 ## Known limits (written down, not hidden)
 
 - Artifacts are workspace-scoped: deleting a conversation leaves its large-output files until
-  the garbage collection the plan defers.
+  `agent-stack gc --apply` (P50) finds nothing references them; GC never runs by itself, and
+  keeps anything touched in the last 24 hours. Folders the index has no row for are reported,
+  never deleted (rules: `docs/design/conversation-storage.md` section 9).
 - If recording a tool batch fails *after* the tools ran, a retry with the same run id could run a
   mutating tool again. History stays valid because the failed run saves no tool results.
 - A subagent does not inherit its parent's tool policy. Fine while `explorer` is read-only; a
   write-capable subagent would bypass approval.
-- The approval broker never prunes finished requests (memory only; fine for one owner).
 - Tool output shown to the model is scrubbed with `redact(pairs=False)`: known env secrets and
   common key shapes only, so a secret in an unusual shape passes.
 - The `message_index` and `artifacts_index` tables are in the schema and `SqliteIndex` is

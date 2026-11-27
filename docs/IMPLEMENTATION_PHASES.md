@@ -2079,6 +2079,47 @@ back what it found, and the TUI can open a subagent like the web UI.
 
 ---
 
+## Phase 50 — Storage lifecycle: delete removes what a chat owns, `agent-stack gc` the rest ✅
+
+**Goal.** Deleting a chat removes everything it owns, and long-lived storage does not grow
+without bound, without ever deleting what a kept conversation, a branch or a running process
+can still reach.
+
+**Deliverables**
+- Deleting a chat also deletes its subagents' sessions: every session whose id starts with
+  `<chat>::` or, before P46, `<one of its run ids>::` (their rows in every session-keyed table,
+  and the old flat folders). Branches forked from it stay (each is its own conversation).
+- `agent-stack gc` reports, `agent-stack gc --apply` deletes, never automatically:
+  rows of sessions that have no `sessions` row; subagent sessions whose chat is neither a session
+  nor a run of a kept one; workspace artifacts (`.agent/artifacts/`) no transcript and no logged
+  event of a kept session mentions; change snapshot folders nothing maps to; `.tmp-*` leftovers.
+  Folders the index has no row for are reported and kept (they may belong to another
+  `AGENT_STACK_DB`). Anything touched in the last 24 hours is kept.
+- Event-log retention: events live as long as their conversation (fork points, rewind, history
+  and cost read them); deletion and the orphan sweep are the bound. No dead-branch GC: every
+  branch is a listed conversation.
+- The approval broker forgets a request once its run has the answer; deciding it again is
+  refused as unknown.
+- Rules written down in `docs/design/conversation-storage.md` section 9.
+
+**Acceptance**
+- tests with real SQLite and files in tmp dirs: delete removes P46 and pre-P46 subagent sessions
+  and keeps a branch; delete-then-GC leaves no orphan artifact, snapshot or index row and keeps
+  the other chat's; orphan rows and dead subagents go, a row-less folder is reported and kept; a
+  dry run deletes nothing; the grace period keeps fresh files and events; the CLI dry run and
+  `--apply`; the broker drops answered and cancelled requests.
+- Smoke on a copy of the owner's real `.agent/` + `agent.db` (aged two days): delete a chat with
+  two pre-P46 subagents, `gc` lists 12 artifacts (689 KB), `gc --apply` deletes them, a second
+  `gc` finds nothing, and the app lists and opens the 20 remaining chats.
+
+**Built.** `persistence/gc.py` (`StorageCollector`, `GcReport`), `persistence/sqlite.py`
+(`SESSION_TABLES`, `SqliteSessionStore.delete` + `subagent_sessions`), `persistence/changes.py`
+(`snapshot_dir`), `core/approval.py`, `app/application.py` (`storage_gc`), `app/bootstrap.py`,
+`observability/cli.py` (`gc`). Tests: `tests/integration/test_storage_gc.py`,
+`tests/unit/test_approval.py`. Smoke: `tmp/smoke_tests/P50-storage-gc.py`.
+
+---
+
 # Appendix A — Target file tree
 
 Grow into this; do not create it all up front.

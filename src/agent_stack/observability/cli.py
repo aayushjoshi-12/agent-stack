@@ -50,6 +50,8 @@ def _parser() -> argparse.ArgumentParser:
     ideas_show.add_argument("project")
     ideas_show.add_argument("title")
     history_cli.add_parsers(sub)
+    gc = sub.add_parser("gc", help="report (or --apply: delete) what deleted chats left behind")
+    gc.add_argument("--apply", action="store_true", help="delete; without it nothing is deleted")
     tui = sub.add_parser("tui", help="run the Textual terminal UI gateway")
     tui.add_argument("--session", default=None, help="continue this conversation")
     resume = sub.add_parser("resume", help="continue a conversation in the terminal UI")
@@ -161,6 +163,17 @@ def _history(parsed: argparse.Namespace) -> int:
     return asyncio.run(history_cli.run(build_application(), parsed))
 
 
+def _gc(apply: bool) -> int:
+    import asyncio
+
+    from agent_stack.app.bootstrap import build_application
+
+    collector = build_application().storage_gc
+    assert collector is not None
+    print(asyncio.run(collector.collect(apply=apply)).text())
+    return 0
+
+
 def _ideas(parsed: argparse.Namespace) -> int:
     inbox = IdeaInbox(AppConfig.from_env().home)
     try:
@@ -194,6 +207,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _history(parsed)
     if parsed.command == "ideas":
         return _ideas(parsed)
+    if parsed.command == "gc":
+        return _gc(parsed.apply)
     if parsed.command == "tui":
         return _run_tui(parsed.session)
     if parsed.command == "resume":

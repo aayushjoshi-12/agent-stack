@@ -145,7 +145,11 @@ class ApprovalBroker:
         return request
 
     async def wait(self, approval_id: str) -> ApprovalStatus:
-        """Block until the request is decided. A cancelled run marks it ``CANCELLED``."""
+        """Block until the request is decided. A cancelled run marks it ``CANCELLED``.
+
+        Either way the request is then forgotten (the run has its answer), so the broker holds
+        only undecided ones; deciding a forgotten request is refused as unknown.
+        """
         waiter = self._waiters[approval_id]
         try:
             return await waiter
@@ -156,6 +160,7 @@ class ApprovalBroker:
             raise
         finally:
             self._waiters.pop(approval_id, None)
+            self._requests.pop(approval_id, None)
 
     def decide(
         self,

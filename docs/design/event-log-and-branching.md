@@ -114,3 +114,10 @@ class SessionStore(Protocol):  # extends P09 protocol
   `test_branch_writes_do_not_touch_parent`; UI affordance in TUI/Web (done later: the TUI's
   `esc esc` rewind picker and branches view, the web History panel and "Fork a branch from
   here", Telegram `/rewind` and `/branches`).
+## 7. Retention (P50)
+
+Events are kept for exactly as long as their conversation: deleting a chat removes its events
+(and its subagents'), and `agent-stack gc` removes rows of sessions that no longer exist. A kept
+chat keeps its whole timeline, because fork points, rewind, history and cost totals read it.
+There is no dead-branch GC: every branch is a session the picker lists. See
+`conversation-storage.md` section 9 for the full deletion rules.
