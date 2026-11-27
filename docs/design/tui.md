@@ -11,7 +11,8 @@
    Every literal colour lives in `theme.py`, so any theme restyles the whole app.
 2. **Depth from layers, not borders.** `$background < $surface < $panel`. The only edges are a
    thick left accent bar (user message, composer, failed cards, errors and the three dialogs).
-3. **State is never colour alone.** Spinner / ✓ / ✗ glyphs plus words and durations.
+3. **State is never colour alone.** A spinner, a coloured `●` plus words (`failed`, `awaiting
+   approval`, `done`) and durations.
 4. **Never block, always escapable.** Agent work runs in tasks; `esc` always cancels a live run
    or returns focus to the prompt.
 5. **Fixed positions.** Header, conversation, composer, sidebar and footer never move.
@@ -53,9 +54,10 @@ Textual breakpoints put classes on the screen (`HORIZONTAL_BREAKPOINTS`,
 | user message | `UserMessage` | `$panel` surface with a `$primary` accent bar |
 | assistant message | `AgentMessage` (Markdown) | headings coloured by level; inline code on `$panel`; fences on `$surface` |
 | thinking | `Disclosure("think")` | collapsed, italic muted; toggles with Enter / click |
-| tool call | `Disclosure("tool")` | header `chevron · spinner/✓/✗ · name · detail · duration`; `run_command` opens while running |
+| tool call | `Disclosure("tool")` | header `spinner/● Name(detail)` with the duration (and `failed`) on the right; built-in tools by display name (`Read`, `Edit`, `Run`, `Search`...); the result hangs under a `⎿`; a closed card with output shows one line and `… +N lines (enter to expand)`; no box, no background; `run_command` opens while running |
 | tool output | body of the card | last 10 lines while running, last 60 when opened later; 400 lines kept, older ones counted as "earlier lines hidden"; diff-coloured when it looks like a unified diff |
-| subagent | `SubagentRow` | one row, updated in place: running spinner then ✓ done, with its task; focusable, Enter or a click opens `SubagentScreen` |
+| subagent | `SubagentRow` | `● Subagent(name) task` with `⎿ running 12s` / `done in 40s` under it, updated in place; focusable, Enter or a click opens `SubagentScreen` |
+| diff | `diff_rows` | in write/edit cards and the files screen: `Updated path +N -M`, then numbered rows; added and removed lines on a full-width tinted band (`$success`/`$error` 15%), file headers dropped, `⋮` between hunks; cards show 80 rows |
 | failure | `Notice` | `$error-muted` surface with an error bar |
 
 A successful run adds no row. Finished cards fold when their output is longer than 6 lines

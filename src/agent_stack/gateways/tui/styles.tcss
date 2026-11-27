@@ -54,7 +54,7 @@ TabBar {
 }
 .user-message.-queued { border-left: wide $primary 50%; color: $text-muted; }
 .agent-message { margin: 1 0 0 0; padding: 0 0 0 3; }
-.subagent-row { height: 1; margin: 0; text-wrap: nowrap; text-overflow: ellipsis; }
+.subagent-row { height: 2; margin: 1 0 0 0; padding: 0 1; text-wrap: nowrap; text-overflow: ellipsis; }
 .subagent-row:focus, .subagent-row:hover { background: $panel; }
 
 .notice {
@@ -96,16 +96,13 @@ MarkdownFence {
 MarkdownBlockQuote { background: transparent; border-left: wide $secondary; padding: 0 1; }
 
 /* ── tool / thinking cards ──────────────────────────────────────────────── */
-Disclosure { height: auto; margin: 1 0 0 0; background: $surface; }
-Disclosure.-think { background: transparent; margin-top: 1; }
-Disclosure.-failed { border-left: wide $error; }
-DisclosureHeader { height: 1; padding: 0 2; }
-DisclosureHeader:hover { background: $panel; }
-DisclosureHeader:focus { background: $panel; text-style: bold; }
+Disclosure { height: auto; margin: 1 0 0 0; background: transparent; }
+DisclosureHeader { height: 1; padding: 0 1; }
+DisclosureHeader:hover, DisclosureHeader:focus { background: $panel; }
 .dh-main { width: 1fr; text-wrap: nowrap; text-overflow: ellipsis; }
 .dh-meta { width: auto; padding-left: 2; }
-.dh-body { display: none; height: auto; padding: 0 2 1 4; }
-Disclosure.-open .dh-body { display: block; }
+.dh-body { display: none; height: auto; padding: 0 1 0 3; }
+Disclosure.-body .dh-body { display: block; }
 
 /* ── composer ───────────────────────────────────────────────────────────── */
 #composer {

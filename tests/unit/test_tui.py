@@ -99,7 +99,7 @@ async def test_tui_renders_messages_and_tool_history() -> None:
 
     assert "hi" in text  # the user's own message
     assert "hello world" in text
-    assert "run_command" in text
+    assert "Run(ls -la)" in text  # run_command, by its display name
     assert "ls -la" in text  # the bash command itself is shown
     assert "run completed" not in text  # successful runs stay silent
     assert application.sent[0][2] is None
@@ -296,9 +296,9 @@ async def test_non_shell_tool_card_is_expandable_and_shows_its_arguments() -> No
         app.handle_event(event(EventType.TOOL_COMPLETED, tool="read_file", tool_call_id="r"))
         await _settle(pilot, 3)
         card = app.tab.cards["r"]
-        assert card.has_body  # so the header shows a chevron
-        assert "▸" in str(card.query_one(".dh-main").render())
+        assert card.has_body  # Enter opens it
         assert not card.has_class("-open")  # arguments alone do not open the card
+        assert not card.has_class("-body")  # nor show a summary line
 
         card.toggle()
         await _settle(pilot, 3)
@@ -338,7 +338,7 @@ async def test_a_failed_tool_shows_failed_and_stays_open() -> None:
         card = app.tab.cards["f"]
         assert card.status == "failed"
         assert card.has_class("-failed")
-        assert "✗" in str(card.query_one(".dh-main").render())
+        assert "●" in str(card.query_one(".dh-main").render())
 
 
 async def test_tool_card_holds_partial_lines_until_complete() -> None:
@@ -1281,8 +1281,8 @@ async def test_ctrl_g_lists_the_changed_files_and_shows_each_diff() -> None:
         await pilot.pause(0.2)
         closed = not isinstance(app.screen, ChangesScreen)
 
-    assert "-y = 2" in first and "+y = 3" in first
-    assert "+# Title" in second and "--- /dev/null" in second
+    assert "2 - y = 2" in first and "2 + y = 3" in first  # numbered rows, no file headers
+    assert "1 + # Title" in second and "/dev/null" not in second
     assert closed
 
 

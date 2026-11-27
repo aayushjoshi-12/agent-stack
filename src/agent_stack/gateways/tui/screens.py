@@ -18,8 +18,7 @@ from textual.widgets.option_list import Option
 
 from agent_stack.app.application import FileDiff
 from agent_stack.gateways.base import SessionSummary, format_when
-from agent_stack.gateways.tui.render import diff_kind
-from agent_stack.gateways.tui.rows import DIFF_MARKUP
+from agent_stack.gateways.tui.rows import diff_rows
 
 if TYPE_CHECKING:
     from agent_stack.app.application import LineTurn
@@ -92,10 +91,8 @@ class ChangesScreen(ModalScreen[None]):
         if not file.diff:
             body = "[$foreground-muted]No net difference: the edits cancelled each other out.[/]"
         else:
-            body = "\n".join(
-                f"[{DIFF_MARKUP[diff_kind(line)]}]{escape(line) or ' '}[/]"
-                for line in file.diff.splitlines()
-            )
+            width = max(0, self.query_one("#changes-scroll").size.width - 2)
+            body = "\n".join(diff_rows(file.diff.splitlines(), width))
             if file.diff_truncated:
                 body += "\n[$foreground-muted italic]… diff cut at 4000 lines[/]"
         self.query_one("#changes-diff", Static).update(body)
