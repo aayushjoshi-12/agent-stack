@@ -50,8 +50,7 @@ from agent_stack.gateways.base import (
     usage_summary,
 )
 from agent_stack.gateways.ratelimit import RateLimiter
-from agent_stack.observability.audit import audit_record
-from agent_stack.observability.redact import env_secrets
+from agent_stack.observability.redact import StreamRedactor, env_secrets
 
 __all__ = ["WebConfigError", "WebSettings", "create_app", "run_web"]
 
@@ -684,11 +683,21 @@ async def _stream(application: Application, run_id: str, after: int | None) -> A
 async def _feed_deltas(
     application: Application, run_id: str, deltas: asyncio.Queue[AgentEvent]
 ) -> None:
-    """Queue the run's live deltas, redacted like the logged events the stream replays."""
+    """Queue the run's live deltas, redacted like the logged events the stream replays.
+
+    Each step's text (and its reasoning) is redacted as a whole as it grows, so a secret split
+    across two deltas is caught; the held-back tail shows when the final message replaces it.
+    """
     known = env_secrets()
+    redactors: dict[tuple[Any, Any], StreamRedactor] = {}
     async for event in application.subscribe(run_id):
-        if event.type is EventType.ASSISTANT_DELTA:
-            deltas.put_nowait(replace(event, data=audit_record(event, known)["data"]))
+        if event.type is not EventType.ASSISTANT_DELTA:
+            continue
+        key = (event.data.get("step"), event.data.get("kind"))
+        redactor = redactors.setdefault(key, StreamRedactor(known))
+        text = redactor.push(str(event.data.get("text", "")))
+        if text:
+            deltas.put_nowait(replace(event, data={**event.data, "text": text}))
 
 
 def _delta_sse(event: AgentEvent) -> str:

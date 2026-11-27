@@ -18,7 +18,7 @@ from agent_stack.core.run_context import RunContext, run_context
 from agent_stack.observability.audit import AuditLogger, audit_record, read_audit
 from agent_stack.observability.logging import EventLogger, JsonLogFormatter, configure_logging
 from agent_stack.observability.metrics import Metrics
-from agent_stack.observability.redact import REDACTED, env_secrets, redact
+from agent_stack.observability.redact import REDACTED, StreamRedactor, env_secrets, redact
 from agent_stack.observability.sinks import FanoutSink
 
 SECRET_KEY = "sk-or-v1-0123456789abcdef0123456789abcdef"
@@ -87,6 +87,55 @@ def test_redact_replaces_known_secret_values_in_any_shape() -> None:
     assert redact("db pw is zebra-quartz-9921!", known=["zebra-quartz-9921!"]) == (
         f"db pw is {REDACTED}"
     )
+
+
+def _stream(redactor: StreamRedactor, pieces: list[str]) -> list[str]:
+    return [redactor.push(piece) for piece in pieces]
+
+
+def test_stream_redactor_catches_a_key_split_across_pieces() -> None:
+    prose = "Here is the configuration you asked for, written out in full below. "
+    pieces = [
+        prose,
+        "OPENROUTER=sk-or-v1-0123",
+        "456789abcdef0123456789abcdef",
+        " done. " + "x" * 80,
+    ]
+
+    shown = "".join(_stream(StreamRedactor(), pieces))
+
+    assert "sk-or" not in shown and "0123" not in shown
+    assert shown.startswith(prose)
+    assert REDACTED in shown
+
+
+def test_stream_redactor_holds_back_the_start_of_a_known_secret() -> None:
+    secret = "zebra-quartz-9921!" * 6  # longer than the default hold
+    redactor = StreamRedactor(known=[secret])
+    pieces = ["a" * 100, secret[:50], secret[50:], " and the rest " + "b" * 80]
+
+    shown = _stream(redactor, pieces)
+
+    assert "zebra" not in shown[1]  # the half secret is held, not shown
+    assert "zebra" not in "".join(shown)
+    assert REDACTED in "".join(shown)
+
+
+def test_stream_redactor_shows_plain_text_with_only_a_short_tail_held() -> None:
+    text = "word " * 40
+    redactor = StreamRedactor(hold=64)
+
+    shown = "".join(redactor.push(text[i : i + 7]) for i in range(0, len(text), 7))
+
+    assert text.startswith(shown) and len(text) - len(shown) == 64
+
+
+def test_stream_redactor_stops_when_a_redaction_reaches_back_into_shown_text() -> None:
+    redactor = StreamRedactor(hold=4)  # too short for a Bearer token: shows the reach-back
+    assert redactor.push("Bearer abcdefgh") == "Bearer abcd"
+
+    assert redactor.push("ijklmnop") == ""  # now a token: the shown text no longer matches
+    assert redactor.push(" more text after it, long enough to pass the hold") == ""
 
 
 def test_env_secrets_picks_secret_looking_variables_only() -> None:

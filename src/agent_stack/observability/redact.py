@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 
-__all__ = ["REDACTED", "env_secrets", "redact"]
+__all__ = ["REDACTED", "StreamRedactor", "env_secrets", "redact"]
 
 REDACTED = "[redacted]"
 
@@ -66,3 +66,43 @@ def redact(text: str, known: Iterable[str] = (), *, pairs: bool = True) -> str:
     if not pairs:
         return text
     return _PAIR.sub(lambda m: f"{m['name']}{m['sep']}{REDACTED}", text)
+
+
+class StreamRedactor:
+    """Redact text that arrives in pieces (live model deltas), so a secret split across two
+    pieces is still caught.
+
+    ``push`` returns the next part of ``redact(everything so far)`` that is safe to show. It holds
+    back a tail of ``hold`` characters, more when the end could be the start of a known secret,
+    because the next piece can complete a secret there. If a redaction ever reaches back into
+    text already shown, it returns nothing more: the caller's final, redacted text replaces it.
+    """
+
+    def __init__(self, known: Sequence[str] = (), hold: int = 64) -> None:
+        self._known = tuple(secret for secret in known if secret)
+        self._hold = hold
+        self._raw = ""
+        self._shown = ""
+        self._stopped = False
+
+    def push(self, piece: str) -> str:
+        if self._stopped:
+            return ""
+        self._raw += piece
+        text = redact(self._raw, self._known)
+        safe = text[: max(len(self._shown), len(text) - self._tail(text))]
+        if not safe.startswith(self._shown):
+            self._stopped = True
+            return ""
+        out, self._shown = safe[len(self._shown) :], safe
+        return out
+
+    def _tail(self, text: str) -> int:
+        """How much of ``text``'s end to hold back."""
+        hold = self._hold
+        for secret in self._known:
+            for size in range(min(len(secret) - 1, len(text)), hold, -1):
+                if text.endswith(secret[:size]):
+                    hold = size
+                    break
+        return hold

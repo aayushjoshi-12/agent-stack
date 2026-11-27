@@ -303,14 +303,22 @@ async def test_a_reconnect_resumes_after_the_last_received_event(
 async def test_the_stream_forwards_live_deltas_and_a_reconnect_replays_the_final_text(
     tmp_path: Path,
 ) -> None:
-    pieces = [AIMessageChunk(content=p) for p in ("Hel", "lo ", "the", "re")]
-    application = _application(tmp_path, FakeStreamingModel([pieces], delay=0.15))
+    words = (
+        "Hello there, ",
+        "this reply is long enough ",
+        "to stream past the ",
+        "held tail. ",
+    ) * 3
+    reply = "".join(words)
+    pieces = [AIMessageChunk(content=p) for p in words]
+    application = _application(tmp_path, FakeStreamingModel([pieces], delay=0.05))
     async for client in _client(application):
         _, run_id = await _start(client)
         live = _events((await client.get(f"/runs/{run_id}/events", headers=HEADERS)).text)
 
         deltas = [e for e in live if e["type"] == "assistant.delta"]
-        assert "".join(e["data"]["text"] for e in deltas) == "Hello there"
+        streamed = "".join(e["data"]["text"] for e in deltas)
+        assert reply.startswith(streamed) and len(reply) - len(streamed) == 64  # the held tail
         assert all(e["sse_id"] is None and e["sequence"] == -1 for e in deltas)
         logged = [e for e in live if e["type"] != "assistant.delta"]
         assert [e["type"] for e in logged] == ["run.started", "assistant.message", "run.completed"]
@@ -327,7 +335,21 @@ async def test_the_stream_forwards_live_deltas_and_a_reconnect_replays_the_final
             ).text
         )
         assert [e["type"] for e in resumed] == ["assistant.message", "run.completed"]
-        assert resumed[0]["data"]["content"] == "Hello there"
+        assert resumed[0]["data"]["content"] == reply
+
+
+async def test_live_deltas_redact_a_key_split_across_two_chunks(tmp_path: Path) -> None:
+    key = "sk-or-v1-0123456789abcdef0123456789abcdef"
+    words = ("Your key is ", key[:12], key[12:], ", keep it safe. " + "x" * 80)
+    pieces = [AIMessageChunk(content=p) for p in words]
+    application = _application(tmp_path, FakeStreamingModel([pieces], delay=0.05))
+    async for client in _client(application):
+        _, run_id = await _start(client)
+        live = _events((await client.get(f"/runs/{run_id}/events", headers=HEADERS)).text)
+
+        streamed = "".join(e["data"]["text"] for e in live if e["type"] == "assistant.delta")
+        assert streamed.startswith("Your key is [redacted]")
+        assert "sk-or" not in streamed and key[12:20] not in streamed
 
 
 async def test_session_events_rebuild_the_whole_conversation(
