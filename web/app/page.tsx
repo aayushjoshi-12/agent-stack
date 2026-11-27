@@ -701,7 +701,7 @@ export default function Page() {
                 case "tool":
                   return <ToolCard key={item.key} tool={item} onDecide={(t, a) => void decide(t, a)} onOpenFile={openFile} />;
                 case "assistant":
-                  return <AssistantBubble key={item.key} text={item.text} depth={item.depth} />;
+                  return <AssistantBubble key={item.key} text={item.text} depth={item.depth} streaming={item.streaming} />;
                 case "reasoning":
                   return <ReasoningCard key={item.key} item={item} />;
                 case "subagent":

@@ -168,7 +168,7 @@ export function ReasoningCard({ item }: { item: Extract<Item, { kind: "reasoning
     <Indent depth={item.depth}>
       <div className="text-soft">
         <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="code underline decoration-dotted underline-offset-4">
-          {open ? "hide reasoning" : "show reasoning"}
+          {open ? "hide reasoning" : item.streaming ? "thinking…" : "show reasoning"}
         </button>
         {open && <p className="mt-2 whitespace-pre-wrap border-l-4 border-line/40 pl-3 text-sm">{item.text}</p>}
       </div>
@@ -176,7 +176,7 @@ export function ReasoningCard({ item }: { item: Extract<Item, { kind: "reasoning
   );
 }
 
-export function AssistantBubble({ text, depth = 0 }: { text: string; depth?: number }) {
+export function AssistantBubble({ text, depth = 0, streaming = false }: { text: string; depth?: number; streaming?: boolean }) {
   return (
     <Indent depth={depth}>
       <section className="box p-4" aria-label="Assistant">
@@ -184,7 +184,8 @@ export function AssistantBubble({ text, depth = 0 }: { text: string; depth?: num
           <span className="inline-block h-3 w-3 bg-blue" aria-hidden />
           agent
         </div>
-        <Markdown text={text} />
+        {/* while it streams, plain text: Markdown is parsed once, on the final message */}
+        {streaming ? <p className="whitespace-pre-wrap" aria-busy>{text}</p> : <Markdown text={text} />}
       </section>
     </Indent>
   );

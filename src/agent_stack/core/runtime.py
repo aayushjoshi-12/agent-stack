@@ -12,7 +12,15 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from uuid import uuid4
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+    message_chunk_to_message,
+)
 
 from agent_stack.core.agent import Agent
 from agent_stack.core.approval import (
@@ -127,6 +135,34 @@ def usage_data(message: AIMessage) -> dict[str, Any] | None:
 
 _T = TypeVar("_T")
 
+#: Streamed text is published at most this often, or once this much has gathered (P45).
+_DELTA_SECONDS = 0.05
+_DELTA_CHARS = 64
+
+
+class _Coalescer:
+    """Gathers streamed text into deltas: a flush per kind switch, ~50 ms or 64 chars."""
+
+    def __init__(self, emit: Callable[[str, str], Awaitable[None]]) -> None:
+        self._emit = emit
+        self._kind = ""
+        self._text = ""
+        self._last = 0.0  # the first piece goes out at once
+
+    async def add(self, kind: str, text: str) -> None:
+        if kind != self._kind:
+            await self.flush()
+            self._kind = kind
+        self._text += text
+        if len(self._text) >= _DELTA_CHARS or time.monotonic() - self._last >= _DELTA_SECONDS:
+            await self.flush()
+
+    async def flush(self) -> None:
+        if self._text:
+            await self._emit(self._kind, self._text)
+            self._text = ""
+            self._last = time.monotonic()
+
 
 class AgentRuntime:
     """The explicit model/tool loop.
@@ -183,6 +219,8 @@ class AgentRuntime:
         #: Where a compaction re-reads the files in use (None: it attaches none).
         self._workspace = WorkspacePolicy(workspace_root) if workspace_root else None
         self._model = model
+        #: False once the model turned out not to stream: later calls go straight to ``ainvoke``.
+        self._streams = True
         self._tool_executor = tool_executor
         self._session_store = session_store
         self._event_bus = event_bus
@@ -343,7 +381,17 @@ class AgentRuntime:
                 model_input = await self._model_input(
                     resident=resident, history=history, new_messages=new_messages, memo=summary_memo
                 )
-                response = await self._within(deadline, self._invoker(model_input))
+                response = await self._within(
+                    deadline,
+                    self._invoker(
+                        model_input,
+                        step=step_count,
+                        cancel=cancel,
+                        run_id=run_id,
+                        session_id=session_id,
+                        parent_run_id=parent_run_id,
+                    ),
+                )
                 if not isinstance(response, AIMessage):
                     raise AgentStackError(
                         f"Model returned {type(response).__name__}, expected AIMessage"
@@ -606,9 +654,64 @@ class AgentRuntime:
             return (self._agent.system_prompt,)
         return await self._system_parts.parts(base_prompt=self._agent.system_prompt)
 
-    def _invoker(self, model_input: list[BaseMessage]) -> Callable[[], Awaitable[Any]]:
+    def _invoker(
+        self,
+        model_input: list[BaseMessage],
+        *,
+        step: int,
+        cancel: CancellationToken | None,
+        run_id: str,
+        session_id: str,
+        parent_run_id: str | None,
+    ) -> Callable[[], Awaitable[Any]]:
         """A zero-argument call of the model on ``model_input`` (binds it, not the loop variable)."""
-        return lambda: self._model.ainvoke(model_input)
+
+        async def emit(kind: str, text: str) -> None:
+            await self._emit(
+                EventType.ASSISTANT_DELTA,
+                run_id=run_id,
+                session_id=session_id,
+                parent_run_id=parent_run_id,
+                data={"text": text, "kind": kind, "step": step},
+            )
+
+        return lambda: self._stream_model(model_input, emit, cancel)
+
+    async def _stream_model(
+        self,
+        model_input: list[BaseMessage],
+        emit: Callable[[str, str], Awaitable[None]],
+        cancel: CancellationToken | None,
+    ) -> Any:
+        """Stream one model call, publishing its text as deltas; returns the whole message.
+
+        The chunks are summed (``chunk + chunk``) into the same ``AIMessage`` ``ainvoke`` returns:
+        content, tool calls, usage and reasoning. A model with no ``astream`` (or one that refuses
+        to stream before its first chunk) is asked with ``ainvoke`` from then on.
+        """
+        if not self._streams or self._event_bus is None:
+            return await self._model.ainvoke(model_input)
+        whole: Any = None
+        out = _Coalescer(emit)
+        try:
+            async for chunk in self._model.astream(model_input):
+                self._check_cancelled(cancel)
+                whole = chunk if whole is None else whole + chunk
+                if isinstance(chunk, AIMessageChunk):
+                    reasoning = chunk.additional_kwargs.get("reasoning_content")
+                    if isinstance(reasoning, str) and reasoning:
+                        await out.add("reasoning", reasoning)
+                    if text := chunk.text:
+                        await out.add("text", text)
+        except (AttributeError, NotImplementedError):
+            if whole is not None:
+                raise
+            self._streams = False
+            return await self._model.ainvoke(model_input)
+        await out.flush()
+        if isinstance(whole, AIMessageChunk):
+            return message_chunk_to_message(whole)
+        return whole
 
     async def _maybe_compact(
         self,

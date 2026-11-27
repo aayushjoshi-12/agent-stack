@@ -145,6 +145,7 @@ A phase may start only when every phase it depends on has passed its acceptance 
 | P42 OpenTelemetry | P08, P27 |
 | P43 MCP client | P02, P26 |
 | P44 Images in | P34, P38 |
+| P45 Token streaming | P08, P24, P29 |
 
 ---
 

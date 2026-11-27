@@ -153,3 +153,71 @@ test("an auto-compaction shows as a notice, a subagent's does not", () => {
   assert.equal(notes.length, 1);
   assert.match(notes[0]?.text ?? "", /31 messages summarised/);
 });
+
+const delta = (text: string, step: number, kind = "text", run = "r1", parent: string | null = null): ApiEvent => ({
+  id: `d${(n += 1)}`,
+  type: "assistant.delta",
+  run_id: run,
+  session_id: "s",
+  sequence: -1,
+  timestamp: "",
+  parent_run_id: parent,
+  data: { text, kind, step },
+});
+
+const shape = (s: LiveState) =>
+  s.items.map((i) => [i.kind, "text" in i ? i.text : "", "streaming" in i ? i.streaming : undefined]);
+
+test("deltas grow one streaming bubble and the final message replaces it in place", () => {
+  const started = play([ev("run.started")]);
+  const streaming = play([delta("thin", 0, "reasoning"), delta("king", 0, "reasoning"), delta("Hel", 0), delta("lo", 0)], started);
+  assert.deepEqual(shape(streaming), [
+    ["reasoning", "thinking", true],
+    ["assistant", "Hello", true],
+  ]);
+  assert.deepEqual(streaming.cursor, started.cursor); // deltas never move the resume cursor
+
+  const done = play([ev("model.usage", {}), ev("model.reasoning", { text: "thinking" }), ev("assistant.message", { content: "Hello" })], streaming);
+  assert.deepEqual(shape(done), [
+    ["reasoning", "thinking", undefined],
+    ["assistant", "Hello", undefined],
+  ]);
+  const bubble = done.items[1];
+  assert.ok(bubble && bubble.kind === "assistant" && bubble.eventId);
+});
+
+test("a step that ends in tool calls only drops its streamed bubble; the next step streams anew", () => {
+  const s = play([
+    ev("run.started"),
+    delta(" ", 0),
+    ev("assistant.message", { content: "", tool_calls: ["t"] }),
+    ev("tool.started", { tool: "t", tool_call_id: "c", args: {} }),
+    ev("tool.completed", { tool_call_id: "c", ok: true }),
+    delta("Answer", 1),
+  ]);
+  assert.deepEqual(shape(s), [
+    ["tool", "", undefined],
+    ["assistant", "Answer", true],
+  ]);
+});
+
+test("a final message the event log capped keeps the whole streamed text", () => {
+  const whole = "y".repeat(2500);
+  const s = play([
+    ev("run.started"),
+    delta(whole, 0),
+    ev("assistant.message", { content: `${"y".repeat(2000)}...[truncated 500 bytes]` }),
+  ]);
+  assert.deepEqual(shape(s), [["assistant", whole, undefined]]);
+});
+
+test("a late delta for a finished step is dropped", () => {
+  const s = play([ev("run.started"), delta("Hi", 0), ev("assistant.message", { content: "Hi" }), delta(" again", 0)]);
+  assert.deepEqual(shape(s), [["assistant", "Hi", undefined]]);
+});
+
+test("a subagent's deltas never render", () => {
+  const s = play([ev("run.started"), delta("child text", 0, "text", "child", "r1")]);
+  assert.equal(s.items.length, 0);
+  assert.equal(applyEvent(s, delta("x", 0, "text", "child", "r1")), s);
+});

@@ -84,6 +84,21 @@ class AgentMessage(Markdown):
 
     def __init__(self, content: str) -> None:
         super().__init__(content, classes="agent-message")
+        self._text = content
+
+    def grow(self, text: str) -> None:
+        """Add streamed text (P45). Queued on the widget, so it never runs before the mount."""
+        self._text += text
+        self.call_later(self._catch_up)
+
+    def settle(self, content: str) -> None:
+        """Show the step's final text (it replaces whatever was streamed)."""
+        self._text = content
+        self.call_later(self.update, content)
+
+    def _catch_up(self) -> None:
+        if self._text.startswith(self.source) and (missing := self._text[len(self.source) :]):
+            self.append(missing)
 
 
 class Notice(Static):

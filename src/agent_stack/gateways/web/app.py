@@ -23,7 +23,7 @@ import math
 import secrets
 import time
 from collections.abc import AsyncIterator, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
@@ -42,6 +42,8 @@ from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.run import Run
 from agent_stack.gateways.base import HistoryItem, MessageEnvelope, model_breakdown, usage_summary
 from agent_stack.gateways.ratelimit import RateLimiter
+from agent_stack.observability.audit import audit_record
+from agent_stack.observability.redact import env_secrets
 
 __all__ = ["WebConfigError", "WebSettings", "create_app", "run_web"]
 
@@ -623,9 +625,40 @@ async def _stream(application: Application, run_id: str, after: int | None) -> A
     """Yield the run's logged events, until it ends; ``after`` resumes past a sequence.
 
     Sequences start at 0, so ``None`` (a fresh stream) means "from the very first event".
+    Live ``assistant.delta`` events (P45) come straight off the bus between polls; they are not
+    logged, so a reconnect misses the partial text but replays the step's final message.
     """
+    deltas: asyncio.Queue[AgentEvent] = asyncio.Queue()
+    feeder = asyncio.create_task(_feed_deltas(application, run_id, deltas))
+    try:
+        async for chunk in _logged_and_live(application, run_id, after, deltas):
+            yield chunk
+    finally:
+        feeder.cancel()
+
+
+async def _feed_deltas(
+    application: Application, run_id: str, deltas: asyncio.Queue[AgentEvent]
+) -> None:
+    """Queue the run's live deltas, redacted like the logged events the stream replays."""
+    known = env_secrets()
+    async for event in application.subscribe(run_id):
+        if event.type is EventType.ASSISTANT_DELTA:
+            deltas.put_nowait(replace(event, data=audit_record(event, known)["data"]))
+
+
+def _delta_sse(event: AgentEvent) -> str:
+    """A delta has no ``id:``: the browser's Last-Event-ID stays the last durable sequence."""
+    return f"event: {event.type}\ndata: {json.dumps(_event_json(event))}\n\n"
+
+
+async def _logged_and_live(
+    application: Application, run_id: str, after: int | None, deltas: asyncio.Queue[AgentEvent]
+) -> AsyncIterator[str]:
     seen, quiet = after, 0.0
     while True:
+        while not deltas.empty():
+            yield _delta_sse(deltas.get_nowait())
         events = await application.replay(run_id=run_id, after_sequence=seen)
         for event in events:
             seen = event.sequence
@@ -647,7 +680,13 @@ async def _stream(application: Application, run_id: str, after: int | None) -> A
             if quiet >= _KEEPALIVE_SECONDS:
                 quiet = 0.0
                 yield ": keepalive\n\n"
-        await asyncio.sleep(_POLL_SECONDS)
+        end = time.monotonic() + _POLL_SECONDS
+        while (left := end - time.monotonic()) > 0:  # the poll's pause, spent forwarding deltas
+            try:
+                delta = await asyncio.wait_for(deltas.get(), left)
+            except TimeoutError:
+                break
+            yield _delta_sse(delta)
 
 
 def run_web(application: Application, settings: WebSettings) -> None:

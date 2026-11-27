@@ -10,11 +10,11 @@ strict typing.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from pydantic import Field
 
@@ -60,6 +60,40 @@ class FakeChatModel:
                 "scripted (possible runaway loop)."
             )
         return self._responses.pop(0)
+
+
+class FakeStreamingModel(FakeChatModel):
+    """A scripted model that streams: each reply is a list of `AIMessageChunk`s.
+
+    `delay` sleeps before every chunk (to test coalescing and cancellation mid-stream). `ainvoke`
+    returns the summed chunks, as a real model would.
+    """
+
+    def __init__(self, replies: Sequence[Sequence[AIMessageChunk]], delay: float = 0.0) -> None:
+        super().__init__([])
+        self._replies = [list(r) for r in replies]
+        self.delay = delay
+        self.streamed = 0
+
+    async def astream(self, messages: Any, **kwargs: Any) -> AsyncIterator[AIMessageChunk]:
+        import asyncio
+
+        self.calls.append(list(messages))
+        self.streamed += 1
+        for chunk in self._replies.pop(0):
+            if self.delay:
+                await asyncio.sleep(self.delay)
+            yield chunk
+
+    async def ainvoke(self, messages: Any, **kwargs: Any) -> AIMessage:
+        from langchain_core.messages import message_chunk_to_message
+
+        self.calls.append(list(messages))
+        chunks = self._replies.pop(0)
+        whole = chunks[0]
+        for chunk in chunks[1:]:
+            whole = whole + chunk
+        return message_chunk_to_message(whole)
 
 
 class FakeToolCallingModel(BaseChatModel):

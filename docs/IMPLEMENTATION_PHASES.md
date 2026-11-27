@@ -1898,6 +1898,56 @@ Tests: `tests/unit/test_tracing.py` (skipped without the extra). Smoke:
 
 ---
 
+## Phase 45 — Token streaming ✅
+
+**Goal.** A reply appears as the model writes it: the web UI and the TUI grow the assistant
+message (and its reasoning) from streamed tokens instead of waiting for the whole step.
+
+**Deliverables**
+- Runtime calls the model with `astream` and aggregates the chunks into the same `AIMessage`
+  `ainvoke` returns (content, tool calls, usage incl. cache tokens and cost, reasoning). While it
+  streams it publishes `assistant.delta` (`text`, `kind` `text|reasoning`, `step`), coalesced
+  (~50 ms / 64 chars). `assistant.message`, `model.reasoning` and `model.usage` stay exactly as
+  before. A model that cannot stream falls back to `ainvoke` once and is remembered. Deadline and
+  cancellation interrupt a stream. Compaction does not stream.
+- Deltas are ephemeral: not sequenced, not in the durable event log, not in the audit log,
+  metrics or tracing; SSE resume by sequence is unaffected (a missed partial is fine, the final
+  message replays).
+- Web: the SSE route forwards live deltas (without an `id:`); the reducer grows the current
+  assistant/reasoning item and the final message replaces it. TUI streams into the current
+  `AgentMessage`. Telegram and the line REPL stay on final messages. Child-run deltas never
+  render in the parent conversation.
+
+**Acceptance**
+- tests: deltas in order and coalesced; aggregated message equals the chunks (tool calls,
+  usage); deltas absent from the event log, audit and sinks; SSE replay after a reconnect has
+  the final message and no deltas; cancellation mid-stream; non-streaming fallback; web reducer
+  delta to final replacement and child deltas ignored.
+- Smoke with the real default model through the web gateway: deltas counted, time to first
+  delta vs full reply, final text equals the concatenated deltas, tool call and usage still work;
+  screenshots mid-stream.
+
+**Built.** `AgentRuntime._stream_model` (behind the existing `_invoker`, inside `_within`): sums
+the `astream` chunks and returns `message_chunk_to_message(whole)`; a `_Coalescer` publishes
+`assistant.delta` on a kind switch, at 64 chars or 50 ms (the first piece at once), and at the end;
+the cancel token is checked per chunk. `AttributeError`/`NotImplementedError` before the first
+chunk switches the runtime to `ainvoke` for good; no bus wired means `ainvoke` too. Reasoning
+deltas come from `additional_kwargs["reasoning_content"]` (OpenRouter/DeepSeek style); reasoning
+only in content blocks shows when the step ends, as before. Ephemeral events: `EPHEMERAL_EVENTS`
+in `core/events.py`; `InMemoryEventBus.publish` hands them to current subscribers with
+`sequence` -1 and returns before sequencing, `_persist` (event log) and the audit sink
+(`FanoutSink`: audit, logger, metrics, tracing). Web: `_stream` runs a bus subscription beside
+the log poll and spends each poll pause forwarding deltas (redacted with the event-log
+sanitiser, no `id:` line). `web/lib/events.ts` grows `delta:<run>:<step>:<kind>` items (plain
+text while streaming, Markdown on the final), the final event replaces them in place, a delta
+for a finished step or a child run is dropped, and a final the event log capped (2000 bytes)
+keeps the streamed text. TUI: `AgentMessage.grow` (queued `Markdown.append`, never before the
+mount), `settle` on the final; the thinking card is mounted above the streamed reply. Telegram
+and the line REPL ignore deltas. Tests: `tests/unit/test_streaming.py`, web gateway SSE test,
+TUI tests, `web/lib/events.test.ts`. Smoke: `tmp/smoke_tests/P45-token-streaming-smoke.py`.
+
+---
+
 # Appendix A — Target file tree
 
 Grow into this; do not create it all up front.

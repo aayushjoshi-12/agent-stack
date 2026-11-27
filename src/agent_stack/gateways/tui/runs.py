@@ -112,6 +112,9 @@ class RunsMixin(App[None]):
                 tab.run_started = time.monotonic()
         elif etype is EventType.MODEL_REASONING:
             self._on_reasoning(tab, event)
+        elif etype is EventType.ASSISTANT_DELTA:
+            self._on_delta(tab, event)
+            return  # the message repaints itself; no need to refresh the chrome per piece
         elif etype is EventType.ASSISTANT_MESSAGE:
             self._on_assistant(tab, event)
         elif etype is EventType.TOOL_STARTED:
@@ -204,11 +207,30 @@ class RunsMixin(App[None]):
             return
         self._bump_tokens(tab, text)
         self._remove_welcome(tab)
-        tab.mount(Disclosure("think", "thinking", body=text))
+        # the step's reply may already be streaming: its thinking goes above it
+        tab.mount(Disclosure("think", "thinking", body=text), before=tab.streaming)
+
+    def _on_delta(self, tab: Conversation, event: AgentEvent) -> None:
+        """Stream the reply's text into one message; its thinking arrives whole, before it."""
+        text = str(event.data.get("text", ""))
+        if event.data.get("kind") != "text" or not text:
+            return
+        if tab.streaming is None:
+            self._remove_welcome(tab)
+            tab.streaming = AgentMessage("")
+            tab.mount(tab.streaming)
+        tab.streaming.grow(text)
 
     def _on_assistant(self, tab: Conversation, event: AgentEvent) -> None:
         content = str(event.data.get("content", ""))
+        streamed, tab.streaming = tab.streaming, None
         if not content.strip():
+            if streamed is not None:
+                streamed.remove()
+            return
+        if streamed is not None:
+            self._bump_tokens(tab, content)
+            streamed.settle(content)
             return
         self._bump_tokens(tab, content)
         self._remove_welcome(tab)
@@ -286,6 +308,7 @@ class RunsMixin(App[None]):
         tab.outcome = "cancelled" if tab.cancel_sent and outcome == "failed" else outcome
         tab.running = False
         tab.cancel_sent = False
+        tab.streaming = None  # a stopped stream keeps the text it got
         for card in tab.cards.values():
             if card.status == "running":
                 card.finish("done")

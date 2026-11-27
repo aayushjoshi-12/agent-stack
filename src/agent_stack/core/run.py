@@ -310,7 +310,8 @@ class RunManager:
                     progress.steps += 1
                 elif event.type is EventType.TOOL_COMPLETED:
                     progress.tools += 1
-                progress.last_event = event.type.value
+                if event.type is not EventType.ASSISTANT_DELTA:
+                    progress.last_event = event.type.value
                 await self._reflect_approval(event)
                 queue.put_nowait(event)
                 if event.type in _TERMINAL_EVENTS:

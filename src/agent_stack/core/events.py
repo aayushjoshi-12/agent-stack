@@ -14,7 +14,7 @@ from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
-__all__ = ["AgentEvent", "EventType"]
+__all__ = ["EPHEMERAL_EVENTS", "AgentEvent", "EventType"]
 
 
 class EventType(StrEnum):
@@ -24,6 +24,11 @@ class EventType(StrEnum):
     RUN_COMPLETED = "run.completed"
     RUN_FAILED = "run.failed"
     ASSISTANT_MESSAGE = "assistant.message"
+    # A piece of the reply while the model is still writing it (P45). Data: ``text``, ``kind``
+    # ("text" | "reasoning") and ``step`` (the run's model-call index it belongs to). Ephemeral:
+    # never sequenced, logged or audited (see EPHEMERAL_EVENTS); the step's ASSISTANT_MESSAGE
+    # and MODEL_REASONING still carry the whole text. Not terminal.
+    ASSISTANT_DELTA = "assistant.delta"
     # What one model call consumed: tokens and, when the provider reports it, the exact cost in
     # USD. Emitted after every model response (including subagents'); never terminal.
     MODEL_USAGE = "model.usage"
@@ -57,6 +62,11 @@ class EventType(StrEnum):
     # A message sent while the run was working reached the model (it was queued, then read at
     # the next model call). Data: ``text``. Not terminal.
     INPUT_RECEIVED = "input.received"
+
+
+#: Live-only events: the bus delivers them to current subscribers with ``sequence`` -1 and skips
+#: the durable event log and the audit sinks, so resume-by-sequence and replay never see them.
+EPHEMERAL_EVENTS = frozenset({EventType.ASSISTANT_DELTA})
 
 
 @dataclass(frozen=True)

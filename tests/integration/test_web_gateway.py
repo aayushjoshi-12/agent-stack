@@ -10,6 +10,7 @@ from typing import Any
 
 import httpx
 import pytest
+from langchain_core.messages import AIMessageChunk
 
 from agent_stack.app.application import Application
 from agent_stack.app.config import AppConfig
@@ -27,7 +28,7 @@ from agent_stack.persistence.sqlite import SqliteDatabase, SqliteSessionStore
 from agent_stack.subagents.delegation import delegate
 from agent_stack.tools.executor import ToolExecutor
 from agent_stack.tools.registry import ToolRegistry
-from tests.fakes import FakeChatModel, SleepTool, ai, call
+from tests.fakes import FakeChatModel, FakeStreamingModel, SleepTool, ai, call
 
 pytestmark = pytest.mark.integration
 
@@ -297,6 +298,36 @@ async def test_a_reconnect_resumes_after_the_last_received_event(
         f"/runs/{run_id}/events", headers={**HEADERS, "Last-Event-ID": str(full[-1]["sequence"])}
     )
     assert _events(done.text) == []  # nothing missed, and the stream still ends
+
+
+async def test_the_stream_forwards_live_deltas_and_a_reconnect_replays_the_final_text(
+    tmp_path: Path,
+) -> None:
+    pieces = [AIMessageChunk(content=p) for p in ("Hel", "lo ", "the", "re")]
+    application = _application(tmp_path, FakeStreamingModel([pieces], delay=0.15))
+    async for client in _client(application):
+        _, run_id = await _start(client)
+        live = _events((await client.get(f"/runs/{run_id}/events", headers=HEADERS)).text)
+
+        deltas = [e for e in live if e["type"] == "assistant.delta"]
+        assert "".join(e["data"]["text"] for e in deltas) == "Hello there"
+        assert all(e["sse_id"] is None and e["sequence"] == -1 for e in deltas)
+        logged = [e for e in live if e["type"] != "assistant.delta"]
+        assert [e["type"] for e in logged] == ["run.started", "assistant.message", "run.completed"]
+        assert [str(e["sequence"]) for e in logged] == [e["sse_id"] for e in logged]
+        message = next(e for e in live if e["type"] == "assistant.message")
+        assert live.index(deltas[-1]) < live.index(message)
+
+        resumed = _events(
+            (
+                await client.get(
+                    f"/runs/{run_id}/events",
+                    headers={**HEADERS, "Last-Event-ID": str(logged[0]["sequence"])},
+                )
+            ).text
+        )
+        assert [e["type"] for e in resumed] == ["assistant.message", "run.completed"]
+        assert resumed[0]["data"]["content"] == "Hello there"
 
 
 async def test_session_events_rebuild_the_whole_conversation(

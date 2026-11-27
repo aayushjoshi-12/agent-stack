@@ -17,8 +17,17 @@ export type ToolStatus = "running" | "ok" | "failed";
 export type ApprovalState = "pending" | "approved" | "rejected" | "cancelled";
 
 export type Item =
-  | { kind: "reasoning"; key: string; runId: string; depth: number; text: string }
-  | { kind: "assistant"; key: string; runId: string; depth: number; text: string; eventId: string }
+  | { kind: "reasoning"; key: string; runId: string; depth: number; text: string; streaming?: boolean }
+  | {
+      kind: "assistant";
+      key: string;
+      runId: string;
+      depth: number;
+      text: string;
+      eventId: string;
+      /** Still being written (assistant.delta); the final assistant.message replaces it. */
+      streaming?: boolean;
+    }
   | {
       kind: "tool";
       key: string;
@@ -64,6 +73,8 @@ export type LiveState = {
   usageTick: number;
   /** Counts finished write_file/edit_file calls: the UI refetches the changed-files list. */
   changeTick: number;
+  /** assistant.message events seen per run: the index of the step now streaming. */
+  finals: Record<string, number>;
 };
 
 export const OUTPUT_CAP = 20_000;
@@ -76,6 +87,7 @@ export const emptyLive = (): LiveState => ({
   completedEventId: null,
   usageTick: 0,
   changeTick: 0,
+  finals: {},
 });
 
 const str = (v: unknown, fallback = ""): string => (typeof v === "string" ? v : fallback);
@@ -108,8 +120,49 @@ function updateTool(
   return next;
 }
 
+/** The event log's cap marker on a long field (observability/audit.py `_cap`). */
+const CAPPED = /\.\.\.\[truncated \d+ bytes\]$/;
+
+const deltaKey = (runId: string, step: number, kind: "assistant" | "reasoning") => `delta:${runId}:${step}:${kind}`;
+
+/** Put `item` where the step's streamed item is (it replaces it), or at the end. */
+function settle(items: Item[], key: string, item: Item | null): Item[] {
+  const at = items.findIndex((i) => i.key === key);
+  if (at < 0) return item ? [...items, item] : items;
+  const next = items.slice();
+  if (item) next[at] = item;
+  else next.splice(at, 1);
+  return next;
+}
+
+/**
+ * Grow the step's streaming assistant/reasoning item. Deltas are live-only (no sequence, never
+ * replayed), so they skip the duplicate filter; a subagent's never show, and one that arrives
+ * after its step's final message is dropped.
+ */
+function applyDelta(state: LiveState, event: ApiEvent): LiveState {
+  const step = num(event.data.step);
+  const text = str(event.data.text);
+  if (event.parent_run_id !== null || !text || step < (state.finals[event.run_id] ?? 0)) return state;
+  const kind = event.data.kind === "reasoning" ? "reasoning" : "assistant";
+  const key = deltaKey(event.run_id, step, kind);
+  const at = state.items.findIndex((i) => i.key === key);
+  const found = state.items[at];
+  if (found && (found.kind === "assistant" || found.kind === "reasoning")) {
+    const items = state.items.slice();
+    items[at] = { ...found, text: found.text + text };
+    return { ...state, items };
+  }
+  const item: Item =
+    kind === "reasoning"
+      ? { kind, key, runId: event.run_id, depth: 0, text, streaming: true }
+      : { kind, key, runId: event.run_id, depth: 0, text, eventId: "", streaming: true };
+  return { ...state, items: [...state.items, item] };
+}
+
 /** Apply one event; returns the same state object when the event is a duplicate. */
 export function applyEvent(state: LiveState, event: ApiEvent): LiveState {
+  if (event.type === "assistant.delta") return applyDelta(state, event);
   const last = state.cursor[event.run_id];
   if (last !== undefined && event.sequence <= last) return state;
 
@@ -124,18 +177,27 @@ export function applyEvent(state: LiveState, event: ApiEvent): LiveState {
       return event.parent_run_id === null ? { ...base, phase: "running" } : base;
     case "model.usage":
       return { ...base, usageTick: base.usageTick + 1 };
-    case "model.reasoning":
-      return {
-        ...base,
-        items: [...base.items, { kind: "reasoning", key, runId: event.run_id, depth, text: str(d.text) }],
-      };
+    case "model.reasoning": {
+      const step = base.finals[event.run_id] ?? 0;
+      const item: Item = { kind: "reasoning", key, runId: event.run_id, depth, text: str(d.text) };
+      return { ...base, items: settle(base.items, deltaKey(event.run_id, step, "reasoning"), item) };
+    }
     case "assistant.message": {
-      const text = str(d.content).trim();
-      if (!text) return base;
-      return {
-        ...base,
-        items: [...base.items, { kind: "assistant", key, runId: event.run_id, depth, text, eventId: event.id }],
-      };
+      const step = base.finals[event.run_id] ?? 0;
+      const finals = { ...base.finals, [event.run_id]: step + 1 };
+      const streamedKey = deltaKey(event.run_id, step, "assistant");
+      const streamed = base.items.find((i) => i.key === streamedKey);
+      let text = str(d.content).trim();
+      // the logged copy is capped (P29); the streamed one is whole until history reloads
+      if (CAPPED.test(text) && streamed?.kind === "assistant") text = streamed.text.trim();
+      const item: Item | null = text
+        ? { kind: "assistant", key, runId: event.run_id, depth, text, eventId: event.id }
+        : null;
+      // reasoning that streamed but never got its own final event stops streaming here
+      const items = base.items.map((i) =>
+        i.key === deltaKey(event.run_id, step, "reasoning") ? { ...i, streaming: false } : i,
+      );
+      return { ...base, finals, items: settle(items, streamedKey, item) };
     }
     case "tool.started":
       return {

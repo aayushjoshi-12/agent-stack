@@ -165,6 +165,54 @@ async def test_thinking_header_is_painted_without_any_interaction() -> None:
         assert "thinking" in str(header.render())
 
 
+async def test_a_streamed_reply_grows_one_message_and_the_final_text_settles_it() -> None:
+    app = _app()
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.tab.run_id = "run-1"
+        app.handle_event(event(EventType.ASSISTANT_DELTA, text="Hel", kind="text", step=0))
+        app.handle_event(event(EventType.ASSISTANT_DELTA, text="lo **wor", kind="text", step=0))
+        app.handle_event(event(EventType.ASSISTANT_DELTA, text="hmm", kind="reasoning", step=0))
+        # a child run's delta stays out of this conversation
+        app.handle_event(
+            event(
+                EventType.ASSISTANT_DELTA,
+                run_id="child",
+                parent_run_id="run-1",
+                text="child text",
+                kind="text",
+                step=0,
+            )
+        )
+        await _settle(pilot)
+        messages = list(app.tab.query(AgentMessage))
+        assert len(messages) == 1
+        assert messages[0].source == "Hello **wor"
+
+        app.handle_event(event(EventType.MODEL_REASONING, text="weighing options"))
+        app.handle_event(event(EventType.ASSISTANT_MESSAGE, content="Hello **world**"))
+        await _settle(pilot)
+        rows = [c for c in app.tab.children if isinstance(c, (AgentMessage, Disclosure))]
+        assert [type(r) for r in rows] == [Disclosure, AgentMessage]  # thinking above the reply
+        assert messages[0].source == "Hello **world**"
+        assert app.tab.streaming is None
+        text = _chat_text(app)
+
+    assert "child text" not in text
+    assert "hmm" not in text
+
+
+async def test_a_streamed_step_that_ends_in_tool_calls_only_leaves_no_empty_message() -> None:
+    app = _app()
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.tab.run_id = "run-1"
+        app.handle_event(event(EventType.ASSISTANT_DELTA, text=" ", kind="text", step=0))
+        app.handle_event(event(EventType.ASSISTANT_MESSAGE, content="", tool_calls=["x"]))
+        await _settle(pilot)
+        assert list(app.tab.query(AgentMessage)) == []
+
+
 async def test_tui_run_failure_shows_error_notice_and_state() -> None:
     application = FakeApplication(
         events=[event(EventType.RUN_STARTED), event(EventType.RUN_FAILED, error="boom")]

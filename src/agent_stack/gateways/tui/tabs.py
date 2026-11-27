@@ -15,7 +15,7 @@ from textual.widgets import Static
 
 from agent_stack.gateways.base import SessionUsage
 from agent_stack.gateways.tui.chrome import Welcome
-from agent_stack.gateways.tui.rows import Disclosure, SubagentRow, UserMessage
+from agent_stack.gateways.tui.rows import AgentMessage, Disclosure, SubagentRow, UserMessage
 from agent_stack.gateways.tui.screens import ApprovalScreen
 
 __all__ = ["Conversation", "TabBar"]
@@ -46,6 +46,7 @@ class Conversation(VerticalScroll):
         self.tools_run = 0
         self.file_paths: dict[str, str] = {}  # write/edit call id -> the path it touches
         self.last_child_id: str | None = None
+        self.streaming: AgentMessage | None = None  # the reply being streamed into (P45)
         self.draft = ""  # the prompt's text while another tab is shown
 
     @property

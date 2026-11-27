@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator
 from dataclasses import replace
 from typing import Protocol
 
-from agent_stack.core.events import AgentEvent, EventType
+from agent_stack.core.events import EPHEMERAL_EVENTS, AgentEvent, EventType
 
 __all__ = ["EventAuditSink", "EventBus", "InMemoryEventBus"]
 
@@ -51,7 +51,16 @@ class InMemoryEventBus:
         self._audit = audit
 
     async def publish(self, event: AgentEvent) -> None:
-        """Sequence the event for its run, audit it, then deliver it to subscribers."""
+        """Sequence the event for its run, audit it, then deliver it to subscribers.
+
+        An ephemeral event (:data:`EPHEMERAL_EVENTS`) only goes to the current subscribers, with
+        ``sequence`` -1: no sequence number is used up, nothing is persisted or audited.
+        """
+        if event.type in EPHEMERAL_EVENTS:
+            live = replace(event, sequence=-1)
+            for queue in self._subscribers.get(event.run_id, []):
+                queue.put_nowait(live)
+            return
         sequence = self._sequences.get(event.run_id, 0)
         self._sequences[event.run_id] = sequence + 1
         sequenced = replace(event, sequence=sequence)
