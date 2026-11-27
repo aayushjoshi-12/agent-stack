@@ -2,7 +2,7 @@
 the TUI widgets use (``diff_kind``, ``tool_detail``, ``tool_args_lines``).
 
 The REPL prints with Rich styles named after the terminal's own palette; the Textual TUI
-styles through theme variables instead (``styles.tcss``, ``widgets.py``). These functions hold
+styles through theme variables instead (``styles.tcss``, ``rows.py``). These functions hold
 no Textual state, so they unit-test without a running app.
 """
 

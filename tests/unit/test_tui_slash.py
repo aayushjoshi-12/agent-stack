@@ -8,7 +8,7 @@ from textual.widgets import OptionList
 
 from agent_stack.gateways.base import SlashCommand
 from agent_stack.gateways.tui.app import TuiApp
-from agent_stack.gateways.tui.widgets import HelpScreen, PromptArea
+from agent_stack.gateways.tui.chrome import HelpScreen, PromptArea
 from tests.unit.gateway_fakes import FakeApplication, event
 
 

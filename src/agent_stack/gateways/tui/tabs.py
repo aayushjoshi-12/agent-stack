@@ -14,13 +14,9 @@ from textual.message import Message
 from textual.widgets import Static
 
 from agent_stack.gateways.base import SessionUsage
-from agent_stack.gateways.tui.widgets import (
-    ApprovalScreen,
-    Disclosure,
-    SubagentRow,
-    UserMessage,
-    Welcome,
-)
+from agent_stack.gateways.tui.chrome import Welcome
+from agent_stack.gateways.tui.rows import Disclosure, SubagentRow, UserMessage
+from agent_stack.gateways.tui.screens import ApprovalScreen
 
 __all__ = ["Conversation", "TabBar"]
 

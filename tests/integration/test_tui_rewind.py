@@ -8,7 +8,8 @@ import pytest
 
 from agent_stack.gateways.base import MessageEnvelope
 from agent_stack.gateways.tui.app import TuiApp
-from agent_stack.gateways.tui.widgets import PromptArea, RewindScreen
+from agent_stack.gateways.tui.chrome import PromptArea
+from agent_stack.gateways.tui.screens import RewindScreen
 from tests.fakes import FakeChatModel, ai, call
 from tests.integration.test_changes import World, _world
 
@@ -119,7 +120,7 @@ async def test_opening_the_original_warns_and_the_palette_action_restores_its_fi
 async def test_branches_screen_reference_copy_and_pasting_a_reference_opens_it(
     tmp_path: Path,
 ) -> None:
-    from agent_stack.gateways.tui.widgets import BranchesScreen
+    from agent_stack.gateways.tui.screens import BranchesScreen
 
     w = await _two_turns(tmp_path)
     app = TuiApp(w.app, session_id="s1")
@@ -147,7 +148,7 @@ async def test_branches_screen_reference_copy_and_pasting_a_reference_opens_it(
 async def test_the_chats_picker_shows_dates_and_the_exit_hint_names_the_command(
     tmp_path: Path,
 ) -> None:
-    from agent_stack.gateways.tui.widgets import SessionPicker
+    from agent_stack.gateways.tui.screens import SessionPicker
 
     w = await _two_turns(tmp_path)
     app = TuiApp(w.app, session_id="s1", resume=True)

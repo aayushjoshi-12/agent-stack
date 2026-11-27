@@ -23,7 +23,15 @@ _GATEWAY_FILES = (
     "src/agent_stack/gateways/telegram/api.py",
     "src/agent_stack/gateways/telegram/gateway.py",
     "src/agent_stack/gateways/tui/theme.py",
-    "src/agent_stack/gateways/tui/widgets.py",
+    "src/agent_stack/gateways/tui/chrome.py",
+    "src/agent_stack/gateways/tui/commands.py",
+    "src/agent_stack/gateways/tui/rows.py",
+    "src/agent_stack/gateways/tui/runs.py",
+    "src/agent_stack/gateways/tui/screens.py",
+    "src/agent_stack/gateways/tui/sessions.py",
+    "src/agent_stack/gateways/tui/status.py",
+    "src/agent_stack/gateways/tui/tabs.py",
+    "src/agent_stack/gateways/tui/timeline.py",
 )
 
 #: The only internal modules a gateway may import (plus its own gateway package, never another gateway's).

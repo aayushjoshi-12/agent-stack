@@ -46,7 +46,7 @@ Textual breakpoints put classes on the screen (`HORIZONTAL_BREAKPOINTS`,
 | `-short` | < 24 rows | one-row tab bar; welcome and row spacing dropped |
 | `-show-sidebar` / `-hide-sidebar` | `ctrl+b` | explicit override of the width default |
 
-## Conversation rows (`widgets.py`)
+## Conversation rows (`rows.py`)
 
 | Row | Widget | Treatment |
 |---|---|---|
@@ -129,3 +129,23 @@ the git branch.
 Output is coalesced: cards mark themselves stale and a 10 Hz tick repaints them, so a fast
 stream costs one repaint per tick, not per chunk. The chat is anchored to the bottom only once
 a conversation exists (an anchored container bottom-aligns short content).
+
+## Module map
+
+`gateways/tui/` since P34. `TuiApp` is `app.py` plus one mixin per concern; each mixin lists
+what it uses from the rest of the app in an `if TYPE_CHECKING:` block at the top of its class.
+
+| module | holds |
+|---|---|
+| `app.py` | `TuiApp` (layout, bindings, keyboard focus, cancel / esc / toggles / help) and `TuiCommands` (palette) |
+| `runs.py` | `RunsMixin`: start a run, read its stream, route each event into the `Conversation` that started it; approvals, tool cards, subagent rows, end of a run |
+| `sessions.py` | `SessionsMixin`: tabs (new, close, switch, tab-bar click) and stored conversations (picker, open, delete, resume) |
+| `commands.py` | `CommandsMixin`: what Enter does with the prompt, queued messages, `/` commands and their completion list, approval mode |
+| `timeline.py` | `TimelineMixin`: rewind, branches, references, restoring files, the changed-files screen |
+| `status.py` | `StatusMixin`: the tick, tab-bar labels, sidebar state, prompt placeholder |
+| `tabs.py` | `Conversation` (one tab's pane and run state) and `TabBar` |
+| `rows.py` | conversation rows: `UserMessage`, `AgentMessage`, `Notice`, `SubagentRow`, `Disclosure` |
+| `chrome.py` | `PromptArea`, `Sidebar` / `SidebarState`, `Welcome`, `HelpScreen` |
+| `screens.py` | modal screens: `ApprovalScreen`, `SessionPicker`, `RewindScreen`, `ChangesScreen`, `BranchesScreen` |
+| `render.py` | Textual-free text helpers (shared with the line REPL) |
+| `theme.py`, `styles.tcss` | the themes and the stylesheet |

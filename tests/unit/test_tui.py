@@ -18,20 +18,17 @@ import pytest
 from agent_stack.core.events import EventType
 from agent_stack.gateways.base import HistoryItem, SessionSummary
 from agent_stack.gateways.tui.app import TuiApp
+from agent_stack.gateways.tui.chrome import HelpScreen, PromptArea, Welcome
 from agent_stack.gateways.tui.render import diff_kind
-from agent_stack.gateways.tui.widgets import (
+from agent_stack.gateways.tui.rows import (
     AgentMessage,
-    ApprovalScreen,
     Disclosure,
-    HelpScreen,
     Notice,
-    PromptArea,
-    SessionPicker,
     SubagentRow,
     UserMessage,
-    Welcome,
     format_duration,
 )
+from agent_stack.gateways.tui.screens import ApprovalScreen, SessionPicker
 from tests.unit.gateway_fakes import FakeApplication, event
 
 
@@ -1053,7 +1050,7 @@ async def test_tui_a_live_usage_event_updates_the_total_before_the_run_ends() ->
 
 # ── diffs of what the agent wrote or edited ──────────────────────────────────
 from agent_stack.app.application import FileDiff  # noqa: E402
-from agent_stack.gateways.tui.widgets import ChangesScreen  # noqa: E402
+from agent_stack.gateways.tui.screens import ChangesScreen  # noqa: E402
 
 _EDIT_DIFF = "--- a/a.py\n+++ b/a.py\n@@ -1,2 +1,2 @@\n x = 1\n-y = 2\n+y = 3"
 
