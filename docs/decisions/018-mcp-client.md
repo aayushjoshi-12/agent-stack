@@ -32,6 +32,11 @@ configure them for other agents, without slowing startup or weakening the approv
   approval for that server's tools.
 
 ## Consequences
-- The first message after start waits for the servers (up to 30 s for a slow one); the UI opens
-  immediately. A server that dies later turns its tool calls into error results.
-- No reconnect, no tool-list refresh, no resources/prompts: add when needed.
+- The first message after start waits for the servers (up to 30 s for a slow one, or the
+  server's `"startTimeout"`); the UI opens immediately.
+- P52: a server whose connection is lost turns that call into an error ("restarted on the next
+  call"; never retried silently, it may have run) and is restarted on the next call, at most 3
+  times. `notifications/tools/list_changed` re-lists its tools and the main agent gets the new
+  set for its next run. Every gateway calls `drain_background()` on shutdown, so servers are
+  closed in the loop that started them.
+- No resources/prompts yet: add when needed.

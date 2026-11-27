@@ -123,6 +123,9 @@ class FakeApplication:
     def slash_commands(self) -> list[Any]:
         return list(self.skill_commands)
 
+    async def drain_background(self) -> None:
+        self.drained = True
+
     def __init__(
         self,
         *,

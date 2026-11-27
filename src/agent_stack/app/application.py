@@ -30,6 +30,7 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
+from langchain_core.tools import BaseTool
 
 from agent_stack.app.chats import ChatLibrary
 from agent_stack.app.config import AppConfig
@@ -228,14 +229,18 @@ class Application:
 
     async def _load_mcp(self, mcp: McpManager) -> None:
         try:
-            tools = await mcp.start()
+            await mcp.start(self._use_mcp_tools)
         except Exception:
             _LOG.exception("MCP servers failed to start")
+
+    def _use_mcp_tools(self, tools: list[BaseTool]) -> None:
+        """Give the main agent the MCP tools as they are now (runs going keep theirs)."""
+        kept = [t for t in self.agent.tools if not t.name.startswith("mcp__")]
+        if len(kept) == len(self.agent.tools) and not tools:
             return
-        if tools:
-            agent = replace(self.agent, tools=(*self.agent.tools, *tools))
-            self.run_manager.use_runtime(self.factory.create(agent))
-            self.agent = agent
+        agent = replace(self.agent, tools=(*kept, *tools))
+        self.run_manager.use_runtime(self.factory.create(agent))
+        self.agent = agent
 
     async def mcp_servers(self) -> list[McpServerStatus]:
         """The configured MCP servers with their state and tool counts (starts them if needed)."""
@@ -253,7 +258,7 @@ class Application:
         return Timeline(self)
 
     async def drain_background(self) -> None:
-        """Wait for side work (conversation titling) to finish; for shutdown and tests."""
+        """Stop monitors and MCP servers, wait for side work (titling); every gateway's shutdown."""
         if self.monitors is not None:
             await self.monitors.stop_all()
         if self.mcp is not None:

@@ -32,6 +32,7 @@ def run_telegram(application: Application, settings: TelegramSettings) -> None:
         try:
             await TelegramGateway(application, api, settings).run()
         finally:
+            await application.drain_background()  # MCP servers
             await api.aclose()
 
     asyncio.run(main())

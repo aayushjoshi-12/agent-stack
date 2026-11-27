@@ -200,9 +200,10 @@ class TuiApp(CommandsMixin, TimelineMixin, SessionsMixin, RunsMixin, StatusMixin
         """Messages in this tab waiting for the run to read them (up arrow takes one back)."""
         return len(self.tab.queued)
 
-    def on_unmount(self) -> None:
+    async def on_unmount(self) -> None:
         for task in list(self._tasks):
             task.cancel()
+        await self.application.drain_background()  # MCP servers end in the loop that began them
 
     async def _load_branch(self) -> None:
         """Best-effort ``git branch --show-current`` for the sidebar."""

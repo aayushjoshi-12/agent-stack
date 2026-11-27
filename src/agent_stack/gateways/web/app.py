@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import math
 import secrets
@@ -202,7 +203,15 @@ def create_app(
     clock: Callable[[], float] = time.monotonic,
 ) -> FastAPI:
     """Build the FastAPI app over a wired ``Application``; ``clock`` drives the rate limits."""
-    api = FastAPI(title="agent-stack", docs_url=None, redoc_url=None, openapi_url=None)
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_api: FastAPI) -> AsyncIterator[None]:
+        yield
+        await application.drain_background()  # MCP servers end with the server
+
+    api = FastAPI(
+        title="agent-stack", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan
+    )
     api.add_middleware(
         CORSMiddleware,
         allow_origins=list(settings.origins),

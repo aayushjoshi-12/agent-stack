@@ -3,11 +3,14 @@
 Servers are configured in the Claude Code shape, ``{"mcpServers": {name: {...}}}``, read from
 ``~/.agent-stack/mcp.json`` and ``<workspace>/.mcp.json`` (the workspace wins per server name).
 A server is either ``{"command", "args", "env"}`` (stdio) or ``{"url", "headers"}`` (streamable
-HTTP); ``"trusted": true`` lets its tools run without approval. Values may use ``${VAR}``.
+HTTP); ``"trusted": true`` lets its tools run without approval; ``"startTimeout"`` (seconds,
+default 30) bounds its start. Values may use ``${VAR}``.
 
 Each server is held open by its own task (the SDK's scopes must be entered and left in one task).
 A server that cannot start or list its tools is logged and reported, never fatal. Its tools are
-``mcp__<server>__<tool>``.
+``mcp__<server>__<tool>``. A server whose connection is lost is restarted on the next call to one
+of its tools (at most :data:`MAX_RESTARTS` times); ``notifications/tools/list_changed`` re-lists
+its tools and hands the new set to the ``on_change`` callback.
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ import contextlib
 import json
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -32,6 +35,8 @@ __all__ = ["McpManager", "McpServerConfig", "McpServerStatus", "load_mcp_config"
 _LOG = logging.getLogger(__name__)
 #: How long one server may take to start and list its tools before it is reported as failed.
 START_TIMEOUT_SECONDS = 30.0
+#: How often one server is restarted after losing its connection before it is given up.
+MAX_RESTARTS = 3
 _VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
 
@@ -45,6 +50,7 @@ class McpServerConfig:
     url: str | None = None
     headers: Mapping[str, str] = field(default_factory=dict)
     trusted: bool = False
+    start_timeout: float = START_TIMEOUT_SECONDS
     #: Why the entry cannot be used (bad shape); such a server is reported, never started.
     error: str | None = None
 
@@ -82,6 +88,9 @@ def _parse(name: str, raw: Any, environ: Mapping[str, str]) -> McpServerConfig:
     args, env, headers = raw.get("args", []), raw.get("env", {}), raw.get("headers", {})
     if not isinstance(args, list) or not isinstance(env, dict) or not isinstance(headers, dict):
         return McpServerConfig(name, error="'args' must be a list, 'env'/'headers' objects")
+    timeout = raw.get("startTimeout", START_TIMEOUT_SECONDS)
+    if isinstance(timeout, bool) or not isinstance(timeout, int | float) or timeout <= 0:
+        return McpServerConfig(name, error="'startTimeout' must be a positive number of seconds")
     return McpServerConfig(
         name=name,
         command=_expand(command, environ) if isinstance(command, str) else None,
@@ -92,6 +101,7 @@ def _parse(name: str, raw: Any, environ: Mapping[str, str]) -> McpServerConfig:
         else None,
         headers={str(k): _expand(str(v), environ) for k, v in headers.items()},
         trusted=raw.get("trusted") is True,
+        start_timeout=float(timeout),
     )
 
 
@@ -138,9 +148,9 @@ def _image_blocks(result: Any) -> list[dict[str, Any]]:
     return blocks
 
 
-def _wrap(server: str, client: Any, tool: Any) -> BaseTool:
+def _wrap(call_tool: Callable[..., Any], server: str, tool: Any) -> BaseTool:
     async def call(**kwargs: Any) -> str | list[Any]:
-        result = await client.call_tool(tool.name, kwargs)
+        result = await call_tool(server, tool.name, kwargs)
         text = _text_of(result)
         if result.is_error:
             raise RuntimeError(text or "the MCP tool reported an error")
@@ -157,22 +167,39 @@ def _wrap(server: str, client: Any, tool: Any) -> BaseTool:
     )
 
 
+@dataclass
+class _Held:
+    """One server's connection, opened and left by its holder task."""
+
+    config: McpServerConfig
+    client: Any = None  # the open Client while the server is up, else None
+    tools: list[BaseTool] = field(default_factory=list)
+    task: asyncio.Task[None] | None = None
+    wake: asyncio.Event = field(default_factory=asyncio.Event)  # stop, or re-list the tools
+    stopping: bool = False
+    restarts: int = 0
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
 class McpManager:
-    """Starts the configured servers, hands out their tools, and stops them."""
+    """Starts the configured servers, hands out their tools, restarts and stops them."""
 
     def __init__(self, servers: list[McpServerConfig], log_dir: Path) -> None:
-        self._servers = servers
         self._log_dir = log_dir
         self._status = {s.name: McpServerStatus(s.name, s.transport) for s in servers}
         self._trusted = {f"mcp__{_UNSAFE.sub('_', s.name)}__" for s in servers if s.trusted}
-        self._tasks: list[asyncio.Task[None]] = []
-        self._stop = asyncio.Event()
+        self._held = {s.name: _Held(s) for s in servers if s.error is None}
+        self._on_change: Callable[[list[BaseTool]], None] | None = None
         for server in servers:
             if server.error:
                 self._fail(server.name, server.error)
 
     def status(self) -> list[McpServerStatus]:
         return list(self._status.values())
+
+    def tools(self) -> list[BaseTool]:
+        """Every server's tools (a stopped server keeps its tools: calling one restarts it)."""
+        return [tool for held in self._held.values() for tool in held.tools]
 
     def gated(self, tool_name: str) -> bool:
         """An MCP tool whose server is not trusted: it needs approval like any side effect."""
@@ -184,35 +211,56 @@ class McpManager:
         self._status[name].state, self._status[name].error = "failed", error
         _LOG.warning("MCP server %r unavailable: %s", name, error)
 
-    async def start(self) -> list[BaseTool]:
-        """Start every usable server at once; return the tools of the ones that came up."""
-        startable = [s for s in self._servers if s.error is None]
-        lists = await asyncio.gather(*(self._start_one(s) for s in startable))
-        return [tool for tools in lists for tool in tools]
+    async def start(self, on_change: Callable[[list[BaseTool]], None]) -> None:
+        """Start every usable server at once, then hand ``on_change`` the tools that came up.
 
-    async def _start_one(self, server: McpServerConfig) -> list[BaseTool]:
-        self._status[server.name].state = "starting"
-        ready: asyncio.Future[list[BaseTool]] = asyncio.get_running_loop().create_future()
-        task = asyncio.create_task(self._hold(server, ready))
-        self._tasks.append(task)
+        ``on_change`` gets every server's tools again whenever one server's list changes (a
+        restart, or a ``notifications/tools/list_changed``).
+        """
+        await asyncio.gather(*(self._start_one(held) for held in self._held.values()))
+        self._on_change = on_change
+        on_change(self.tools())
+
+    async def _start_one(self, held: _Held) -> None:
+        server = held.config
+        self._status[server.name].state, self._status[server.name].error = "starting", None
+        held.stopping = False
+        held.wake.clear()
+        ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        held.task = asyncio.create_task(self._hold(held, ready))
         try:
-            tools = await asyncio.wait_for(asyncio.shield(ready), START_TIMEOUT_SECONDS)
+            await asyncio.wait_for(asyncio.shield(ready), server.start_timeout)
         except TimeoutError:
-            task.cancel()
-            self._fail(server.name, f"did not start within {START_TIMEOUT_SECONDS:g}s")
-            return []
+            held.task.cancel()
+            self._fail(server.name, f"did not start within {server.start_timeout:g}s")
+            return
         except Exception as exc:
             self._fail(server.name, _reason(exc))
-            return []
-        self._status[server.name].state, self._status[server.name].tools = "ready", len(tools)
-        return tools
+            return
+        self._status[server.name].state = "ready"
 
-    async def _hold(self, server: McpServerConfig, ready: asyncio.Future[list[BaseTool]]) -> None:
-        """Open the server, publish its tools, keep it open until :meth:`close`."""
+    async def _list(self, held: _Held, client: Any) -> None:
+        listed = await client.list_tools(cache_mode="bypass")
+        held.tools = [_wrap(self._call, held.config.name, t) for t in listed.tools]
+        self._status[held.config.name].tools = len(held.tools)
+
+    def _changed(self) -> None:
+        if self._on_change is not None:  # None during the first start: start() reports once
+            self._on_change(self.tools())
+
+    async def _hold(self, held: _Held, ready: asyncio.Future[None]) -> None:
+        """Open the server, publish its tools, re-list them on change, keep it open until stopped."""
         from mcp import Client, StdioServerParameters
         from mcp.client.stdio import stdio_client
         from mcp.client.streamable_http import streamable_http_client
         from mcp.shared._httpx_utils import create_mcp_http_client
+        from mcp.types import ToolListChangedNotification
+
+        server = held.config
+
+        async def on_message(message: Any) -> None:
+            if isinstance(message, ToolListChangedNotification):
+                held.wake.set()  # the holder re-lists: a request from here would block the reader
 
         try:
             with contextlib.ExitStack() as files:
@@ -229,27 +277,70 @@ class McpManager:
                         command=server.command or "", args=list(server.args), env=dict(server.env)
                     )
                     transport = stdio_client(params, errlog=errlog)
-                async with Client(transport, mode="legacy") as client:
-                    listed = await client.list_tools()
-                    ready.set_result([_wrap(server.name, client, t) for t in listed.tools])
-                    await self._stop.wait()
+                async with Client(transport, mode="legacy", message_handler=on_message) as client:
+                    await self._list(held, client)
+                    held.client = client
+                    ready.set_result(None)
+                    self._changed()  # a restart: its tools may differ
+                    while True:
+                        await held.wake.wait()
+                        held.wake.clear()
+                        if held.stopping:
+                            break
+                        await self._list(held, client)
+                        self._changed()
         except Exception as exc:
             if not ready.done():
                 ready.set_exception(exc)
             else:
                 _LOG.warning("MCP server %r stopped: %s", server.name, _reason(exc))
         finally:
+            held.client = None
             if self._status[server.name].state == "ready":
                 self._status[server.name].state = "stopped"
 
-    async def close(self) -> None:
-        """Stop every server (each holder leaves its client, which ends the process)."""
-        self._stop.set()
-        if self._tasks:
-            _done, pending = await asyncio.wait(self._tasks, timeout=10)
+    async def _call(self, name: str, tool: str, arguments: dict[str, Any]) -> Any:
+        """Call one tool of a server, restarting the server first when it is down."""
+        from mcp.shared.exceptions import MCPError
+        from mcp.types import CONNECTION_CLOSED
+
+        held = self._held[name]
+        async with held.lock:
+            if held.client is None:
+                if held.restarts >= MAX_RESTARTS:
+                    raise RuntimeError(
+                        f"MCP server {name!r} stopped and was restarted {MAX_RESTARTS} times; "
+                        "it is not restarted again"
+                    )
+                held.restarts += 1
+                await self._stop_one(held)  # a holder left from a lost connection
+                await self._start_one(held)
+                if held.client is None:
+                    raise RuntimeError(
+                        f"MCP server {name!r} could not be restarted: {self._status[name].error}"
+                    )
+            client = held.client
+        try:
+            return await client.call_tool(tool, arguments)
+        except MCPError as exc:
+            if exc.code != CONNECTION_CLOSED:
+                raise
+            await self._stop_one(held)
+            raise RuntimeError(
+                f"MCP server {name!r} stopped ({exc}); it is restarted on the next call"
+            ) from exc
+
+    async def _stop_one(self, held: _Held) -> None:
+        held.stopping, held.client = True, None
+        held.wake.set()
+        if held.task is not None:
+            _done, pending = await asyncio.wait([held.task], timeout=10)
             for task in pending:
                 task.cancel()
-        self._tasks.clear()
+
+    async def close(self) -> None:
+        """Stop every server (each holder leaves its client, which ends the process)."""
+        await asyncio.gather(*(self._stop_one(held) for held in self._held.values()))
 
 
 def _reason(exc: BaseException) -> str:

@@ -25,7 +25,7 @@ cold. `git log` has the later truth.
 | Chat search | 32 | `find_chats`: FTS5 + BM25 over every conversation's full text |
 | Live interaction | 33, 45 | messages queued into a working run (take back to edit/cancel); tokens stream to the web UI and TUI (`assistant.delta`, live-only, never logged) |
 | TUI | 33, 34 | tabs (each runs on its own), sidebar with one context meter, model, mode; split into modules by concern |
-| Tools | 35, 38, 43 | per-call timeout (`AGENT_STACK_TOOL_TIMEOUT`); `web_screenshot` (Playwright); MCP servers from `.mcp.json` as `mcp__<server>__<tool>` |
+| Tools | 35, 38, 43, 52 | per-call timeout (`AGENT_STACK_TOOL_TIMEOUT`); `web_screenshot` (Playwright); MCP servers from `.mcp.json` as `mcp__<server>__<tool>`, restarted after a lost connection, tool list refreshed on `list_changed`, closed by every gateway on exit |
 | Models | 36, 37, 44, 51 | auto-mode verdicts from Jev's decisions endpoint (a chat model via `with_structured_output` still works); prompt-cache breakpoints (Claude, Qwen; others cache by themselves); images in (by reference under `artifacts/`, ADR 019); transient errors (429, 5xx, timeouts) retried by the runtime with backoff and Retry-After, then `AGENT_STACK_FALLBACK_MODEL` (`model.retry` event shown in every gateway) |
 | Gateways (more) | 39, 40, 41 | web rewind from any message; per-principal rate limits (429 / slow down); `/export md\|json` everywhere |
 
@@ -89,7 +89,8 @@ automatic memory extraction. Not yet run against a real model: compaction (tests
 ## Not done
 
 - **Follow-ups from P34-P45** are drafted in `tmp/tickets/followups-P34-P39.md` (local): web cost
-  line without cache numbers, delta redaction across chunk boundaries, MCP reconnect/resources,
+  line without cache numbers, delta redaction across chunk boundaries, MCP resources/prompts
+  (`tmp/tickets/P52-followups.md`),
   tracing of parallel tools, image downscaling and original names, and more.
 
 - **P24 Web gateway: done** (kept here for its notes). `agent-stack web` serves the API

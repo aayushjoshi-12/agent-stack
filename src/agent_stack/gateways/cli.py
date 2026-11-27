@@ -147,58 +147,63 @@ async def run_cli(
     console.print(
         f"agent-stack chat (agent={application.agent.name}) — type 'exit' or Ctrl-D to leave."
     )
-    while True:
-        console.print("[bold]>[/bold] ", end="")
-        try:
-            line = stream.readline()
-        except KeyboardInterrupt:
-            break
-        if not line:
-            console.print("")
-            break
-        text = line.strip()
-        if not text:
-            continue
-        if text in _QUIT_WORDS:
-            break
-        if text == "/cost":
-            await gateway.print_cost(application, session)
-            continue
-        if text == "/compact" or text.startswith("/compact "):
+    try:
+        while True:
+            console.print("[bold]>[/bold] ", end="")
             try:
-                count = await application.compact_session(session, text[len("/compact") :])
-                console.print(
-                    f"[dim]compacted {count} messages[/]" if count else "[dim]nothing to compact[/]"
-                )
-            except Exception as exc:
-                console.print(f"[red]cannot compact:[/] {escape(str(exc))}")
-            continue
+                line = stream.readline()
+            except KeyboardInterrupt:
+                break
+            if not line:
+                console.print("")
+                break
+            text = line.strip()
+            if not text:
+                continue
+            if text in _QUIT_WORDS:
+                break
+            if text == "/cost":
+                await gateway.print_cost(application, session)
+                continue
+            if text == "/compact" or text.startswith("/compact "):
+                try:
+                    count = await application.compact_session(session, text[len("/compact") :])
+                    console.print(
+                        f"[dim]compacted {count} messages[/]"
+                        if count
+                        else "[dim]nothing to compact[/]"
+                    )
+                except Exception as exc:
+                    console.print(f"[red]cannot compact:[/] {escape(str(exc))}")
+                continue
 
-        if text == "/export" or text.startswith("/export "):
-            fmt, path = parse_export_args(text[len("/export") :])
+            if text == "/export" or text.startswith("/export "):
+                fmt, path = parse_export_args(text[len("/export") :])
+                try:
+                    saved = await application.save_export(session, fmt, path)
+                    console.print(f"[dim]exported to {escape(str(saved))}[/]")
+                except Exception as exc:
+                    console.print(f"[red]cannot export:[/] {escape(str(exc))}")
+                continue
+
+            text, paths = image_paths(text)  # "@shot.png" or a pasted path attaches it (P44)
             try:
-                saved = await application.save_export(session, fmt, path)
-                console.print(f"[dim]exported to {escape(str(saved))}[/]")
-            except Exception as exc:
-                console.print(f"[red]cannot export:[/] {escape(str(exc))}")
-            continue
-
-        text, paths = image_paths(text)  # "@shot.png" or a pasted path attaches it (P44)
-        try:
-            images = load_images(paths)
-        except (OSError, ValueError) as exc:
-            console.print(f"[red]cannot attach:[/] {escape(str(exc))}")
-            continue
-        for image in images:
-            console.print(f"[dim]\\[image: {escape(image.name)}][/]")
-        envelope = MessageEnvelope(
-            principal=principal_id, session=session, text=text, images=images
-        )
-        try:
-            async for _event in gateway.handle_message(application, envelope):
-                pass
-        except KeyboardInterrupt:
-            break
+                images = load_images(paths)
+            except (OSError, ValueError) as exc:
+                console.print(f"[red]cannot attach:[/] {escape(str(exc))}")
+                continue
+            for image in images:
+                console.print(f"[dim]\\[image: {escape(image.name)}][/]")
+            envelope = MessageEnvelope(
+                principal=principal_id, session=session, text=text, images=images
+            )
+            try:
+                async for _event in gateway.handle_message(application, envelope):
+                    pass
+            except KeyboardInterrupt:
+                break
+    finally:
+        await application.drain_background()  # MCP servers
     console.print("[dim]bye[/dim]")
 
 
@@ -240,4 +245,6 @@ async def run_once(
     except Exception as exc:
         console.print(f"[red]run failed:[/] {type(exc).__name__}: {escape(str(exc))}")
         return 1
+    finally:
+        await application.drain_background()  # MCP servers
     return 0

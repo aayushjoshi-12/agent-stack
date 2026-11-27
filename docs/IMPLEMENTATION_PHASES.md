@@ -2198,6 +2198,46 @@ would have double-retried. Failover is per call, not sticky (ticket).
 
 ---
 
+## Phase 52 — MCP lifecycle: clean shutdown, restart, tool-list refresh ✅
+
+**Goal.** MCP servers start, survive and stop cleanly, and their tool list stays current.
+
+**Deliverables**
+- Every gateway awaits `Application.drain_background()` on the way out, in the loop that started
+  the servers: the line CLI and `agent-stack run` (`finally`), the TUI (`TuiApp.on_unmount` is
+  async), the web server (FastAPI `lifespan`), Telegram (`finally` before the API client closes).
+- Per-server `"startTimeout"` (seconds, default 30) in `mcp.json`; a non-positive or non-number
+  value makes the entry a reported error, never started.
+- Restart: each server's connection lives in a `_Held` record; its tools call the manager, not a
+  captured client. A call that fails with `MCPError(CONNECTION_CLOSED)` stops the holder and
+  returns the error "MCP server 'x' stopped (Connection closed); it is restarted on the next
+  call" (never retried silently: the call may have run). The next call restarts the server (a
+  lock per server, at most `MAX_RESTARTS` = 3 per process) and then calls; past the cap, or when
+  the restart fails, a clear error.
+- `notifications/tools/list_changed`: the message handler only wakes the holder (a request from
+  the handler would block the reader); the holder re-lists (`cache_mode="bypass"`) and calls
+  `on_change` with every server's tools. A restart re-lists too. `McpManager.start(on_change)`;
+  `Application._use_mcp_tools` swaps the main agent's `mcp__` tools for the current set and
+  rebuilds the runtime (runs going keep theirs).
+- Resources and prompts: not built (ticketed).
+
+**Acceptance**
+- tests with a real stdio test server (`tests/integration/test_mcp.py`): exiting the line CLI ends
+  the server process; kill, call (clear error), call (works, new pid); restarts bounded;
+  `list_changed` adds `mul` to the agent without duplicating tools; `startTimeout` parsed and a
+  tiny one fails the start.
+- Smoke: the real line CLI subprocess and the real TUI (Textual pilot over the real bootstrap) on
+  a real model with the test server and `uvx mcp-server-time`: call, SIGKILL, call again (the
+  model gets the restart error, calls again, a new server process answers), exit, `ps` shows no
+  server left.
+
+**Built.** `tools/mcp.py` (`_Held`, `_call`, `_stop_one`, `MAX_RESTARTS`, `startTimeout`),
+`app/application.py` (`_use_mcp_tools`), `gateways/cli.py`, `gateways/tui/app.py`,
+`gateways/web/app.py`, `gateways/telegram/__init__.py`, ADR 018 consequences. Tests:
+`test_mcp.py`, `tests/unit/gateway_fakes.py`. Smoke: `tmp/smoke_tests/P52-mcp-lifecycle.py`.
+
+---
+
 # Appendix A — Target file tree
 
 Grow into this; do not create it all up front.
