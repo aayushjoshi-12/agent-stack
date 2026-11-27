@@ -25,6 +25,9 @@ agent-stack = "agent_stack:main"
 local = [
     "langchain-ollama>=1.1.0",
 ]
+browser = [
+    "playwright>=1.65.0",
+]
 
 [tool.ruff]
 target-version = "py312"
@@ -39,7 +42,7 @@ python_version = "3.12"
 strict = true
 
 [[tool.mypy.overrides]]
-module = "hvac.*"
+module = ["hvac.*", "playwright.*"]
 ignore_missing_imports = true
 
 [dependency-groups]

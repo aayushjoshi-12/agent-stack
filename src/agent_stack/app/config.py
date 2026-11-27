@@ -151,6 +151,7 @@ class AppConfig:
         "write_file",
         "edit_file",
         "web_fetch",
+        "web_screenshot",
         "monitor_start",
     )
     workspace: Path = field(default_factory=Path.cwd)

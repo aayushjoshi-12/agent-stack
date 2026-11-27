@@ -74,6 +74,10 @@ tool call, so only use it in a container. See `docs/BENCHMARKS.md` for how it wa
   fetches the page, so this machine never connects to arbitrary hosts, but that service sees the
   URL; `AGENT_STACK_FETCH_MODE=direct` fetches locally instead (private addresses refused). Each
   fetch needs approval and results are labelled untrusted.
+- `web_screenshot` opens a page in headless Chromium and saves a PNG artifact (path, title,
+  status and console errors come back as text). `localhost` and LAN hosts are allowed, cloud
+  metadata and link-local are not; each call needs approval. Optional:
+  `uv sync --extra browser && uv run playwright install chromium`; without it the tool is left out.
 - `monitor_start` watches a command in the background with no model calls and leaves a note only
   when the output changes, matches a pattern, or the command succeeds; notes appear at the top of
   your next message. Stops itself after an hour or ten notes.

@@ -53,8 +53,10 @@ def _is_public(address: str) -> bool:
     return ip.is_global and not ip.is_multicast
 
 
-def check_url(url: str, resolver: Resolver = _resolve) -> str:
-    """Return ``url`` when it is http(s) and every address it resolves to is public."""
+def check_url(
+    url: str, resolver: Resolver = _resolve, allow: Callable[[str], bool] = _is_public
+) -> str:
+    """Return ``url`` when it is http(s) and ``allow`` accepts every address it resolves to."""
     parts = urlparse(url)
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise WebError("only http and https URLs are allowed")
@@ -62,7 +64,7 @@ def check_url(url: str, resolver: Resolver = _resolve) -> str:
         raise WebError("URLs with a user name or password are not allowed")
     addresses = [parts.hostname] if _is_ip(parts.hostname) else resolver(parts.hostname)
     for address in addresses:
-        if not _is_public(address):
+        if not allow(address):
             raise WebError(f"refusing {parts.hostname}: it points at a private network address")
     return url
 

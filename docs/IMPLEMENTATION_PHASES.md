@@ -1674,7 +1674,7 @@ provider's prompt cache, and the cache reads show in usage and cost.
 
 ---
 
-## Phase 38 — `web_screenshot` tool (Playwright)
+## Phase 38 — `web_screenshot` tool (Playwright) ✅
 
 **Goal.** For web work the agent can look at a page it is building.
 
@@ -1691,6 +1691,19 @@ provider's prompt cache, and the cache reads show in usage and cost.
 **Acceptance**
 - test against a local `http.server` page: a PNG artifact exists with the right size; console
   errors are reported; a blocked URL is refused.
+
+**Built.** `tools/builtins/screenshot.py`: `screenshot_tools(artifacts)` returns `()` (one info
+log line with the setup command) when Playwright does not import. Each call launches headless
+Chromium (`service_workers="block"`), waits for `load` then up to 5 s for `networkidle`, and is
+capped at 60 s. The PNG goes to the `LocalArtifactStore`; the text result has `Saved: <path>`
+(the P44 seam), URL, status, title, viewport and up to 20 console/page errors. URL rule:
+`check_url(..., allow=_allowed)` (web.py's check with a pluggable address predicate): loopback
+and private LAN allowed; link-local, multicast, unspecified, reserved and two non-link-local
+metadata IPs refused. A context route aborts every disallowed request the page makes; Playwright
+routes never see redirect hops, so those are recorded from `request` events and checked after the
+load, and the call returns an error with nothing saved if any hop was blocked (the hop request
+itself has already been sent). `web_screenshot` is in the default `approval_tools`. Extra:
+`browser = ["playwright>=1.65.0"]` (1.65.0 uses chromium-1254). Tests skip without a browser.
 
 ---
 
