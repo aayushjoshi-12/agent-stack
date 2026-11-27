@@ -46,7 +46,7 @@ def test_discovers_skill_metadata() -> None:
     good = next(item for item in discovered if item.name == "good-skill")
     assert good.description == "A valid demonstration skill whose answer lives only in its body."
     assert good.path == (root("skills-root") / "good-skill").resolve()
-    assert good.allowed_tools == ()
+    assert good.allowed_tools is None
 
     with_resources = next(item for item in discovered if item.name == "with-resources")
     assert with_resources.allowed_tools == ("read_skill_resource", "terminal")

@@ -11,20 +11,40 @@ run manager. Tools report problems as short strings — they never raise.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool, tool
 
+from agent_stack.core.agent import Agent
 from agent_stack.core.run import RunStatus
-from agent_stack.core.run_context import RunView, current_run_context
+from agent_stack.core.run_context import RunView, SkillScope, current_run_context
 
-__all__ = ["control_tools", "delegate", "subagent_feed", "subagent_interrupt", "subagent_status"]
+__all__ = [
+    "control_tools",
+    "delegate",
+    "inherit",
+    "subagent_feed",
+    "subagent_interrupt",
+    "subagent_status",
+]
 
 #: A child paused for approval still occupies one of the parent's subagent slots.
 _ACTIVE_CHILD_STATUSES = frozenset({RunStatus.RUNNING.value, RunStatus.WAITING_APPROVAL.value})
 _TERMINAL_STATUSES = frozenset(
     {RunStatus.COMPLETED.value, RunStatus.FAILED.value, RunStatus.CANCELLED.value}
 )
+
+
+def inherit(child: Agent, parent: Agent, scope: SkillScope) -> Agent:
+    """``child`` cut down to what ``parent`` may do (P49): never a tool the parent lacks or its
+    active skill blocks, and every call the parent would have to approve needs approval too."""
+    names = {tool.name for tool in parent.tools}
+    return replace(
+        child,
+        tools=tuple(t for t in child.tools if t.name in names and scope.allows(t.name)),
+        tool_policy=parent.tool_policy.union(child.tool_policy),
+    )
 
 
 def _content_text(message: AIMessage) -> str:
@@ -81,7 +101,7 @@ async def delegate(agent_name: str, task: str) -> str:
 
     try:
         child = await ctx.services.start_subagent(
-            spec.agent,
+            inherit(spec.agent, ctx.agent, ctx.skill_scope),
             parent_run_id=ctx.run_id,
             user_id=ctx.user_id,
             message=task,

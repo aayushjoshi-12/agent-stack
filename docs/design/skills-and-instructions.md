@@ -45,7 +45,7 @@ my-skill/
 | `license` | — | short string |
 | `compatibility` | — | ≤500 chars; env requirements |
 | `metadata` | — | map of string→string |
-| `allowed-tools` | — | space-separated pre-approved tools (experimental) |
+| `allowed-tools` | — | tool names (space/comma string or list); a restriction here, never a pre-approval (P49) |
 
 **Body**: free Markdown instructions, recommended `< 5000` tokens / `< 500` lines.
 
@@ -97,7 +97,7 @@ class SkillMetadata:
     name: str
     description: str
     path: Path            # skill directory
-    allowed_tools: tuple[str, ...] = ()
+    allowed_tools: tuple[str, ...] | None = None  # None: the skill restricts nothing
     metadata: Mapping[str, str] = field(default_factory=dict)
 
 @dataclass(frozen=True)
@@ -145,9 +145,12 @@ Every skill is also a `/name` slash command in each gateway.
   inherits policy, timeouts, output caps, and approval (`run_command` is gated; auto mode can
   answer it). Never a bespoke executor.
 
-**`allowed-tools`**: when a skill declares `allowed-tools`, `QueryRunner`/`ToolContext`
-can narrow the tool set available while that skill is active. Experimental — implement as
-metadata first, enforcement later.
+**`allowed-tools`** (built in P49): once `load_skill` loads a skill that declares it, the run
+may call only those tools plus `load_skill`/`read_skill_resource`; any other call becomes an error
+result without reaching the approval prompt. It is a restriction, never a pre-approval (Claude
+Code reads it as "may use without asking"): a skill is a file any cloned repo can carry, so it
+must not be able to skip approvals. Loading several skills intersects their lists; the scope ends
+with the run, and a subagent started under it gets only the allowed tools.
 
 **Validation** (fail loudly, at discovery):
 

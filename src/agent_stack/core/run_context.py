@@ -11,10 +11,10 @@ module).
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Iterator
+from collections.abc import Awaitable, Iterable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from langchain_core.messages import AIMessage
@@ -25,6 +25,7 @@ __all__ = [
     "RunContext",
     "RunServices",
     "RunView",
+    "SkillScope",
     "SubagentRun",
     "current_run_context",
     "run_context",
@@ -75,6 +76,26 @@ class RunServices(Protocol):
     async def list_child_ids(self, parent_run_id: str) -> list[str]: ...
 
 
+@dataclass
+class SkillScope:
+    """The tools a run may still call, narrowed by each skill it loads (P49).
+
+    ``allowed`` is ``None`` until a skill with ``allowed-tools`` is loaded; each such skill
+    intersects it, so loading a skill never widens what the run may do.
+    """
+
+    allowed: frozenset[str] | None = None
+    skills: tuple[str, ...] = ()
+
+    def narrow(self, skill: str, tools: Iterable[str]) -> None:
+        names = frozenset(tools)
+        self.allowed = names if self.allowed is None else self.allowed & names
+        self.skills = (*self.skills, skill)
+
+    def allows(self, tool: str) -> bool:
+        return self.allowed is None or tool in self.allowed
+
+
 @dataclass(frozen=True)
 class RunContext:
     """The current run's identity plus the services its tools may call."""
@@ -86,6 +107,7 @@ class RunContext:
     parent_run_id: str | None
     agent: Agent
     services: RunServices
+    skill_scope: SkillScope = field(default_factory=SkillScope)
 
 
 _current: ContextVar[RunContext | None] = ContextVar("agent_stack_run_context", default=None)

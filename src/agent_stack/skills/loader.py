@@ -52,9 +52,13 @@ def _parse_skill_file(text: str) -> tuple[dict[str, str], str]:
         raise SkillsError("Frontmatter must be a mapping of 'key: value' pairs")
     fields = {
         key: " ".join(str(data[key]).split())
-        for key in ("name", "description", "allowed-tools")
+        for key in ("name", "description")
         if data.get(key) is not None
     }
+    tools = data.get("allowed-tools")
+    if tools is not None:  # a YAML list, or one string of names split by commas or spaces
+        names = tools if isinstance(tools, list) else str(tools).replace(",", " ").split()
+        fields["allowed-tools"] = " ".join(str(name) for name in names)
     return fields, text[match.end() :]
 
 
@@ -88,7 +92,7 @@ def _parse_skill(directory: Path) -> SkillMetadata:
             f"max {MAX_DESCRIPTION_CHARS})"
         )
 
-    allowed_tools = tuple(fields["allowed-tools"].split()) if "allowed-tools" in fields else ()
+    allowed_tools = tuple(fields["allowed-tools"].split()) if "allowed-tools" in fields else None
     return SkillMetadata(
         name=name,
         description=description,

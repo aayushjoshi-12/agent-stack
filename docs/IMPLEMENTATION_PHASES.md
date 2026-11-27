@@ -2079,6 +2079,46 @@ back what it found, and the TUI can open a subagent like the web UI.
 
 ---
 
+## Phase 49 — Tool permissions only narrow: skill `allowed-tools`, subagent inheritance, `coder` subagent ✅
+
+**Goal.** A skill's `allowed-tools` and a subagent's tool set can only narrow what a run may do,
+never widen it, so a write-capable `coder` subagent is safe to offer.
+
+**Deliverables**
+- `allowed-tools` is enforced as a restriction, never a pre-approval (ADR 020): once `load_skill`
+  loads a skill that declares it, the run may call only those tools plus `load_skill` /
+  `read_skill_resource`; any other call becomes an error result naming the skill and never reaches
+  the approval prompt. Listed tools that need approval still need it. Several loaded skills
+  intersect; the scope (`SkillScope` on `RunContext`) ends with the run. The frontmatter takes a
+  space/comma string or a YAML list; an explicit empty list allows no tool.
+- `delegate` starts a child as `inherit(child, parent, scope)`: only tools the parent has and its
+  active skill allows, and `ToolPolicy.union` of both policies, so a call the parent would have to
+  approve (by name or by a dynamic rule such as a read outside the workspace) needs approval in the
+  child too. Composes down any depth. Approval mode, broker and advisor were already shared.
+- A subagent's approval events also go to its top-level run's stream, with the child's run and
+  session ids, so the CLI, TUI and Telegram (which read only that stream) can answer them; before,
+  a child waiting for a human hung there.
+- `coder` subagent (read, `write_file`, `edit_file`, `run_command`) on the main model with its own
+  prompt, registered beside `explorer`; one line about it in the main prompt.
+
+**Acceptance**
+- tests: `allowed-tools` parsing (commas, list, empty); a loaded skill blocks an unlisted gated
+  tool without asking while a listed one runs; scopes intersect; `inherit` cuts tools and unions
+  approvals (name and dynamic); a child's write asks on the child's run and runs only when
+  approved, answered from the top-level stream (hangs without the forwarding); `coder` is registered within the parent's tools on the main model.
+- Smoke with a real model (ask mode, temp workspace): a delegated edit to `coder` asks for
+  approval and changes the file; a skill with `allowed-tools: read_file` cannot run a command.
+
+**Built.** `skills/loader.py`, `skills/models.py`, `skills/tools.py` (`load_skill` narrows),
+`core/run_context.py` (`SkillScope`), `core/approval.py` (`ToolPolicy.union`), `core/runtime.py`
+(skill scope check before approvals), `core/run.py` (approval events forwarded to the root
+stream), `subagents/delegation.py` (`inherit`), `app/bootstrap.py`
+(`coder`, `CODER_SYSTEM_PROMPT`). Docs: `docs/STATUS.md` known limit, `docs/design/skills-and-instructions.md`,
+ADR 020. Tests: `test_tool_permissions.py`, `test_skills.py`, `test_small_model.py`. Smoke:
+`tmp/smoke_tests/P49-tool-permissions.py`.
+
+---
+
 ## Phase 50 — Storage lifecycle: delete removes what a chat owns, `agent-stack gc` the rest ✅
 
 **Goal.** Deleting a chat removes everything it owns, and long-lived storage does not grow

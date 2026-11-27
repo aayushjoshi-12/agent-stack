@@ -56,6 +56,14 @@ class ToolPolicy:
             return True
         return self.dynamic is not None and args is not None and self.dynamic(tool_name, args)
 
+    def union(self, other: ToolPolicy) -> ToolPolicy:
+        """A call needs approval if either policy says so (a subagent under its parent, P49)."""
+        dynamic = [d for d in (self.dynamic, other.dynamic) if d is not None]
+        return ToolPolicy(
+            self.requires_approval | other.requires_approval,
+            dynamic=(lambda tool, args: any(d(tool, args) for d in dynamic)) if dynamic else None,
+        )
+
 
 class Verdict(StrEnum):
     """What an advisor says about a gated call: run it, refuse it, or leave it to the human."""

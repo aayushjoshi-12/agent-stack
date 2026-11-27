@@ -11,6 +11,7 @@ from __future__ import annotations
 from langchain_core.tools import BaseTool, tool
 
 from agent_stack.core.errors import SkillsError
+from agent_stack.core.run_context import current_run_context
 from agent_stack.skills.registry import SkillRegistry
 
 __all__ = ["skill_tools"]
@@ -27,9 +28,18 @@ def skill_tools(registry: SkillRegistry) -> tuple[BaseTool, ...]:
         tool to load a skill's full body before using it.
         """
         try:
-            return registry.load(name).body
+            skill = registry.load(name)
         except SkillsError as exc:
             return f"Error: {exc}"
+        allowed = skill.metadata.allowed_tools
+        ctx = current_run_context()
+        if allowed is None or ctx is None:
+            return skill.body
+        # P49: `allowed-tools` only narrows the run (never skips an approval); loading more
+        # skills can only narrow it further, so the two skill tools stay callable.
+        ctx.skill_scope.narrow(name, (*allowed, "load_skill", "read_skill_resource"))
+        tools = ", ".join(sorted(ctx.skill_scope.allowed or ())) or "(none)"
+        return f"{skill.body}\n\n[While this skill is active, this run may call only: {tools}]"
 
     @tool
     async def read_skill_resource(name: str, path: str) -> str:

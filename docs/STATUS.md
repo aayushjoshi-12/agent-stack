@@ -145,8 +145,11 @@ Still unverified (do these next):
   never deleted (rules: `docs/design/conversation-storage.md` section 9).
 - If recording a tool batch fails *after* the tools ran, a retry with the same run id could run a
   mutating tool again. History stays valid because the failed run saves no tool results.
-- A subagent does not inherit its parent's tool policy. Fine while `explorer` is read-only; a
-  write-capable subagent would bypass approval.
+- A subagent gets only the tools its parent has (and its parent's active skill allows), and every
+  call its parent would have to approve needs approval in the subagent too (P49); that is what
+  makes the write-capable `coder` subagent safe. A skill's `allowed-tools` only restricts, never
+  pre-approves; it lasts for the run that loaded the skill, and Claude Code tool names (`Read`,
+  `Bash(git:*)`) do not match ours, so such a skill can call nothing but the skill tools.
 - Tool output shown to the model is scrubbed with `redact(pairs=False)`: known env secrets and
   common key shapes only, so a secret in an unusual shape passes.
 - The `message_index` and `artifacts_index` tables are in the schema and `SqliteIndex` is

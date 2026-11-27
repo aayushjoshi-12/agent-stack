@@ -35,6 +35,11 @@ if TYPE_CHECKING:
 __all__ = ["Run", "RunHandle", "RunManager", "RunRequest", "RunStatus"]
 
 _TERMINAL_EVENTS = frozenset({EventType.RUN_COMPLETED, EventType.RUN_FAILED})
+#: A subagent's approval events also go to its top-level run's stream (P49): the CLI, TUI and
+#: Telegram consume only that stream, so a child waiting for a human would otherwise hang.
+_APPROVAL_EVENTS = frozenset(
+    {EventType.APPROVAL_REQUIRED, EventType.APPROVAL_RESOLVED, EventType.APPROVAL_AUTO}
+)
 
 
 class RunStatus(StrEnum):
@@ -148,6 +153,7 @@ class RunManager:
         self._inboxes: dict[str, list[str]] = {}
         self._progress: dict[str, _Progress] = {}
         self._agent_names: dict[str, str] = {}
+        self._parents: dict[str, str | None] = {}  # run id -> parent run id, while it runs
 
     @property
     def runtime(self) -> AgentRuntime:
@@ -185,6 +191,7 @@ class RunManager:
         self._tokens[run.id] = token
         self._inboxes[run.id] = []
         self._agent_names[run.id] = runtime.agent.name
+        self._parents[run.id] = request.parent_run_id
 
         run.status = RunStatus.RUNNING
         await self._run_store.save(run)
@@ -324,6 +331,12 @@ class RunManager:
                     progress.last_event = event.type.value
                 await self._reflect_approval(event)
                 queue.put_nowait(event)
+                if event.type in _APPROVAL_EVENTS and event.parent_run_id is not None:
+                    root = event.parent_run_id
+                    while (up := self._parents.get(root)) is not None:
+                        root = up
+                    if (root_queue := self._queues.get(root)) is not None:
+                        root_queue.put_nowait(event)  # keeps the child's run and session ids
                 if event.type in _TERMINAL_EVENTS:
                     break
                 next_event = asyncio.ensure_future(stream.__anext__())
@@ -594,6 +607,7 @@ class RunManager:
         self._inboxes.pop(run_id, None)
         self._progress.pop(run_id, None)
         self._agent_names.pop(run_id, None)
+        self._parents.pop(run_id, None)
 
 
 def _consume_outcome(task: asyncio.Task[AIMessage]) -> None:

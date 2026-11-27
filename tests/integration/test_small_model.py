@@ -60,7 +60,7 @@ def test_only_the_explorer_runs_on_the_small_model(
 
     app = build_application(config)
 
-    (spec,) = app.agent.subagents
+    spec = next(s for s in app.agent.subagents if s.name == "explorer")
     assert spec.agent.model == "openrouter:vendor/small"  # read-only searching
     assert app.agent.model == "openrouter:vendor/big"  # answers and every edit
     assert app.title_model is not None

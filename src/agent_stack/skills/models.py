@@ -25,7 +25,8 @@ class SkillMetadata:
     name: str
     description: str
     path: Path  # the skill directory (absolute)
-    allowed_tools: tuple[str, ...] = ()
+    #: While the skill is active the run may call only these (a restriction, never an approval).
+    allowed_tools: tuple[str, ...] | None = None
 
     def metadata_for_system_prompt(self) -> str:
         """The single resident line for this skill: ``<name>: <description>``."""

@@ -74,6 +74,9 @@ Tools:
   subagent with `delegate` instead of doing the reads yourself. While an `explorer`
   run is active you can check it with `subagent_status`, steer it with
   `subagent_feed`, or stop it with `subagent_interrupt`.
+- To hand off a self-contained code change (edit files, run the tests), delegate to the
+  `coder` subagent with a precise task. Its edits and commands ask for the same approvals
+  yours would.
 - When you make several independent tool calls, put them in a single message so
   they run in parallel. Chain dependent commands with `&&` inside run_command.
 - Read only the parts of files you need. Use search_files to find files by name and
@@ -122,6 +125,13 @@ EXPLORER_SYSTEM_PROMPT = """\
 You are a read-only codebase explorer. Investigate exactly what was asked using
 list_directory, read_file, search_files (names) and grep_files (contents), then report concise findings with the
 file paths that justify them. You cannot modify anything.
+"""
+
+CODER_SYSTEM_PROMPT = """\
+You are a coding subagent. Make exactly the change you were asked for: read the code it
+touches, edit with edit_file (or write_file for a new file), then run the relevant check with
+run_command and fix what fails. Edits and commands may need the user's approval; if one is
+rejected, do not retry it unchanged. Report what you changed (file paths) and what you ran.
 """
 
 #: The read-only slice of the filesystem toolset handed to the explorer subagent.
@@ -246,12 +256,21 @@ def build_application(config: AppConfig | None = None) -> Application:
             tool_timeout_seconds=resolved.tool_timeout_seconds,
         ),
     )
+    shell = run_command_tool(policy, confine=resolved.external_access == "deny")
+    # P49: delegate narrows a subagent to the parent's tools and approvals when it starts.
+    coder = Agent(
+        name="coder",
+        model=resolved.model,  # file edits stay on the main model (ADR 014)
+        tools=(*fs_tools, shell),
+        system_prompt=CODER_SYSTEM_PROMPT,
+        limits=explorer.limits,
+    )
     agent = Agent(
         name="assistant",
         model=resolved.model,
         tools=(
             *fs_tools,
-            run_command_tool(policy, confine=resolved.external_access == "deny"),
+            shell,
             *control_tools(),
             *skill_tools(skills),
             *memory_tools(memory),
@@ -269,6 +288,11 @@ def build_application(config: AppConfig | None = None) -> Application:
                 name="explorer",
                 description="Read-only codebase exploration.",
                 agent=explorer,
+            ),
+            SubAgentSpec(
+                name="coder",
+                description="Makes a self-contained code change and runs its check.",
+                agent=coder,
             ),
         ),
         system_prompt=DEFAULT_SYSTEM_PROMPT,

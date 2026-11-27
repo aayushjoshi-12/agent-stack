@@ -50,6 +50,7 @@ from agent_stack.core.event_bus import EventBus
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.images import Image, content_text, image_block, image_count, without_images
 from agent_stack.core.locks import SessionLockManager
+from agent_stack.core.run_context import current_run_context
 from agent_stack.core.session import Session, SessionStore
 from agent_stack.core.state import Checkpoint, CheckpointStatus
 from agent_stack.core.workspace import WorkspacePolicy
@@ -515,8 +516,21 @@ class AgentRuntime:
                     # Rejected calls never execute; they become error ToolMessages. The time a
                     # human takes is not the run's time, so it is added back to the deadline.
                     rejected: dict[str, ToolExecutionResult] = {}
+                    # P49: a loaded skill's `allowed-tools` blocks every other tool, unasked.
+                    run_ctx = current_run_context()
+                    if run_ctx is not None:
+                        scope = run_ctx.skill_scope
+                        for blocked in pending:
+                            if not scope.allows(str(blocked["name"])):
+                                rejected[str(blocked["id"])] = _rejected_result(
+                                    blocked,
+                                    f"skill {', '.join(scope.skills)} is active and allows only "
+                                    f"{', '.join(sorted(scope.allowed or ())) or '(none)'}",
+                                )
                     asked = time.monotonic()
                     for gated in pending:
+                        if str(gated["id"]) in rejected:
+                            continue
                         if not self._agent.tool_policy.needs_approval(
                             str(gated["name"]), gated["args"]
                         ):
