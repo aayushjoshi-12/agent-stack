@@ -351,6 +351,11 @@ export function applyEvent(state: LiveState, event: ApiEvent): LiveState {
             items: [...base.items, { kind: "notice", key, runId: event.run_id, depth, text: `context compacted: ${num(d.messages)} messages summarised` }],
           }
         : base;
+    case "model.retry":
+      // A model call failed and is asked again, or the fallback model is asked (P51).
+      return isRoot(base, event)
+        ? { ...base, items: [...base.items, { kind: "notice", key, runId: event.run_id, depth, text: str(d.text) }] }
+        : base;
     default:
       return base;
   }

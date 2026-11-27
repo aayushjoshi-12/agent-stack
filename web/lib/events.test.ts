@@ -154,6 +154,17 @@ test("an auto-compaction shows as a notice, a subagent's does not", () => {
   assert.match(notes[0]?.text ?? "", /31 messages summarised/);
 });
 
+test("a model retry shows its line as a notice, a subagent's does not", () => {
+  const s = play([
+    ev("run.started"),
+    ev("model.retry", { text: "model error (HTTP 429); retrying in 1.0s (1 of 4)", fallback: false }),
+    ev("model.retry", { text: "child retry", fallback: false }, "child", "r1"),
+  ]);
+  const notes = s.items.filter((i) => i.kind === "notice");
+  assert.equal(notes.length, 1);
+  assert.match(notes[0]?.text ?? "", /retrying in 1.0s/);
+});
+
 const delta = (text: string, step: number, kind = "text", run = "r1", parent: string | null = null): ApiEvent => ({
   id: `d${(n += 1)}`,
   type: "assistant.delta",

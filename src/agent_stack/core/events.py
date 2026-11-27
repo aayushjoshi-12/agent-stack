@@ -35,6 +35,10 @@ class EventType(StrEnum):
     # The model's thinking/reasoning for a step, when the provider returns any. Emitted
     # just before the ASSISTANT_MESSAGE it belongs to; not terminal for any stream.
     MODEL_REASONING = "model.reasoning"
+    # A model call failed and is asked again (P51): after a backoff on a transient error, or on
+    # the fallback model. Data: ``error``, ``attempt``, ``delay`` (seconds), ``model`` (asked
+    # next), ``fallback`` (bool) and ``text`` (the line a gateway shows). Not terminal.
+    MODEL_RETRY = "model.retry"
     TOOL_STARTED = "tool.started"
     # Live tool output (P14). Not terminal for any stream: a command may emit many before
     # its TOOL_COMPLETED.

@@ -119,6 +119,9 @@ class AppConfig:
     #: with its Haiku-class model). Code edits and answers always use ``model``. ``None`` means
     #: "no split": everything uses ``model``.
     small_model: str | None = None
+    #: Asked when a model call keeps failing (P51); None: no failover.
+    #: ``AGENT_STACK_FALLBACK_MODEL``.
+    fallback_model: str | None = None
     #: Context window (tokens) of ``model``; only used for the TUI's usage meter.
     context_window: int = 1_000_000
     #: Tokens the model is shown at most (default 120k, far below ``context_window``): past it,
@@ -233,6 +236,7 @@ class AppConfig:
         return cls(
             model=model,
             small_model=_small_model(source.get("AGENT_STACK_SMALL_MODEL"), model),
+            fallback_model=source.get("AGENT_STACK_FALLBACK_MODEL", "").strip() or None,
             approval_tools=approval_tools,
             context_window=int(source.get("AGENT_STACK_CONTEXT_WINDOW", defaults.context_window)),
             context_budget=int(source.get("AGENT_STACK_CONTEXT_BUDGET", defaults.context_budget)),

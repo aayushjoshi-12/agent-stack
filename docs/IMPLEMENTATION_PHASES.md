@@ -2160,6 +2160,44 @@ can still reach.
 
 ---
 
+## Phase 51 — Model retries and failover ✅
+
+**Goal:** a transient provider error (429, 5xx, timeout, dropped connection) does not fail a run,
+and a run falls back to a configured second model when the first keeps failing.
+
+**Deliverables:**
+- `models/retry.py`: `transient(exc)` (status 408/409/429/5xx from `.status_code` or
+  `.response.status_code`, or an httpx transport / connection / timeout error, following
+  `raise ... from`) and `retry_after(exc)` (`retry-after-ms`, `retry-after` seconds).
+- `models/factory.py`: `build_model(..., client_retries=False)` turns the provider client's own
+  retries off (`max_retries=0`, and the OpenRouter SDK's hidden hour-long 5XX default set to
+  `"none"`); `AgentFactory` uses it for agent models, side models keep their client's retries.
+- `core/runtime.py` `_call_model`: up to 4 retries per model with full-jitter backoff (2**n s,
+  capped at 20 s) or the provider's Retry-After (capped at 60 s); the backoff checks the cancel
+  token and the run deadline cuts it short. Never retried: non-transient errors, agent-stack's
+  own errors (cancel, deadline), a stream that already published a delta. When the model gives
+  up (or fails for good: bad model id, auth), the fallback model gets the same input with its own
+  retries. The P44 image-placeholder retry stays inside, per model.
+- `Agent.fallback_model`, `AppConfig.fallback_model` (`AGENT_STACK_FALLBACK_MODEL`, in
+  `.env.example`), wired for the assistant and the explorer; `/model` keeps it.
+- Event `model.retry` (data: error, attempt, delay, model, fallback, text), logged, shown as a
+  notice in the TUI, the line REPL, Telegram status lines and the web timeline (root run only).
+
+**Acceptance:**
+- Fake-model tests: fails N times then answers; a 400 is not retried; retries stop at the limit;
+  Retry-After honoured; cancel during a backoff stops the run at once; a bad primary goes to the
+  fallback, whose usage (model, cost) is recorded; a stream that showed text is not retried;
+  agent models have the OpenRouter SDK's retries off, side models keep them.
+- Smoke with a real model through the real app: a local proxy answers 429 (Retry-After 1) then
+  503, two `model.retry` events, then the real answer; a bad primary model id fails over to a
+  real cheap model, which answers and is billed.
+
+**Built:** retries live in one place, the runtime, because the OpenRouter SDK retried 5XX only
+(not 429), invisibly, for up to 300 s (or an hour with `max_retries=0`); layering on top of it
+would have double-retried. Failover is per call, not sticky (ticket).
+
+---
+
 # Appendix A — Target file tree
 
 Grow into this; do not create it all up front.

@@ -37,3 +37,5 @@ class Agent:
     system_prompt: str = ""
     limits: AgentLimits = field(default_factory=AgentLimits)
     tool_policy: ToolPolicy = field(default_factory=ToolPolicy)
+    #: Asked when ``model`` keeps failing (P51); None: no failover.
+    fallback_model: str | None = None

@@ -247,6 +247,7 @@ def build_application(config: AppConfig | None = None) -> Application:
     explorer = Agent(
         name="explorer",
         model=resolved.small_model or resolved.model,  # read-only searching: the cheap model
+        fallback_model=resolved.fallback_model,
         tools=tuple(tool for tool in fs_tools if tool.name in _READ_ONLY_TOOLS),
         system_prompt=EXPLORER_SYSTEM_PROMPT,
         # Half the run's time: a subagent out of time reports what it found (P48) while the
@@ -261,6 +262,7 @@ def build_application(config: AppConfig | None = None) -> Application:
     coder = Agent(
         name="coder",
         model=resolved.model,  # file edits stay on the main model (ADR 014)
+        fallback_model=resolved.fallback_model,
         tools=(*fs_tools, shell),
         system_prompt=CODER_SYSTEM_PROMPT,
         limits=explorer.limits,
@@ -268,6 +270,7 @@ def build_application(config: AppConfig | None = None) -> Application:
     agent = Agent(
         name="assistant",
         model=resolved.model,
+        fallback_model=resolved.fallback_model,
         tools=(
             *fs_tools,
             shell,

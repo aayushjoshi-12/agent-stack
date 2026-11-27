@@ -26,7 +26,7 @@ cold. `git log` has the later truth.
 | Live interaction | 33, 45 | messages queued into a working run (take back to edit/cancel); tokens stream to the web UI and TUI (`assistant.delta`, live-only, never logged) |
 | TUI | 33, 34 | tabs (each runs on its own), sidebar with one context meter, model, mode; split into modules by concern |
 | Tools | 35, 38, 43 | per-call timeout (`AGENT_STACK_TOOL_TIMEOUT`); `web_screenshot` (Playwright); MCP servers from `.mcp.json` as `mcp__<server>__<tool>` |
-| Models | 36, 37, 44 | auto-mode verdicts from Jev's decisions endpoint (a chat model via `with_structured_output` still works); prompt-cache breakpoints (Claude, Qwen; others cache by themselves); images in (by reference under `artifacts/`, ADR 019) |
+| Models | 36, 37, 44, 51 | auto-mode verdicts from Jev's decisions endpoint (a chat model via `with_structured_output` still works); prompt-cache breakpoints (Claude, Qwen; others cache by themselves); images in (by reference under `artifacts/`, ADR 019); transient errors (429, 5xx, timeouts) retried by the runtime with backoff and Retry-After, then `AGENT_STACK_FALLBACK_MODEL` (`model.retry` event shown in every gateway) |
 | Gateways (more) | 39, 40, 41 | web rewind from any message; per-principal rate limits (429 / slow down); `/export md\|json` everywhere |
 
 ## Since the phases (unphased work, all in `git log`)

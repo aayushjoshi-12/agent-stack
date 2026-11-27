@@ -151,6 +151,7 @@ A phase may start only when every phase it depends on has passed its acceptance 
 | P48 No step cap, subagent reports, TUI subagent screen | P06, P20, P46 |
 | P49 Tool permissions for skills and subagents | P16b, P20, P26 |
 | P50 Storage lifecycle (delete and gc) | P09, P15, P29, P30, P46 |
+| P51 Model retries and failover | P45, P48 |
 
 ---
 

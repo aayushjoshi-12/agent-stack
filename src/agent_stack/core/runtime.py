@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import random
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -54,6 +55,7 @@ from agent_stack.core.run_context import current_run_context
 from agent_stack.core.session import Session, SessionStore
 from agent_stack.core.state import Checkpoint, CheckpointStatus
 from agent_stack.core.workspace import WorkspacePolicy
+from agent_stack.models.retry import retry_after, transient
 from agent_stack.tools.executor import ToolExecutionResult, ToolExecutor
 
 if TYPE_CHECKING:
@@ -135,6 +137,12 @@ def usage_data(message: AIMessage) -> dict[str, Any] | None:
 
 _T = TypeVar("_T")
 
+#: Transient model errors are asked again this many times, after a full-jitter backoff of up to
+#: 2**n seconds (capped), or the provider's Retry-After (capped), per model (P51).
+_RETRIES = 4
+_BACKOFF_CAP = 20.0
+_RETRY_AFTER_CAP = 60.0
+
 #: Streamed text is published at most this often, or once this much has gathered (P45).
 _DELTA_SECONDS = 0.05
 _DELTA_CHARS = 64
@@ -214,6 +222,7 @@ class AgentRuntime:
         agent: Agent,
         model: BaseChatModel,
         tool_executor: ToolExecutor,
+        fallback_model: BaseChatModel | None = None,
         session_store: SessionStore,
         event_bus: EventBus | None = None,
         session_lock: SessionLockManager | None = None,
@@ -228,6 +237,8 @@ class AgentRuntime:
         #: Where a compaction re-reads the files in use (None: it attaches none).
         self._workspace = WorkspacePolicy(workspace_root) if workspace_root else None
         self._model = model
+        #: Asked with the same input when ``model`` gives up (P51).
+        self._fallback = fallback_model
         #: False once the model turned out not to stream: later calls go straight to ``ainvoke``.
         self._streams = True
         self._tool_executor = tool_executor
@@ -774,10 +785,20 @@ class AgentRuntime:
                 data={"text": text, "kind": kind, "step": step},
             )
 
-        return lambda: self._call_model(model_input, emit, cancel)
+        async def notify(data: dict[str, Any]) -> None:
+            await self._emit(
+                EventType.MODEL_RETRY,
+                run_id=run_id,
+                session_id=session_id,
+                parent_run_id=parent_run_id,
+                data=data,
+            )
+
+        return lambda: self._call_model(model_input, emit, cancel, notify)
 
     async def _stream_model(
         self,
+        model: BaseChatModel,
         model_input: list[BaseMessage],
         emit: Callable[[str, str], Awaitable[None]],
         cancel: CancellationToken | None,
@@ -789,11 +810,11 @@ class AgentRuntime:
         to stream before its first chunk) is asked with ``ainvoke`` from then on.
         """
         if not self._streams or self._event_bus is None:
-            return await self._model.ainvoke(model_input)
+            return await model.ainvoke(model_input)
         whole: Any = None
         out = _Coalescer(emit)
         try:
-            async for chunk in self._model.astream(model_input):
+            async for chunk in model.astream(model_input):
                 self._check_cancelled(cancel)
                 whole = chunk if whole is None else whole + chunk
                 if isinstance(chunk, AIMessageChunk):
@@ -806,7 +827,7 @@ class AgentRuntime:
             if whole is not None:
                 raise
             self._streams = False
-            return await self._model.ainvoke(model_input)
+            return await model.ainvoke(model_input)
         await out.flush()
         if isinstance(whole, AIMessageChunk):
             return message_chunk_to_message(whole)
@@ -817,8 +838,88 @@ class AgentRuntime:
         model_input: list[BaseMessage],
         emit: Callable[[str, str], Awaitable[None]] | None = None,
         cancel: CancellationToken | None = None,
+        notify: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> Any:
-        """Call the model; a model that refuses images gets one retry with them as text (P44).
+        """Call the model, retrying transient errors and then failing over (P51).
+
+        A transient error (rate limit, 5xx, timeout, dropped connection) is asked again after a
+        jittered backoff or the provider's Retry-After, up to :data:`_RETRIES` times; the run's
+        deadline (``_within``) and ``cancel`` cut a backoff short. When the model gives up, or
+        fails for good (bad model id, auth), the fallback model gets the same input. Nothing is
+        retried once a streamed delta was published: the user already saw that text.
+        ``notify`` gets each retry as ``model.retry`` data.
+        """
+        shown = False
+
+        async def emit_seen(kind: str, text: str) -> None:
+            nonlocal shown
+            shown = True
+            if emit is not None:
+                await emit(kind, text)
+
+        names = [self._agent.model, self._agent.fallback_model or "the fallback model"]
+        models = [self._model, *([self._fallback] if self._fallback is not None else [])]
+        for index, model in enumerate(models):
+            attempt = 0
+            while True:
+                try:
+                    return await self._ask(model, model_input, emit_seen if emit else None, cancel)
+                except AgentStackError:
+                    raise  # cancelled, out of time: not the provider's failure
+                except Exception as exc:
+                    if shown:
+                        raise
+                    error = error_text(exc)
+                    if transient(exc) and attempt < _RETRIES:
+                        attempt += 1
+                        wait = retry_after(exc)
+                        delay = (
+                            min(wait, _RETRY_AFTER_CAP)
+                            if wait is not None
+                            else random.uniform(0, min(_BACKOFF_CAP, 2.0 ** (attempt - 1)))
+                        )
+                        text = f"model error ({error}); retrying in {delay:.1f}s"
+                        text += f" ({attempt} of {_RETRIES})"
+                        fallback = False
+                    elif index + 1 < len(models):
+                        delay = 0.0
+                        text = f"model error ({error}); asking {names[index + 1]} instead"
+                        fallback = True
+                    else:
+                        raise
+                    _LOG.info("model call failed: %s", text)
+                    if notify is not None:
+                        await notify(
+                            {
+                                "error": error,
+                                "attempt": attempt,
+                                "delay": round(delay, 2),
+                                "model": names[index + 1] if fallback else names[index],
+                                "fallback": fallback,
+                                "text": text,
+                            }
+                        )
+                    if fallback:
+                        break
+                    await self._backoff(delay, cancel)
+        raise AssertionError("unreachable: the last model returns or raises")
+
+    async def _backoff(self, delay: float, cancel: CancellationToken | None) -> None:
+        """Sleep ``delay`` seconds, checking ``cancel`` every quarter second."""
+        end = time.monotonic() + delay
+        while (left := end - time.monotonic()) > 0:
+            self._check_cancelled(cancel)
+            await asyncio.sleep(min(0.25, left))
+        self._check_cancelled(cancel)
+
+    async def _ask(
+        self,
+        model: BaseChatModel,
+        model_input: list[BaseMessage],
+        emit: Callable[[str, str], Awaitable[None]] | None,
+        cancel: CancellationToken | None,
+    ) -> Any:
+        """One call; a model that refuses images gets one retry with them as text (P44).
 
         The placeholders tell the model (and through it the user) why it cannot see them, so a
         conversation with an image stays usable on a text-only model. Bounded: one retry.
@@ -827,8 +928,8 @@ class AgentRuntime:
 
         async def ask(messages: list[BaseMessage]) -> Any:
             if emit is None:
-                return await self._model.ainvoke(messages)
-            return await self._stream_model(messages, emit, cancel)
+                return await model.ainvoke(messages)
+            return await self._stream_model(model, messages, emit, cancel)
 
         try:
             return await ask(model_input)

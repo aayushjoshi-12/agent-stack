@@ -101,6 +101,8 @@ class RunsMixin(App[None]):
             tab.mount(
                 Notice(f"context compacted: {event.data.get('messages', 0)} messages summarised")
             )
+        elif event.type is EventType.MODEL_RETRY and event.parent_run_id is None:
+            tab.mount(Notice(str(event.data.get("text", "retrying the model call"))))
         elif event.parent_run_id is not None and event.run_id != tab.run_id:
             pass  # child-run detail stays out of the parent conversation
         else:

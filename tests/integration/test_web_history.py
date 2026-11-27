@@ -141,7 +141,7 @@ async def test_model_endpoint_switches_the_model_for_the_next_message(
     monkeypatch.setattr(
         factory_module,
         "build_model",
-        lambda name: switched if name == "test:other" else real_build(name),
+        lambda name, **kw: switched if name == "test:other" else real_build(name, **kw),
     )
     async with client:
         assert (await client.get("/model", headers=HEADERS)).json() == {"model": "test:model"}

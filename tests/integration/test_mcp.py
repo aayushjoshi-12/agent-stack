@@ -74,7 +74,7 @@ async def test_a_server_tool_is_called_with_arguments_and_its_result_reaches_the
     model = FakeChatModel(
         [ai(tool_calls=[call("mcp__test__add", {"a": 2, "b": 40})]), ai("the sum is 42")]
     )
-    monkeypatch.setattr(factory_module, "build_model", lambda name: model)
+    monkeypatch.setattr(factory_module, "build_model", lambda name, **kw: model)
     app = _app(
         tmp_path,
         {"test": _server(tmp_path, trusted=True), "broken": {"command": "no-such-command-xyz"}},

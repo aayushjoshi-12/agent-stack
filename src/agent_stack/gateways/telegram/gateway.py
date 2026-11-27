@@ -1131,6 +1131,9 @@ class TelegramGateway:
             chat.status_lines.append(
                 f"↺ context compacted ({event.data.get('messages', 0)} messages)"
             )
+        elif kind is EventType.MODEL_RETRY:
+            text = redact_secrets(str(event.data.get("text", "retrying the model call")))
+            chat.status_lines.append(f"↻ {text[:300]}")
         elif kind is EventType.APPROVAL_REQUIRED:
             await self._ask_approval(chat, event)
         elif kind is EventType.RUN_COMPLETED:

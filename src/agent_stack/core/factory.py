@@ -54,10 +54,11 @@ class AgentFactory:
         self._workspace_root = workspace_root
 
     def create(self, agent: Agent) -> AgentRuntime:
-        model = build_model(agent.model)
-        model_with_tools = cast(
-            BaseChatModel, with_prompt_cache(model.bind_tools(list(agent.tools)), agent.model)
-        )
+        def bound(name: str) -> BaseChatModel:
+            model = build_model(name, client_retries=False)  # the runtime retries (P51)
+            return cast(BaseChatModel, with_prompt_cache(model.bind_tools(list(agent.tools)), name))
+
+        model_with_tools = bound(agent.model)
         registry = ToolRegistry(agent.tools)
         executor = ToolExecutor(
             registry,
@@ -67,6 +68,7 @@ class AgentFactory:
         return AgentRuntime(
             agent=agent,
             model=model_with_tools,
+            fallback_model=bound(agent.fallback_model) if agent.fallback_model else None,
             tool_executor=executor,
             session_store=self._session_store,
             event_bus=self._event_bus,

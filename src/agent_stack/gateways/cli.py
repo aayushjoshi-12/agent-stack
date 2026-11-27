@@ -66,6 +66,8 @@ def print_event(console: Console, event: AgentEvent) -> None:
         console.print(
             f"[dim]context compacted: {event.data.get('messages', 0)} messages summarised[/]"
         )
+    elif event.type is EventType.MODEL_RETRY:
+        console.print(f"[dim]{escape(str(event.data.get('text', 'retrying the model call')))}[/]")
 
 
 #: Answers an ``approval.required`` event: ``True`` approves, ``False`` rejects.
