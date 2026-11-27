@@ -221,6 +221,8 @@ class HistoryItem:
     result: str | None = None
     #: A user message's images: stored file names (``Application.session_image`` serves them).
     images: tuple[str, ...] = ()
+    #: The run that wrote it ("" for lines written before P54 or by a store without run ids).
+    run_id: str = ""
 
 
 #: A prompt token that may name a file: ``@path``, a quoted path, or one with ``\ `` escapes.

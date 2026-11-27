@@ -2238,6 +2238,55 @@ would have double-retried. Failover is per call, not sticky (ticket).
 
 ---
 
+## Phase 54 — Side effects run at most once ✅
+
+**Goal.** A tool call that ran is never hidden from the next turn, so a retry does not run a
+mutating tool again, even when recording its result failed or the process died.
+
+**Deliverables**
+- Finding: no path retries a run under its own id (`RunManager` mints a new id per run,
+  `recover()` never re-runs), and P51's model retries never touch tools. The real double run was
+  a new turn after a failed or crashed run whose transcript held no trace of the call.
+- The transcript is the write-ahead log (ADR 021): `AgentRuntime._run_body` appends the run's
+  unsaved messages right before a tool batch runs (the user's message, the calls) and right after
+  (the results), before `record_tool_executions`; the end of the run and `_persist_partial`
+  append only what is still unsaved (this also ends a double append when the session save fails
+  after the final append).
+- `answer_dangling_calls`: on load (`_run_body`, `compact`) a tool call without a result gets an
+  in-memory "Error: outcome unknown ... It was not run again: check its effect before repeating
+  it." result, right after the call's other results.
+- Transcript lines carry the run id that wrote them; the web, opening a chat whose run is going,
+  drops that run's history rows except its opening message (the replayed events show the rest).
+- A cancelled or timed-out run keeps the call that was running; the subagent wrap-up says it "may
+  have partly run". The transcript-only rewind counts a turn's file changes up to its last line.
+- No write-ahead row in `tool_executions`: it would guard a path no gateway has.
+
+**Acceptance**
+- tests (`tests/integration/test_side_effects_once.py`): recording fails after the tool ran, the
+  next run's model input carries the real result and the tool ran once; a run cancelled while its
+  tool runs reaches the next run as "outcome unknown"; the repair fills in place and leaves whole
+  histories alone; the full suite unchanged otherwise.
+- Smoke (`tmp/smoke_tests/P54-side-effects-once.py`): the real app, a real cheap model, ask mode,
+  `echo hello >> log.txt`. A) `record_tool_executions` forced to fail once, then "try again": one
+  line, the model read the result and checked. B) the process killed (`os._exit`) while the command
+  runs, a new process says "try again": one line, the model read "outcome unknown" and checked.
+  The same script on P52 code: two lines in both.
+- Smoke (`tmp/smoke_tests/P54-web-midrun.py`): the real web UI (Playwright) and API on a real
+  model; a chat running `sleep 12` is left and reopened mid-run: its message and tool card show
+  once, mid-run and after the run ends (screenshots looked at).
+
+**Built.** `core/runtime.py` (`flush`, `answer_dangling_calls`, `OUTCOME_UNKNOWN`,
+`_persist_partial(flushed)`), `app/timeline.py` (`_transcript_turns`), ADR 021, STATUS known
+limit, `persistence/conversation.py` + `sqlite.py` + `core/session.py` (`run_id` on append),
+`gateways/base.py` (`HistoryItem.run_id`), `app/application.py` (`session_history`),
+`gateways/web/app.py`, `web/app/page.tsx`, `web/lib/api.ts`. Tests: `test_side_effects_once.py`,
+`test_web_history.py`, `test_checkpoints.py`, `test_hardening.py`,
+`test_run_manager.py`. Smoke: `tmp/smoke_tests/P54-side-effects-once.py`.
+
+---
+
+---
+
 # Appendix A — Target file tree
 
 Grow into this; do not create it all up front.

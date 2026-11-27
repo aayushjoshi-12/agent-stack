@@ -584,8 +584,10 @@ class SqliteSessionStore:
         """One of the session's stored images (P44), by its content-addressed file name."""
         return await self._conversation.image(session_id, name)
 
-    async def append_messages(self, session_id: str, messages: Sequence[BaseMessage]) -> None:
-        await self._conversation.append_messages(session_id, messages)
+    async def append_messages(
+        self, session_id: str, messages: Sequence[BaseMessage], run_id: str = ""
+    ) -> None:
+        await self._conversation.append_messages(session_id, messages, run_id)
 
     async def delete(self, session_id: str) -> None:
         """Delete a chat and its subagents' sessions (rows, and a pre-P46 flat folder)."""

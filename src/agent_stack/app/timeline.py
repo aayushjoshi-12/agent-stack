@@ -307,17 +307,19 @@ class Timeline:
         before it. Only "before this message" is available (that is what a rewind needs).
         """
         by_seq = {r.seq: r for r in records}
+        starts = [i for i, r in enumerate(records) if _is_turn(r)]
         found: list[Turn] = []
-        for record in records:
-            if not _is_turn(record):
-                continue
+        for n, at in enumerate(starts):
+            record = records[at]
             previous = by_seq.get(record.seq - 1)
             start = previous.ts if previous is not None else None
+            # A run writes its lines as it goes (P54): the turn ends at its last line.
+            end = records[starts[n + 1] - 1 if n + 1 < len(starts) else -1].ts
             touched = {
                 e.path
                 for e in entries
                 if (start is None or _as_time(e.created_at) > start)
-                and _as_time(e.created_at) <= record.ts
+                and _as_time(e.created_at) <= end
             }
             found.append(
                 Turn(

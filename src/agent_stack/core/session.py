@@ -51,7 +51,9 @@ class SessionStore(Protocol):
 
     async def get_messages(self, session_id: str) -> list[BaseMessage]: ...
 
-    async def append_messages(self, session_id: str, messages: Sequence[BaseMessage]) -> None: ...
+    async def append_messages(
+        self, session_id: str, messages: Sequence[BaseMessage], run_id: str = ""
+    ) -> None: ...
 
     async def delete(self, session_id: str) -> None: ...
 
@@ -108,7 +110,9 @@ class InMemorySessionStore:
     async def get_messages(self, session_id: str) -> list[BaseMessage]:
         return list(self._messages.get(session_id, []))
 
-    async def append_messages(self, session_id: str, messages: Sequence[BaseMessage]) -> None:
+    async def append_messages(
+        self, session_id: str, messages: Sequence[BaseMessage], run_id: str = ""
+    ) -> None:
         self._messages.setdefault(session_id, []).extend(messages)
 
     async def delete(self, session_id: str) -> None:

@@ -171,3 +171,12 @@ async def test_compact_endpoint_passes_the_focus_for_owned_sessions(tmp_path: Pa
         w.app.compact_session = fake_compact  # type: ignore[method-assign]
         done = await client.post("/sessions/s1/compact", json={"focus": "files"}, headers=HEADERS)
         assert done.json() == {"messages": 4} and seen == [("s1", "files")]
+
+
+async def test_history_rows_carry_the_run_that_wrote_them(tmp_path: Path) -> None:
+    client, _ = await _setup(tmp_path)
+    async with client:
+        rows = (await client.get("/sessions/s1", headers=HEADERS)).json()["history"]
+    runs = [r["run_id"] for r in rows]
+    assert all(runs) and len(set(runs)) == 2  # two turns, two runs: the web hides a live one
+    assert [r["kind"] for r in rows if r["run_id"] == runs[0]] == ["user", "tool", "assistant"]

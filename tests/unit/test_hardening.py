@@ -16,7 +16,7 @@ from agent_stack.core.event_bus import InMemoryEventBus
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.limits import AgentLimits
 from agent_stack.core.run import RunManager, RunRequest, RunStatus
-from agent_stack.core.runtime import AgentRuntime
+from agent_stack.core.runtime import AgentRuntime, answer_dangling_calls
 from agent_stack.core.session import InMemorySessionStore, Session
 from agent_stack.memory.store import SqliteMemoryStore
 from agent_stack.persistence.conversation import FileConversationStore
@@ -132,8 +132,14 @@ async def test_a_limit_failure_saves_only_a_consistent_prefix() -> None:
         await runtime.run(session_id="s", user_id="u", message="go")
 
     messages = await store.get_messages("s")
-    assert [type(m).__name__ for m in messages] == ["HumanMessage", "AIMessage", "ToolMessage"]
-    assert _dangling_tool_calls(messages) == []  # c2's assistant message was not kept
+    # c2 was running when the deadline hit: it is kept, and the next run reads it as unknown.
+    assert [type(m).__name__ for m in messages] == [
+        "HumanMessage",
+        "AIMessage",
+        "ToolMessage",
+        "AIMessage",
+    ]
+    assert _dangling_tool_calls(answer_dangling_calls(messages)) == []
 
 
 async def test_a_cancelled_run_keeps_the_message_and_no_dangling_tool_call() -> None:
@@ -151,15 +157,15 @@ async def test_a_cancelled_run_keeps_the_message_and_no_dangling_tool_call() -> 
     await manager.cancel(handle.run_id)
 
     messages = await store.get_messages("s")
-    assert [m.content for m in messages] == ["do it"]
-    assert _dangling_tool_calls(messages) == []
+    assert [m.content for m in messages] == ["do it", ""]  # the call was running: kept (P54)
+    assert _dangling_tool_calls(answer_dangling_calls(messages)) == []
     run = await manager.get_run(handle.run_id)
     assert run is not None and run.status is RunStatus.CANCELLED
 
 
 async def test_failing_to_save_never_hides_the_real_error() -> None:
     class BrokenStore(InMemorySessionStore):
-        async def append_messages(self, session_id: str, messages: Any) -> None:
+        async def append_messages(self, session_id: str, messages: Any, run_id: str = "") -> None:
             raise OSError("disk full")
 
     runtime = _runtime(RaisingModel(RuntimeError("provider down")), store=BrokenStore())

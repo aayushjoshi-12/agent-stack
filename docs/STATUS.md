@@ -144,8 +144,11 @@ Still unverified (do these next):
   `agent-stack gc --apply` (P50) finds nothing references them; GC never runs by itself, and
   keeps anything touched in the last 24 hours. Folders the index has no row for are reported,
   never deleted (rules: `docs/design/conversation-storage.md` section 9).
-- If recording a tool batch fails *after* the tools ran, a retry with the same run id could run a
-  mutating tool again. History stays valid because the failed run saves no tool results.
+- A tool that ran is never hidden from the next turn (P54, ADR 021): calls and results are written
+  to the transcript around each batch, and a call whose run died mid-flight reads as "outcome
+  unknown". Nothing re-runs a call automatically; whether "try again" repeats it is the model's
+  choice, made with the result in view. No path retries a run under its own id (a retry is a new
+  run), so the `(run_id, tool_call_id)` skip only guards direct `AgentRuntime.run` callers.
 - A subagent gets only the tools its parent has (and its parent's active skill allows), and every
   call its parent would have to approve needs approval in the subagent too (P49); that is what
   makes the write-capable `coder` subagent safe. A skill's `allowed-tools` only restricts, never

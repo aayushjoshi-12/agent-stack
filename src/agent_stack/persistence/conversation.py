@@ -135,8 +135,11 @@ class FileConversationStore:
     async def get_messages(self, session_id: str) -> list[BaseMessage]:
         return await self.read_messages(session_id)
 
-    async def append_messages(self, session_id: str, messages: Sequence[BaseMessage]) -> None:
-        await asyncio.to_thread(self._append_messages_sync, session_id, list(messages))
+    async def append_messages(
+        self, session_id: str, messages: Sequence[BaseMessage], run_id: str = ""
+    ) -> None:
+        """Append ``messages``; ``run_id`` tags each line with the run that wrote it."""
+        await asyncio.to_thread(self._append_messages_sync, session_id, list(messages), run_id)
 
     async def delete(self, session_id: str) -> None:
         await asyncio.to_thread(self._delete_sync, session_id)
@@ -255,7 +258,9 @@ class FileConversationStore:
                     artifacts.mkdir(parents=True, exist_ok=True)
                     target.write_bytes(decoded[0])
 
-    def _append_messages_sync(self, session_id: str, messages: list[BaseMessage]) -> None:
+    def _append_messages_sync(
+        self, session_id: str, messages: list[BaseMessage], run_id: str = ""
+    ) -> None:
         if not messages:
             return
         self._save_images(session_id, messages)
@@ -263,7 +268,7 @@ class FileConversationStore:
         start = max((record.seq for record in existing), default=0) + 1
         now = datetime.now(UTC)
         records = [
-            message_to_record(message, seq=start + offset, run_id="", ts=now)
+            message_to_record(message, seq=start + offset, run_id=run_id, ts=now)
             for offset, message in enumerate(messages)
         ]
         self._append_sync(session_id, records)

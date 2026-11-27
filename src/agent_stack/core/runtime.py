@@ -304,7 +304,7 @@ class AgentRuntime:
         async with (
             self._session_lock.lock(session_id) if self._session_lock else contextlib.nullcontext()
         ):
-            history = await self._session_store.get_messages(session_id)
+            history = answer_dangling_calls(await self._session_store.get_messages(session_id))
             recent = after_compaction(history)[1]
             if not recent:
                 return 0
@@ -341,8 +341,21 @@ class AgentRuntime:
             await self._session_store.save(session)
         stored_version = session.version
 
-        history = await self._session_store.get_messages(session_id)
+        history = answer_dangling_calls(await self._session_store.get_messages(session_id))
         new_messages: list[BaseMessage] = [HumanMessage(content=_user_content(message, images))]
+        flushed = 0  # new_messages[:flushed] are already in the transcript
+
+        async def flush() -> None:
+            """Write the run's unsaved messages now, so a crash cannot hide a side effect (P54)."""
+            nonlocal flushed
+            start, flushed = flushed, len(new_messages)
+            try:
+                await self._session_store.append_messages(session_id, new_messages[start:], run_id)
+            except Exception:
+                flushed = start  # not written: the failure path tries again
+                raise
+            # A cancel mid-write leaves ``flushed`` advanced: the write thread still finishes.
+
         if notes:  # background-monitor notes that waited for this turn
             new_messages.append(HumanMessage(content=notes))
 
@@ -599,9 +612,29 @@ class AgentRuntime:
                             ),
                         )
 
+                    # Write-ahead: the calls reach the transcript before they run, their results
+                    # right after, so a later failure or crash never hides that they ran (P54).
+                    await flush()
                     executed = await self._within(deadline, run_tools)
                     by_id = {r.tool_call_id: r for r in [*executed, *rejected.values()]}
                     tool_results = [by_id[str(c["id"])] for c in pending]
+
+                    # Project executed results back into the conversation in the model's call
+                    # order; skipped calls get a placeholder (SQLite holds no tool content to
+                    # replay, so the previous result is not reconstructed here).
+                    result_by_id = {result.tool_call_id: result.message for result in tool_results}
+                    for tool_call in response.tool_calls:
+                        tool_call_id = tool_call["id"]
+                        if tool_call_id is None:
+                            raise AgentStackError("Model returned a tool call without an id")
+                        tool_message = result_by_id.get(tool_call_id)
+                        if tool_message is None:
+                            tool_message = ToolMessage(
+                                content="(skipped: already completed in a previous attempt of this run)",
+                                tool_call_id=tool_call_id,
+                            )
+                        new_messages.append(tool_message)
+                    await flush()
 
                     if checkpoint_store is not None and tool_results:
                         # The whole batch lands in one transaction, atomically visible to recovery.
@@ -620,22 +653,6 @@ class AgentRuntime:
                                 "error": result.error,
                             },
                         )
-
-                    # Project executed results back into the conversation in the model's call
-                    # order; skipped calls get a placeholder (SQLite holds no tool content to
-                    # replay, so the previous result is not reconstructed here).
-                    result_by_id = {result.tool_call_id: result.message for result in tool_results}
-                    for tool_call in response.tool_calls:
-                        tool_call_id = tool_call["id"]
-                        if tool_call_id is None:
-                            raise AgentStackError("Model returned a tool call without an id")
-                        tool_message = result_by_id.get(tool_call_id)
-                        if tool_message is None:
-                            tool_message = ToolMessage(
-                                content="(skipped: already completed in a previous attempt of this run)",
-                                tool_call_id=tool_call_id,
-                            )
-                        new_messages.append(tool_message)
 
                     if tool_results:
                         await self._checkpoint(
@@ -672,9 +689,9 @@ class AgentRuntime:
                     data={"content": response.content, "tool_calls": []},
                 )
 
-            # Persist only the messages produced by this run; the loaded history is already
+            # Persist only what this run has not written yet; the loaded history is already
             # in the store. Re-appending the full list here was the old duplication bug.
-            await self._session_store.append_messages(session_id, new_messages)
+            await flush()
             session.version += 1
             await self._save_session(session, stored_version)
 
@@ -697,13 +714,17 @@ class AgentRuntime:
         except asyncio.CancelledError:
             # Hard cancel: finish saving what happened even though this task is being torn down.
             await asyncio.shield(
-                self._persist_partial(session, stored_version, session_id, new_messages)
+                self._persist_partial(
+                    session, stored_version, session_id, new_messages, flushed, run_id
+                )
             )
             if counters is not None:
                 counters(step_count, tool_call_count)
             raise
         except Exception as exc:
-            await self._persist_partial(session, stored_version, session_id, new_messages)
+            await self._persist_partial(
+                session, stored_version, session_id, new_messages, flushed, run_id
+            )
             if counters is not None:  # a failed run still reports how far it got
                 counters(step_count, tool_call_count)
             await self._emit(
@@ -735,7 +756,10 @@ class AgentRuntime:
         if isinstance(last, AIMessage):  # calls the deadline cut off still need an answer
             for call in last.tool_calls:
                 new_messages.append(
-                    ToolMessage(content="(not run: out of time)", tool_call_id=str(call["id"]))
+                    ToolMessage(
+                        content="(cut off: out of time; it may have partly run)",
+                        tool_call_id=str(call["id"]),
+                    )
                 )
         if not (new_messages and new_messages[-1].content == WRAP_UP):  # not told twice
             new_messages.append(HumanMessage(content=WRAP_UP))
@@ -1119,20 +1143,24 @@ class AgentRuntime:
         stored_version: int,
         session_id: str,
         messages: Sequence[BaseMessage],
+        flushed: int,
+        run_id: str,
     ) -> None:
         """Save what a failed or cancelled run produced, so history keeps the user's message.
 
-        A trailing assistant message whose tool calls never got results is dropped: stored
-        as is, the next model call would be rejected for tool calls without responses. This
-        is best effort and never replaces the original error with a storage error.
+        ``messages[:flushed]`` are already in the transcript. An unsaved trailing assistant
+        message whose tool calls never ran is dropped: stored as is, the next model call would
+        be rejected for tool calls without responses. This is best effort and never replaces
+        the original error with a storage error.
         """
-        keep = list(messages)
+        keep = list(messages[flushed:])
         if keep and isinstance(keep[-1], AIMessage) and keep[-1].tool_calls:
             keep.pop()
-        if not keep:
+        if not keep and not flushed:
             return
         with contextlib.suppress(Exception):
-            await self._session_store.append_messages(session_id, keep)
+            if keep:
+                await self._session_store.append_messages(session_id, keep, run_id)
             session.version += 1
             await self._save_session(session, stored_version)
 
@@ -1373,3 +1401,37 @@ def _with_summary(parts: Sequence[str], summary: str | None) -> list[str]:
     if summary is None:
         return list(parts)
     return [*parts[:1], summary, *parts[1:]]
+
+
+#: What the model reads for a call whose run died while it ran (P54).
+OUTCOME_UNKNOWN = (
+    "Error: outcome unknown. The run stopped while this call was running, so its result was "
+    "never recorded. It was not run again: check its effect before repeating it."
+)
+
+
+def answer_dangling_calls(history: Sequence[BaseMessage]) -> list[BaseMessage]:
+    """Give every tool call without a result (its run died mid-call) an outcome-unknown one.
+
+    The stand-in goes right after the call's other results, so the pairs stay valid for the
+    provider and the model learns the side effect may have happened.
+    """
+    out: list[BaseMessage] = []
+    waiting: list[str] = []  # call ids of the last assistant message still without a result
+
+    def close() -> None:
+        out.extend(
+            ToolMessage(content=OUTCOME_UNKNOWN, tool_call_id=i, status="error") for i in waiting
+        )
+        waiting.clear()
+
+    for message in history:
+        if isinstance(message, ToolMessage) and message.tool_call_id in waiting:
+            waiting.remove(message.tool_call_id)
+        elif not isinstance(message, ToolMessage):
+            close()
+            if isinstance(message, AIMessage):
+                waiting.extend(str(c["id"]) for c in message.tool_calls)
+        out.append(message)
+    close()
+    return out

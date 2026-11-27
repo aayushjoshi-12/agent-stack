@@ -134,10 +134,16 @@ export default function Page() {
   }, [conn]);
 
   const loadHistory = useCallback(
-    async (id: string) => {
+    async (id: string, live?: string) => {
       if (!conn) return;
       const detail = await api.session(conn, id);
-      if (activeRef.current === id) setHistory(detail.history);
+      // A running run's lines are already written (P54) and its replayed events show them again,
+      // all but the message that started it (no event carries that one), so keep only that row.
+      const first = live ? detail.history.findIndex((row) => row.run_id === live) : -1;
+      const rows = live
+        ? detail.history.filter((row, i) => row.run_id !== live || (i === first && row.kind === "user"))
+        : detail.history;
+      if (activeRef.current === id) setHistory(rows);
     },
     [conn],
   );
@@ -341,8 +347,8 @@ export default function Page() {
       setActiveId(id);
       activeRef.current = id;
       try {
-        await loadHistory(id);
         const run = runBySession.current.get(id);
+        await loadHistory(id, run);
         if (run) live.follow(run); // a run that kept going while we looked elsewhere
       } catch (e) {
         fail(e);

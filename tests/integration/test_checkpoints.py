@@ -275,7 +275,8 @@ async def test_resumes_from_checkpoint(tmp_path: Any) -> None:
         )
     assert tool_a.invocations == 1
     assert tool_b.invocations == 0
-    assert await store.get_messages("s1") == []  # nothing persisted before the crash
+    # The call and its result reached the transcript before the crash (P54).
+    assert [m.content for m in await store.get_messages("s1")] == ["go", "", "alpha ran 1x"]
 
     # Attempt 2 (same run/session): alpha is skipped; beta runs once; run completes.
     resumed = _runtime(
@@ -302,7 +303,7 @@ async def test_resumes_from_checkpoint(tmp_path: Any) -> None:
     assert tool_b.invocations == 1
 
     messages = await store.get_messages("s1")
-    assert [message.content for message in messages] == [
+    assert [message.content for message in messages][3:] == [
         "go",
         "",
         "(skipped: already completed in a previous attempt of this run)",
@@ -310,8 +311,8 @@ async def test_resumes_from_checkpoint(tmp_path: Any) -> None:
         "beta ran 1x",
         "done",
     ]
-    assert isinstance(messages[2], ToolMessage)
-    assert messages[2].tool_call_id == "a1"
+    assert isinstance(messages[5], ToolMessage)
+    assert messages[5].tool_call_id == "a1"
 
     latest = await checkpoints.get_latest("r1")
     assert latest is not None

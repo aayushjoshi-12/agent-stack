@@ -9,6 +9,8 @@ export type HistoryRow = {
   result: string | null;
   /** A user message's images: stored names, fetched with `api.image`. */
   images?: string[];
+  /** The run that wrote it ("" for older lines). */
+  run_id?: string;
 };
 export type SessionDetail = { id: string; title: string | null; branch_of: string | null; history: HistoryRow[] };
 export type RunInfo = { id: string; session_id: string; status: string; steps: number; tool_calls: number; error: string | null; parent_run_id: string | null };

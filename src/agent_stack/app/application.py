@@ -445,7 +445,16 @@ class Application:
         """A stored conversation as display rows: user text, assistant text, tool calls."""
         messages = await self.session_store.get_messages(session_id)
         results = {m.tool_call_id: _tool_text(m) for m in messages if isinstance(m, ToolMessage)}
-        return [item for message in messages for item in _history_items(message, results)]
+        store: Any = self.session_store
+        runs = [""] * len(messages)
+        if hasattr(store, "records"):  # which run wrote each line (the web hides a live one)
+            lines = [r.run_id for r in await store.records(session_id) if r.kind != "event"]
+            runs = lines if len(lines) == len(messages) else runs
+        return [
+            replace(item, run_id=run)
+            for message, run in zip(messages, runs, strict=True)
+            for item in _history_items(message, results)
+        ]
 
     async def session_image(self, session_id: str, name: str) -> bytes | None:
         """A stored image of a conversation (P44) by its file name; None when there is none."""

@@ -189,6 +189,7 @@ def _history_json(item: HistoryItem) -> dict[str, Any]:
         "args": None if item.args is None else dict(item.args),
         "result": item.result,
         "images": list(item.images),
+        "run_id": item.run_id,
     }
 
 
