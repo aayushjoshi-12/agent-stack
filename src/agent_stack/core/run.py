@@ -198,6 +198,7 @@ class RunManager:
                 child_run_id=run.id,
                 agent_name=runtime.agent.name,
                 parent_run_id=request.parent_run_id,
+                task=request.message,
             )
 
         queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
@@ -489,6 +490,7 @@ class RunManager:
         child_run_id: str,
         agent_name: str,
         parent_run_id: str,
+        task: str,
     ) -> None:
         if self._event_bus is None:
             return
@@ -500,7 +502,7 @@ class RunManager:
             run_id=parent_run_id,
             session_id=parent.session_id if parent is not None else parent_run_id,
             sequence=0,
-            data={"child_run_id": child_run_id, "agent_name": agent_name},
+            data={"child_run_id": child_run_id, "agent_name": agent_name, "task": task},
         )
         with contextlib.suppress(Exception):
             await self._event_bus.publish(event)

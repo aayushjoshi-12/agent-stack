@@ -10,6 +10,7 @@ import { api, ApiError, type ChangedFile, type Conn, type HistoryRow, type Rewin
 import { ChangesPanel } from "@/components/ChangesPanel";
 import { HistoryPanel, type HistoryTab } from "@/components/HistoryPanel";
 import { RewindMenu, type RewindMode } from "@/components/RewindMenu";
+import { SubagentPanel, type OpenSubagent } from "@/components/SubagentPanel";
 import { formatCost, formatTokens } from "@/lib/format";
 import type { Attachment } from "@/lib/images";
 import { rewindTargets } from "@/lib/rewind";
@@ -35,6 +36,15 @@ function saveConn(conn: Conn | null) {
   } catch {
     // storage can be unavailable (private windows); the app works without it
   }
+}
+
+/** The subagent a stored `delegate` call ran: its summary names the run ("(run <id>)"). */
+function delegatedRun(row: HistoryRow): OpenSubagent | null {
+  if (row.text !== "delegate") return null;
+  const runId = /\(run ([0-9a-f]{32})\)/.exec(row.result ?? "")?.[1];
+  if (!runId) return null;
+  const agent = typeof row.args?.agent_name === "string" ? row.args.agent_name : "subagent";
+  return { runId, agent, task: typeof row.args?.task === "string" ? row.args.task : "" };
 }
 
 /** A stored tool call as a finished card. */
@@ -72,6 +82,7 @@ export default function Page() {
   const [usage, setUsage] = useState<UsageInfo | null>(null);
   const [changes, setChanges] = useState<{ files: ChangedFile[]; note: string }>({ files: [], note: "" });
   const [panelOpen, setPanelOpen] = useState(false);
+  const [subagent, setSubagent] = useState<OpenSubagent | null>(null);
   const [focusPath, setFocusPath] = useState<string | null>(null);
   const [drawer, setDrawer] = useState(false);
   const [forkable, setForkable] = useState<{ sessionId: string; eventId: string } | null>(null);
@@ -324,6 +335,7 @@ export default function Page() {
       setDrawer(false);
       setError("");
       live.detach();
+      setSubagent(null);
       setPendingUser(null);
       setStopping(false);
       setActiveId(id);
@@ -341,6 +353,7 @@ export default function Page() {
 
   const newConversation = useCallback(() => {
     live.detach();
+    setSubagent(null);
     setActiveId(null);
     activeRef.current = null;
     setHistory([]);
@@ -511,6 +524,18 @@ export default function Page() {
     [live.state.items],
   );
 
+  // A subagent's call waiting for approval is in its panel, so open that panel.
+  const waitingChild = pendingApproval && pendingApproval.depth > 0 ? pendingApproval.runId : null;
+  useEffect(() => {
+    if (!waitingChild) return;
+    const card = live.state.items.find((i) => i.kind === "subagent" && i.runId === waitingChild);
+    setPanelOpen(false);
+    setSubagent((now) =>
+      now?.runId === waitingChild ? now : { runId: waitingChild, agent: card?.kind === "subagent" ? card.agent : "subagent", task: card?.kind === "subagent" ? card.task : "" },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waitingChild]);
+
   useEffect(() => {
     if (!pendingApproval) return;
     const onKey = (e: KeyboardEvent) => {
@@ -548,8 +573,14 @@ export default function Page() {
 
   const openFile = (path: string) => {
     setFocusPath(path);
+    setSubagent(null);
     setPanelOpen(true);
   };
+  const openSubagent = (next: OpenSubagent) => {
+    setPanelOpen(false);
+    setSubagent(next);
+  };
+  const sidePanel = (panelOpen && activeId !== null) || subagent !== null;
 
   const activeTitle = sessions.find((s) => s.id === activeId)?.title ?? "New conversation";
   const lastAssistant = (() => {
@@ -558,7 +589,7 @@ export default function Page() {
   })();
 
   return (
-    <div className={`grid h-full grid-cols-1 ${panelOpen ? "md:grid-cols-[300px_minmax(0,1fr)_minmax(380px,520px)]" : "md:grid-cols-[300px_minmax(0,1fr)]"}`}>
+    <div className={`grid h-full grid-cols-1 ${sidePanel ? "md:grid-cols-[300px_minmax(0,1fr)_minmax(380px,520px)]" : "md:grid-cols-[300px_minmax(0,1fr)]"}`}>
       <div className={`${drawer ? "fixed inset-0 z-20 w-[300px] max-w-[85vw]" : "hidden"} min-h-0 md:static md:block md:w-auto`}>
         <Sidebar
           sessions={sessions}
@@ -718,11 +749,20 @@ export default function Page() {
                   )}
                 </div>
               ) : (
-                <ToolCard key={`h${i}`} tool={historyTool(row, i)} onOpenFile={openFile} />
+                <div key={`h${i}`} className="space-y-2">
+                  <ToolCard tool={historyTool(row, i)} onOpenFile={openFile} />
+                  {delegatedRun(row) && (
+                    <button type="button" className="btn btn-ghost" onClick={() => openSubagent(delegatedRun(row)!)}>
+                      Open what the subagent did
+                    </button>
+                  )}
+                </div>
               );
             })}
             {pendingUser && <UserBubble text={pendingUser.text} images={pendingUser.images} />}
             {live.state.items.map((item) => {
+              // a subagent's own work shows in its panel, not in the conversation
+              if (item.depth > 0) return null;
               switch (item.kind) {
                 case "tool":
                   return <ToolCard key={item.key} tool={item} onDecide={(t, a) => void decide(t, a)} onOpenFile={openFile} />;
@@ -731,7 +771,13 @@ export default function Page() {
                 case "reasoning":
                   return <ReasoningCard key={item.key} item={item} />;
                 case "subagent":
-                  return <SubagentCard key={item.key} item={item} />;
+                  return (
+                    <SubagentCard
+                      key={item.key}
+                      item={item}
+                      onOpen={() => openSubagent({ runId: item.runId, agent: item.agent, task: item.task })}
+                    />
+                  );
                 case "failure":
                   return <FailureCard key={item.key} text={item.text} />;
                 case "notice":
@@ -819,7 +865,20 @@ export default function Page() {
         />
       )}
 
-      {panelOpen && activeId && (
+      {subagent && (
+        <div className="fixed inset-0 z-30 min-h-0 md:static md:z-auto">
+          <SubagentPanel
+            conn={conn}
+            open={subagent}
+            onOpen={setSubagent}
+            onDecide={(t, a) => void decide(t, a)}
+            onClose={() => setSubagent(null)}
+            onError={fail}
+          />
+        </div>
+      )}
+
+      {panelOpen && activeId && !subagent && (
         <div className="fixed inset-0 z-30 min-h-0 md:static md:z-auto">
           <ChangesPanel
             conn={conn}

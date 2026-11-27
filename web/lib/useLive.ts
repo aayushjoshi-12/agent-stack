@@ -99,7 +99,7 @@ export function useLive(conn: Conn | null, onFinished: (phase: RunPhase) => void
     (runId: string) => {
       stopAll();
       rootRun.current = runId;
-      commit({ ...emptyLive(), phase: "running" });
+      commit({ ...emptyLive(), root: runId, phase: "running" });
       watch(runId, true);
     },
     [stopAll, commit, watch],

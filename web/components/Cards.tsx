@@ -146,17 +146,25 @@ export function ToolCard({
   );
 }
 
-export function SubagentCard({ item }: { item: Extract<Item, { kind: "subagent" }> }) {
+export function SubagentCard({ item, onOpen }: { item: Extract<Item, { kind: "subagent" }>; onOpen?: () => void }) {
   const mark: MarkKind = item.status === "running" ? "running" : item.status === "completed" ? "ok" : "failed";
   return (
     <Indent depth={item.depth}>
       <div className="box-flat flex items-center gap-3 bg-sunk px-3 py-2">
         <Mark kind={mark} />
-        <span className="font-bold">subagent · {item.agent}</span>
-        <span className="code ml-auto text-soft">
+        <span className="min-w-0 flex-1 truncate" title={item.task}>
+          <span className="font-bold">subagent · {item.agent}</span>
+          {item.task && <span className="text-soft"> · {item.task}</span>}
+        </span>
+        <span className="code shrink-0 text-soft">
           {item.status}
           {item.status !== "running" ? ` · ${item.steps} steps · ${item.toolCalls} tools` : ""}
         </span>
+        {onOpen && (
+          <button type="button" className="btn shrink-0" onClick={onOpen} aria-label={`Open subagent ${item.agent}`}>
+            Open
+          </button>
+        )}
       </div>
     </Indent>
   );

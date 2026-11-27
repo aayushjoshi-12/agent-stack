@@ -2011,6 +2011,37 @@ conversation and a record of its ids, task and outcome, in the chat's folder.
 `persistence/conversation.py` (`session_dir`, `write_subagent_record`), `app/bootstrap.py`.
 Tests: `tests/unit/test_subagents.py`. Smoke: `tmp/smoke_tests/P46-subagent-folders.py`.
 
+## Phase 47 — Web subagent panel ✅
+
+**Goal.** In the web UI a subagent's work is one click away and out of the main conversation:
+its card opens a side panel that shows what it is doing, live, and what it did, later.
+
+**Deliverables**
+- `subagent.started` carries the task. The subagent card shows the task and an Open button.
+- `SubagentPanel` (right side, where the files panel goes; one at a time): status, tool count, the
+  task, and the subagent's tool cards, reasoning, streamed and final replies, failure, and its own
+  subagents as cards that open in the panel. It follows the child run with its own `useLive`, so
+  the server replays the stored events and then goes live: the same view for a running and a
+  finished subagent.
+- The conversation no longer shows subagent events inline (only the card). A subagent call that
+  needs approval opens its panel; `y`/`n` still answer it.
+- A reopened conversation: a stored `delegate` call gets "Open what the subagent did" (the run id
+  comes from its summary).
+- Reducer: `LiveState.root` is the followed run, so a child run followed as the root gets its
+  phase, deltas and failure, and its own children nest under it.
+
+**Acceptance**
+- web test: following a child run as the root (deltas, depth, task, failure, phase).
+- Smoke with the real default model and the real web UI (Playwright): live panel with the child's
+  tool call and reply, none of it in the conversation, done state; after a reload the stored
+  delegate call opens the same panel with its tool calls and task.
+
+**Built.** `web/components/SubagentPanel.tsx`, `web/lib/events.ts` (`root`, `isRoot`,
+`depthOf`, subagent `task`), `web/lib/useLive.ts` (`follow` sets the root), `web/app/page.tsx`
+(panel slot, `delegatedRun`, depth-0 filter, approval auto-open), `web/components/Cards.tsx`
+(`SubagentCard` task and Open), `core/run.py` (task on `subagent.started`). Tests:
+`web/lib/events.test.ts`. Smoke: `tmp/smoke_tests/P47-subagent-panel-ui.py`.
+
 ---
 
 # Appendix A — Target file tree

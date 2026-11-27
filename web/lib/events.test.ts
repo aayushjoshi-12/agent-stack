@@ -221,3 +221,25 @@ test("a subagent's deltas never render", () => {
   assert.equal(s.items.length, 0);
   assert.equal(applyEvent(s, delta("x", 0, "text", "child", "r1")), s);
 });
+
+test("a panel that follows a subagent run treats it as the root", () => {
+  const from: LiveState = { ...emptyLive(), root: "k9", phase: "running" };
+  const s = play(
+    [
+      ev("run.started", {}, "k9", "p9"),
+      ev("assistant.delta", { text: "look", kind: "text", step: 0 }, "k9", "p9"),
+      ev("tool.started", { tool: "read_file", tool_call_id: "t", args: { path: "a" } }, "k9", "p9"),
+      ev("subagent.started", { child_run_id: "g9", agent_name: "helper", task: "dig" }, "k9", "p9"),
+      ev("tool.started", { tool: "grep_files", tool_call_id: "u", args: {} }, "g9", "k9"),
+      ev("run.failed", { error: "ToolCallLimitExceeded: Tool call limit exceeded: 102 > 100" }, "k9", "p9"),
+    ],
+    from,
+  );
+  const [delta, tool, card, grandchild, failure] = s.items;
+  assert.equal(delta?.kind === "assistant" && delta.text, "look"); // its own deltas stream
+  assert.equal(tool?.depth, 0);
+  assert.ok(card?.kind === "subagent" && card.task === "dig" && card.depth === 0);
+  assert.equal(grandchild?.depth, 1); // a subagent it started stays nested
+  assert.ok(failure?.kind === "failure" && failure.text.includes("limit"));
+  assert.equal(s.phase, "failed");
+});

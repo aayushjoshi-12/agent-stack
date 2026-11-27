@@ -50,6 +50,7 @@ export type Item =
       runId: string;
       depth: number;
       agent: string;
+      task: string;
       status: string;
       steps: number;
       toolCalls: number;
@@ -66,6 +67,8 @@ export type LiveState = {
   cursor: Record<string, number>;
   /** Runs seen so far, with their parent (null for the root run). */
   runs: Record<string, string | null>;
+  /** The run this view follows. A subagent panel follows a child run, which has a parent. */
+  root: string | null;
   phase: RunPhase;
   /** Id of the run.completed event, so the UI can offer "fork here". */
   completedEventId: string | null;
@@ -83,6 +86,7 @@ export const emptyLive = (): LiveState => ({
   items: [],
   cursor: {},
   runs: {},
+  root: null,
   phase: "idle",
   completedEventId: null,
   usageTick: 0,
@@ -95,13 +99,17 @@ const num = (v: unknown): number => (typeof v === "number" ? v : 0);
 const record = (v: unknown): Record<string, unknown> =>
   v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 
+/** The followed run: the one with no parent, or the subagent run a panel follows. */
+const isRoot = (state: LiveState, event: ApiEvent) => event.parent_run_id === null || event.run_id === state.root;
+
 function depthOf(state: LiveState, runId: string): number {
   let depth = 0;
-  let current: string | null | undefined = state.runs[runId];
-  while (current && depth < 8) {
+  let current: string | null | undefined = runId === state.root ? null : state.runs[runId];
+  while (current && current !== state.root && depth < 8) {
     depth += 1;
     current = state.runs[current];
   }
+  if (current === state.root && current !== null && depth < 8) depth += 1;
   return depth;
 }
 
@@ -143,7 +151,7 @@ function settle(items: Item[], key: string, item: Item | null): Item[] {
 function applyDelta(state: LiveState, event: ApiEvent): LiveState {
   const step = num(event.data.step);
   const text = str(event.data.text);
-  if (event.parent_run_id !== null || !text || step < (state.finals[event.run_id] ?? 0)) return state;
+  if (!isRoot(state, event) || !text || step < (state.finals[event.run_id] ?? 0)) return state;
   const kind = event.data.kind === "reasoning" ? "reasoning" : "assistant";
   const key = deltaKey(event.run_id, step, kind);
   const at = state.items.findIndex((i) => i.key === key);
@@ -174,7 +182,7 @@ export function applyEvent(state: LiveState, event: ApiEvent): LiveState {
 
   switch (event.type) {
     case "run.started":
-      return event.parent_run_id === null ? { ...base, phase: "running" } : base;
+      return isRoot(base, event) ? { ...base, phase: "running" } : base;
     case "model.usage":
       return { ...base, usageTick: base.usageTick + 1 };
     case "model.reasoning": {
@@ -299,6 +307,7 @@ export function applyEvent(state: LiveState, event: ApiEvent): LiveState {
             runId: str(d.child_run_id),
             depth,
             agent: str(d.agent_name, "subagent"),
+            task: str(d.task),
             status: "running",
             steps: 0,
             toolCalls: 0,
@@ -315,13 +324,13 @@ export function applyEvent(state: LiveState, event: ApiEvent): LiveState {
       return { ...base, items };
     }
     case "run.completed":
-      return event.parent_run_id === null
+      return isRoot(base, event)
         ? { ...base, phase: "completed", completedEventId: event.id }
         : base;
     case "run.failed": {
       const error = str(d.error, "run failed");
       const cancelled = error.includes("RunCancelled");
-      if (event.parent_run_id !== null) return base;
+      if (!isRoot(base, event)) return base;
       return {
         ...base,
         phase: cancelled ? "cancelled" : "failed",
@@ -332,11 +341,11 @@ export function applyEvent(state: LiveState, event: ApiEvent): LiveState {
     }
     case "input.received":
       // A message queued while the run worked, shown where the model read it.
-      return event.parent_run_id === null
+      return isRoot(base, event)
         ? { ...base, items: [...base.items, { kind: "user", key, runId: event.run_id, depth, text: str(d.text) }] }
         : base;
     case "context.compacted":
-      return event.parent_run_id === null
+      return isRoot(base, event)
         ? {
             ...base,
             items: [...base.items, { kind: "notice", key, runId: event.run_id, depth, text: `context compacted: ${num(d.messages)} messages summarised` }],
