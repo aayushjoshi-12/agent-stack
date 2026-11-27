@@ -47,7 +47,7 @@ python_version = "3.12"
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["hvac.*", "playwright.*"]
+module = ["hvac.*", "playwright.*", "opentelemetry.sdk.*", "opentelemetry.exporter.*"]
 ignore_missing_imports = true
 
 [dependency-groups]
