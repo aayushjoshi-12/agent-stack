@@ -1577,24 +1577,36 @@ can hold in their head, with no behaviour change.
 
 ---
 
-## Phase 35 — Tool timeouts, configurable and proven
+## Phase 35 — Tool timeouts, configurable and proven ✅
 
-**Goal.** No tool call can hang a run. A per-call timeout exists (`AgentLimits.tool_timeout_seconds`,
-300 s, enforced in `ToolExecutor`) but is not configurable and is not proven for the tools that
-can actually hang.
+**Goal.** No tool call can hang a run. A per-call timeout existed (`AgentLimits.tool_timeout_seconds`,
+300 s, enforced in `ToolExecutor`; the result was already an error `ToolMessage` and the run went
+on; `run_command` already killed its process group on cancellation) but was not configurable,
+lost the output so far, and was not proven for the tools that can actually hang.
 
 **Deliverables**
-- `AGENT_STACK_TOOL_TIMEOUT` (seconds, `off` allowed) in `AppConfig`, wired to the agent limits;
-  `.env.example` documents it.
-- Per-tool overrides where it matters (e.g. a tool can declare a longer default; `run_command`
-  keeps its own `timeout` argument but never exceeds the cap), and the cut-off kills the process
-  group of a running command, not just the asyncio task.
-- The model gets a clear tool result on timeout ("timed out after Ns; output so far: …") and the
-  run continues.
+- `AGENT_STACK_TOOL_TIMEOUT` (seconds, default 300; `off`/`0` removes the cap) in `AppConfig`,
+  wired by `bootstrap` into the assistant's and the explorer's `AgentLimits`
+  (`tool_timeout_seconds: float | None`); `.env.example` documents it.
+- `ToolExecutor` runs every call with an output sink that keeps what a streaming tool emitted
+  (bounded), so the cut-off result reads "Error: tool 'run_command' timed out after 3s; output so
+  far: ..." and the run continues.
+- `run_command`'s own `timeout` argument stays; a longer value is cut off at the cap (the executor
+  cancels the call and `run_command` kills the whole process group, SIGTERM then SIGKILL). The tool
+  docstring tells the model.
+- One per-tool override: a tool's LangChain `metadata["timeout_seconds"]` replaces the cap. Only
+  `delegate` sets it (`None`): a subagent run is bounded by its own limits and the parent's run
+  deadline, and the 300 s cap would cut a long but healthy subagent off mid-run.
 
 **Acceptance**
-- tests: a tool that sleeps past the cap returns the timeout result and the run goes on;
-  `run_command` with `sleep 999` is killed (no orphan process); `off` disables the cap.
+- `tests/unit/test_tool_timeouts.py`: a tool sleeping past the cap gives the timeout result and the
+  fake-model run reaches its final answer; the timeout result carries the output so far;
+  `run_command` with a backgrounded `sleep 999` and `timeout=999` under a 1 s cap is cut off and
+  the sleep's pid is gone (process group killed); `off`/`0` parse to no cap and no cap means no
+  cut-off; the metadata override; config validation.
+- Smoke (`tmp/smoke_tests/P35-tool-timeouts-smoke.py`): real app with `AGENT_STACK_TOOL_TIMEOUT=3`,
+  `run_command` `sleep 31` stops at 3.0 s with output so far, no `sleep` left; a real model run
+  continues past the timeout to a final answer.
 
 ---
 

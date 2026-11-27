@@ -108,6 +108,11 @@ async def delegate(agent_name: str, task: str) -> str:
     return _summary(agent_name, child.run_id, view, text)
 
 
+# A subagent run is bounded by its own limits and the parent's run deadline, not the
+# per-call tool timeout, which would cut a long but healthy subagent off mid-run.
+delegate.metadata = {"timeout_seconds": None}
+
+
 @tool
 async def subagent_status(run_id: str) -> str:
     """Report a subagent run's status, step/tool counts, and most recent activity."""

@@ -61,6 +61,18 @@ def _compact_at(raw: str) -> float | None:
     return share
 
 
+def _tool_timeout(raw: str) -> float | None:
+    if raw.strip().lower() in ("off", "0", "false", "no"):
+        return None
+    try:
+        seconds = float(raw)
+    except ValueError:
+        seconds = -1.0
+    if seconds <= 0:
+        raise ConfigurationError("AGENT_STACK_TOOL_TIMEOUT must be a positive number or 'off'")
+    return seconds
+
+
 def _approval_mode(raw: str) -> str:
     mode = raw.strip().lower()
     if mode not in ("ask", "auto"):
@@ -110,6 +122,9 @@ class AppConfig:
     max_steps: int = 50
     #: Wall-clock seconds one run may take before it is stopped. ``AGENT_STACK_MAX_RUNTIME``.
     max_runtime_seconds: float = 1800.0
+    #: Seconds one tool call may run before it is cut off (a command's process group killed) and
+    #: the model told it timed out; None: no cap. ``AGENT_STACK_TOOL_TIMEOUT`` (``off`` allowed).
+    tool_timeout_seconds: float | None = 300.0
     #: How ``web_fetch`` gets a page: ``reader`` (a free reader service fetches it, so this machine
     #: never connects to arbitrary hosts, but that service sees the URL) or ``direct``.
     #: ``AGENT_STACK_FETCH_MODE``.
@@ -208,6 +223,7 @@ class AppConfig:
             max_runtime_seconds=float(
                 source.get("AGENT_STACK_MAX_RUNTIME", defaults.max_runtime_seconds)
             ),
+            tool_timeout_seconds=_tool_timeout(source.get("AGENT_STACK_TOOL_TIMEOUT", "300")),
             external_access=_external_access(source),
             approval_mode=_approval_mode(
                 source.get("AGENT_STACK_APPROVAL_MODE", defaults.approval_mode)

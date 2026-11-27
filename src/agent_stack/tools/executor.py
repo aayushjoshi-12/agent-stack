@@ -120,26 +120,46 @@ class ToolExecutor:
     ) -> ToolExecutionResult:
         """Execute a single tool call, returning a result either way.
 
-        ``on_output`` is an optional ``(tool_call_id, stream, chunk)`` hook. When given,
-        the tool runs with a per-call sink installed, so a streaming tool can emit live
-        output through :func:`current_tool_output_sink`. Omitted, behaviour is unchanged.
+        Every call runs with a per-call sink installed, so a streaming tool can emit live
+        output through :func:`current_tool_output_sink`; ``on_output`` is an optional
+        ``(tool_call_id, stream, chunk)`` hook that receives it. A call that outlives the
+        timeout is cancelled (``run_command`` kills its process group on cancellation) and
+        becomes an error result carrying the output so far. A tool may set its own bound in
+        ``metadata["timeout_seconds"]`` (``None``: none).
         """
         tool_call_id: str = tool_call["id"]
         tool_name = str(tool_call["name"])
 
-        deadline = asyncio.timeout(self.timeout_seconds)
+        # What a streaming tool emitted so far: reported if the call is cut off.
+        captured: list[str] = []
+        captured_bytes = 0
+
+        async def sink(stream: str, chunk: str) -> None:
+            nonlocal captured_bytes
+            if captured_bytes < self.max_output_bytes:
+                captured.append(chunk)
+                captured_bytes += len(chunk.encode("utf-8"))
+            if on_output is not None:
+                await on_output(tool_call_id, stream, chunk)
+
+        timeout = self.timeout_seconds
+        deadline = asyncio.timeout(None)
         try:
             tool = self.registry.get(tool_name)
+            metadata = getattr(tool, "metadata", None) or {}
+            if "timeout_seconds" in metadata:
+                timeout = metadata["timeout_seconds"]  # a tool with its own bound
+            deadline = asyncio.timeout(timeout)
             async with deadline:
-                # Invoke with the *arguments*, never the whole tool_call dict.
-                if on_output is None:
+                with tool_output_sink(sink):
+                    # Invoke with the *arguments*, never the whole tool_call dict.
                     result = await tool.ainvoke(tool_call["args"])
-                else:
-                    result = await self._invoke_with_output(tool, tool_call, on_output)
         except Exception as exc:
             if isinstance(exc, TimeoutError) and deadline.expired():
+                so_far = "".join(captured)
                 exc = ToolTimeoutError(
-                    f"tool '{tool_name}' timed out after {self.timeout_seconds}s"
+                    f"tool '{tool_name}' timed out after {timeout:g}s"
+                    + (f"; output so far:\n{so_far}" if so_far else "")
                 )
             return ToolExecutionResult(
                 tool_call_id=tool_call_id,
@@ -161,20 +181,6 @@ class ToolExecutor:
             ),
             success=True,
         )
-
-    @staticmethod
-    async def _invoke_with_output(
-        tool: Any,
-        tool_call: Mapping[str, Any],
-        on_output: ToolOutputHandler,
-    ) -> Any:
-        tool_call_id: str = tool_call["id"]
-
-        async def sink(stream: str, chunk: str) -> None:
-            await on_output(tool_call_id, stream, chunk)
-
-        with tool_output_sink(sink):
-            return await tool.ainvoke(tool_call["args"])
 
     async def execute_many(
         self,

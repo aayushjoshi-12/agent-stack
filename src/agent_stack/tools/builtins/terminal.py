@@ -278,7 +278,8 @@ def run_command_tool(policy: WorkspacePolicy, *, confine: bool = True) -> BaseTo
         easier to review. The working directory resets each call to the workspace root
         unless ``cwd`` is given. Output is capped and a non-zero exit code is reported in
         the result, not raised; the whole process group is killed if the command exceeds
-        ``timeout`` (reported as timed out).
+        ``timeout`` (reported as timed out). The agent's tool timeout caps ``timeout``: a
+        longer value is cut off at the cap, with the output so far.
         """
         working_dir = policy.resolve(cwd)
         if confine and not policy.allow_external:
