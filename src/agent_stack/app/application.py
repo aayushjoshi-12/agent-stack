@@ -12,10 +12,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import re
 from collections.abc import AsyncIterator, Collection, Coroutine
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
@@ -30,6 +33,8 @@ from langchain_core.messages import (
 
 from agent_stack.app.chats import ChatLibrary
 from agent_stack.app.config import AppConfig
+from agent_stack.app.export import export_filename, free_path, render, scrub
+from agent_stack.app.export import parse_export_args as parse_export_args  # for gateways
 from agent_stack.app.timeline import LineTurn as LineTurn  # re-exported for gateways
 from agent_stack.app.timeline import RewindOutcome as RewindOutcome
 from agent_stack.app.timeline import SwitchResult as SwitchResult
@@ -60,6 +65,7 @@ from agent_stack.observability.metrics import Metrics
 from agent_stack.observability.redact import env_secrets, redact
 from agent_stack.persistence.event_log import EventLogStore
 from agent_stack.persistence.search import ChatSearchIndex
+from agent_stack.persistence.serializers import message_to_record, record_to_json
 from agent_stack.skills import SkillRegistry
 from agent_stack.tools.mcp import McpManager, McpServerStatus
 
@@ -430,6 +436,51 @@ class Application:
         messages = await self.session_store.get_messages(session_id)
         results = {m.tool_call_id: _text_of(m) for m in messages if isinstance(m, ToolMessage)}
         return [item for message in messages for item in _history_items(message, results)]
+
+    async def export_session(self, session_id: str, fmt: str = "md") -> str:
+        """The conversation as Markdown (``md``) or JSON (``json``), redacted like the logs."""
+        session = await self.get_session(session_id)
+        store: Any = self.session_store
+        if hasattr(store, "records"):  # the transcript lines, with their timestamps
+            records = [r for r in await store.records(session_id) if r.kind != "event"]
+            drop = {"data"}  # storage bookkeeping, not part of the conversation
+        else:  # a store that keeps only messages: no timestamps to show
+            now = datetime.now(UTC)
+            messages = await store.get_messages(session_id)
+            records = [
+                message_to_record(m, seq=i, run_id="", ts=now) for i, m in enumerate(messages)
+            ]
+            drop = {"data", "ts", "run_id"}
+        rows = [
+            {k: v for k, v in json.loads(record_to_json(r)).items() if k not in drop}
+            for r in records
+        ]
+        meta = {
+            "id": session_id,
+            "title": session.title if session else None,
+            "agent": session.agent_name if session else None,
+            "created_at": session.created_at if session else None,
+            "updated_at": session.updated_at if session else None,
+            "branch_of": session.branch_of if session else None,
+            "exported_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        }
+        return render(fmt, meta, scrub(rows, env_secrets()))
+
+    async def export_filename(self, session_id: str, fmt: str = "md") -> str:
+        """The default export file name: ``<slug-of-title>-<YYYY-MM-DD>.<fmt>``."""
+        session = await self.get_session(session_id)
+        return export_filename(session.title if session else None, fmt, datetime.now().date())
+
+    async def save_export(self, session_id: str, fmt: str = "md", path: str | None = None) -> Path:
+        """Write the export into the workspace (or to ``path``, relative to it); never overwrite."""
+        text = await self.export_session(session_id, fmt)
+        target = self.config.workspace / (path or "")
+        if not path or target.is_dir():
+            target = target / await self.export_filename(session_id, fmt)
+        target = free_path(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+        return target
 
     async def changed_files(self, session_id: str, run_id: str | None = None) -> list[FileDiff]:
         """The files the agent created or edited in a conversation (or one run), net of every edit.

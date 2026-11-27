@@ -67,6 +67,23 @@ async function call<T>(conn: Conn, path: string, init: RequestInit = {}): Promis
   return response.status === 204 ? (undefined as T) : ((await response.json()) as T);
 }
 
+/** The file name in a `Content-Disposition: attachment; filename="..."` header. Exported for tests. */
+export function attachmentName(disposition: string | null, fallback: string): string {
+  const match = /filename="?([^";]+)"?/i.exec(disposition ?? "");
+  return match?.[1] ?? fallback;
+}
+
+/** Download a conversation as Markdown or JSON: the file's name and contents. */
+async function exportSession(c: Conn, id: string, fmt: "md" | "json"): Promise<{ name: string; blob: Blob }> {
+  const response = await fetch(`${c.base}/sessions/${encodeURIComponent(id)}/export?fmt=${fmt}`, {
+    headers: { Authorization: `Bearer ${c.token}` },
+  }).catch(() => {
+    throw new ApiError("Cannot reach the agent-stack server. Is `agent-stack web` running?", 0);
+  });
+  if (!response.ok) throw new ApiError(`Export failed (${response.status})`, response.status);
+  return { name: attachmentName(response.headers.get("Content-Disposition"), `conversation.${fmt}`), blob: await response.blob() };
+}
+
 const json = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
 
 export const api = {
@@ -96,6 +113,7 @@ export const api = {
     call<{ model: string }>(c, "/model", { method: "PUT", body: JSON.stringify({ model }) }),
   compact: (c: Conn, id: string, focus: string) =>
     call<{ messages: number }>(c, `/sessions/${encodeURIComponent(id)}/compact`, json({ focus })),
+  exportSession,
   turns: (c: Conn, id: string) => call<TurnInfo[]>(c, `/sessions/${encodeURIComponent(id)}/turns`),
   rewind: (c: Conn, id: string, body: { owner_session_id: string; started_event_id: string; conversation: boolean; code: boolean }) =>
     call<RewindResult>(c, `/sessions/${encodeURIComponent(id)}/rewind`, json(body)),

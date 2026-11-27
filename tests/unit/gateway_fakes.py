@@ -232,6 +232,16 @@ class FakeApplication:
             return SessionUsage()
         return queue.pop(0) if len(queue) > 1 else queue[0]
 
+    async def export_session(self, session_id: str, fmt: str = "md") -> str:
+        return f"export of {session_id} as {fmt}"
+
+    async def export_filename(self, session_id: str, fmt: str = "md") -> str:
+        return f"chat-2026-11-27.{fmt}"
+
+    async def save_export(self, session_id: str, fmt: str = "md", path: str | None = None) -> Path:
+        self.exports = [*getattr(self, "exports", []), (session_id, fmt, path)]
+        return self.config.workspace / (path or f"chat-2026-11-27.{fmt}")
+
     async def session_history(self, session_id: str) -> list[HistoryItem]:
         return list(self.histories.get(session_id, ()))
 

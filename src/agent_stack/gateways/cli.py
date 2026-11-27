@@ -17,7 +17,12 @@ from rich.console import Console
 from rich.markup import escape
 from rich.text import Text
 
-from agent_stack.app.application import Application, IdentityResolver, SessionResolver
+from agent_stack.app.application import (
+    Application,
+    IdentityResolver,
+    SessionResolver,
+    parse_export_args,
+)
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.gateways.base import MessageEnvelope, usage_summary
 from agent_stack.gateways.tui.render import (
@@ -165,6 +170,15 @@ async def run_cli(
                 )
             except Exception as exc:
                 console.print(f"[red]cannot compact:[/] {escape(str(exc))}")
+            continue
+
+        if text == "/export" or text.startswith("/export "):
+            fmt, path = parse_export_args(text[len("/export") :])
+            try:
+                saved = await application.save_export(session, fmt, path)
+                console.print(f"[dim]exported to {escape(str(saved))}[/]")
+            except Exception as exc:
+                console.print(f"[red]cannot export:[/] {escape(str(exc))}")
             continue
 
         envelope = MessageEnvelope(principal=principal_id, session=session, text=text)

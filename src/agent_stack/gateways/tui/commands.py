@@ -14,6 +14,7 @@ from textual.markup import escape
 from textual.widgets import OptionList
 from textual.widgets.option_list import Option
 
+from agent_stack.app.application import parse_export_args
 from agent_stack.gateways.tui.chrome import PromptArea
 from agent_stack.gateways.tui.rows import UserMessage
 
@@ -64,6 +65,7 @@ class CommandsMixin(App[None]):
             "model": ("show or switch the model: /model provider:name", None),
             "compact": ("summarise the conversation to free context: /compact [focus]", None),
             "mcp": ("MCP servers: state and tool counts", self.action_show_mcp),
+            "export": ("save this conversation to a file: /export [md|json] [path]", None),
             "help": ("keyboard shortcuts", self.action_help),
             "quit": ("leave (prints how to continue)", self.action_quit_app),
         }
@@ -132,6 +134,9 @@ class CommandsMixin(App[None]):
         if name == "compact":
             self._spawn(self._compact(argument))  # waits for a running turn; keep the UI live
             return True
+        if name == "export":
+            await self._export(argument)
+            return True
         entry = self._builtins().get(name)
         if entry is None:
             return False
@@ -166,6 +171,19 @@ class CommandsMixin(App[None]):
             self.notify("\n".join(lines), title="MCP servers", timeout=15)
 
         self._spawn(show())
+
+    async def _export(self, argument: str) -> None:
+        """``/export [md|json] [path]``: write the conversation into the workspace."""
+        if self.tab.session_id is None:
+            self.notify("Nothing to export yet.")
+            return
+        fmt, path = parse_export_args(argument)
+        try:
+            saved = await self.application.save_export(self.tab.session_id, fmt, path)
+        except Exception as exc:
+            self.notify(f"Cannot export: {exc}", severity="error")
+            return
+        self.notify(f"Exported to {saved}")
 
     def _switch_model(self, wanted: str) -> None:
         """``/model`` shows the model; ``/model provider:name`` switches it for the next runs."""

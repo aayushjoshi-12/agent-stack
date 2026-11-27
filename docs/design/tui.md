@@ -71,7 +71,9 @@ into it (`send_input`): it shows dimmed as "queued" and moves into the conversat
 reads it, before its next step or, if it came during the final step, by the run continuing. `up` on
 an empty prompt takes the last queued message back (`withdraw_input`) to edit and resend, or to
 clear; once the model has read it, it cannot be taken back. If the run is stopped first, unread
-messages go back into the prompt. Built-in `/commands` work during a run; a skill waits for it.
+messages go back into the prompt. Built-in `/commands` work during a run; a skill waits for it. `/export
+[md|json] [path]` writes the conversation into the workspace (default
+`<slug-of-title>-<YYYY-MM-DD>.md`, `-2` added rather than overwrite) and notifies the path.
 
 ## Conversations
 

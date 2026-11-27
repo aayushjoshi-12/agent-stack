@@ -79,6 +79,7 @@ _COMMANDS = [
     ("mode", "Approval mode: /mode auto or /mode ask"),
     ("model", "Show or switch the model: /model provider:name"),
     ("compact", "Summarise the conversation to free context: /compact [focus]"),
+    ("export", "Send this conversation as a file: /export [md|json]"),
     ("cost", "What this conversation has cost so far"),
     ("mcp", "MCP servers: state and tool counts"),
     ("status", "Where you are and what is running"),
@@ -101,6 +102,7 @@ _HELP = (
     "/mode [ask|auto]  who approves tool calls: you, or a classifier that asks you when unsure\n"
     "/model [provider:name]  show the model, or switch it for the next messages\n"
     "/compact [focus]  summarise the conversation so far to free context\n"
+    "/export [md|json]  this conversation as a file (Markdown by default)\n"
     "/<skill> [request]  run a skill (type / to see them)\n"
     "/cost  what this conversation has cost (tokens and dollars)\n"
     "/mcp  the MCP servers, their state and tool counts\n"
@@ -459,6 +461,8 @@ class TelegramGateway:
             await self._cmd_model(chat, argument)
         elif command == "/compact":
             await self._cmd_compact(chat, argument)
+        elif command == "/export":
+            await self._cmd_export(chat, argument)
         elif command == "/cost":
             await self._cmd_cost(chat)
         elif command == "/status":
@@ -640,6 +644,21 @@ class TelegramGateway:
             if count
             else "Nothing new to compact.",
         )
+
+    async def _cmd_export(self, chat: _Chat, argument: str) -> None:
+        if chat.session is None:
+            await self._say(chat, "Nothing to export yet.")
+            return
+        fmt = argument.lower() or "md"
+        if fmt not in ("md", "json"):
+            await self._say(chat, "Usage: /export [md|json]")
+            return
+        try:
+            text = await self._app.export_session(chat.session, fmt)
+            name = await self._app.export_filename(chat.session, fmt)
+            await self._api.send_document(chat.chat_id, name, text.encode("utf-8"))
+        except Exception as exc:
+            await self._say(chat, f"Cannot export: {redact_secrets(str(exc))[:300]}")
 
     async def _cmd_model(self, chat: _Chat, argument: str) -> None:
         if not argument.strip():

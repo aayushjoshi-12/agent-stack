@@ -28,7 +28,7 @@ from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from agent_stack.app.application import Application, parse_ref
@@ -186,6 +186,7 @@ def create_app(
         allow_origins=list(settings.origins),
         allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
         allow_headers=["Authorization", "Content-Type", "Last-Event-ID"],
+        expose_headers=["Content-Disposition"],  # the export's file name
     )
     principal = settings.principal
 
@@ -274,6 +275,19 @@ def create_app(
         """Every logged event of the session (all runs), for rebuilding the UI on reload."""
         await owned_session(session_id)
         return [_event_json(e) for e in await application.replay(session_id=session_id)]
+
+    @api.get("/sessions/{session_id}/export", dependencies=auth)
+    async def export(
+        session_id: str, fmt: Annotated[str, Query(pattern="^(md|json)$")] = "md"
+    ) -> Response:
+        """The conversation as a downloadable Markdown or JSON file (redacted like the logs)."""
+        await owned_session(session_id)
+        name = await application.export_filename(session_id, fmt)
+        return Response(
+            await application.export_session(session_id, fmt),
+            media_type="application/json" if fmt == "json" else "text/markdown; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{name}"'},
+        )
 
     @api.get("/sessions/{session_id}/usage", dependencies=auth)
     async def usage(session_id: str) -> dict[str, Any]:

@@ -1768,7 +1768,7 @@ and compacted turns (no row) are skipped; no server change. `HistoryPanel`'s lis
 
 ---
 
-## Phase 41 — Export a conversation (`/export`)
+## Phase 41 — Export a conversation (`/export`) ✅
 
 **Goal.** `/export md` or `/export json` writes the conversation to a file.
 
@@ -1781,6 +1781,23 @@ and compacted turns (no row) are skipped; no server change. `HistoryPanel`'s lis
 **Acceptance**
 - unit tests for both formats (round-trip of the JSON, Markdown contains every user message and
   tool call); gateway tests for each `/export`.
+
+**Built.** `app/export.py` (pure: `render`, `scrub`, `export_filename`, `free_path`,
+`parse_export_args`) behind three `Application` methods: `export_session(id, fmt)` -> text,
+`export_filename(id, fmt)` -> `<slug-of-title>-<YYYY-MM-DD>.<fmt>`, and `save_export(id, fmt,
+path=None)` -> the written path (workspace-relative; a directory gets the default name; `-2`,
+`-3`... instead of overwriting). Rows are the transcript lines (`seq, ts, run_id, kind, content,
+tool_calls, tool_call_id`; `event` lines and `data` left out); every string goes through the
+log redactor (`redact(text, env_secrets())`) and string values under `key`/`token`/`secret`/
+`password` keys become `[redacted]`, so the transcript, which keeps raw user and model text,
+is never exported raw. JSON: `{"session": {id, title, agent, created_at, updated_at, branch_of,
+exported_at}, "messages": rows}`. Markdown: title, export/start date line, `## You` / `## Agent`
+with times, each tool call as its JSON arguments plus the result in `<details>` (cut at 4000
+characters with a count), a compaction as a marked blockquote without its file copies, skill
+bodies dropped from user text. Gateways: TUI builtin (works during a run), line REPL branch,
+web `GET /sessions/{id}/export?fmt=md|json` (attachment; `Content-Disposition` exposed via
+CORS) + composer `/export [md|json]` download, Telegram `/export [md|json]` via
+`TelegramApi.send_document` (multipart `sendDocument`; `call` takes `files`).
 
 ---
 

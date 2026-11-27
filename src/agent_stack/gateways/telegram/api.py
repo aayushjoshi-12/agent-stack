@@ -30,12 +30,23 @@ class TelegramApi:
         self._token = token
         self._client = client or httpx.AsyncClient(base_url=_BASE)
 
-    async def call(self, method: str, *, http_timeout: float = 15.0, **params: Any) -> Any:
+    async def call(
+        self,
+        method: str,
+        *,
+        http_timeout: float = 15.0,
+        files: dict[str, tuple[str, bytes]] | None = None,
+        **params: Any,
+    ) -> Any:
+        """JSON, or a multipart form when ``files`` (field -> (name, bytes)) are uploaded."""
+        fields = {k: v for k, v in params.items() if v is not None}
         try:
             response = await self._client.post(
                 f"/bot{self._token}/{method}",
-                json={k: v for k, v in params.items() if v is not None},
                 timeout=http_timeout,
+                json=None if files else fields,
+                data=fields if files else None,
+                files=files,
             )
             payload = response.json()
         except (httpx.HTTPError, ValueError) as exc:
@@ -88,6 +99,18 @@ class TelegramApi:
             text=text,
             parse_mode=parse_mode,
             reply_markup=reply_markup if reply_markup is not None else {"inline_keyboard": []},
+        )
+
+    async def send_document(
+        self, chat_id: int, filename: str, content: bytes, caption: str | None = None
+    ) -> None:
+        """Upload ``content`` as a file named ``filename``."""
+        await self.call(
+            "sendDocument",
+            http_timeout=60.0,
+            files={"document": (filename, content)},
+            chat_id=chat_id,
+            caption=caption,
         )
 
     async def set_my_commands(self, commands: list[tuple[str, str]]) -> None:

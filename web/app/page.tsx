@@ -287,6 +287,7 @@ export default function Page() {
       { name: "mode", description: "approval mode: /mode auto or /mode ask", kind: "builtin" },
       { name: "model", description: "show or switch the model: /model provider:name", kind: "builtin" },
       { name: "compact", description: "summarise the conversation to free context: /compact [focus]", kind: "builtin" },
+      { name: "export", description: "download this conversation: /export [md|json]", kind: "builtin" },
     ],
     [],
   );
@@ -753,6 +754,18 @@ export default function Page() {
                   void api
                     .compact(conn, activeId, argument)
                     .then((r) => setNotice(r.messages ? `Compacted ${r.messages} messages into a summary; the next message starts from it.` : "Nothing new to compact."))
+                    .catch(fail);
+                } else if (name === "export" && activeId) {
+                  void api
+                    .exportSession(conn, activeId, argument.trim().toLowerCase() === "json" ? "json" : "md")
+                    .then(({ name: file, blob }) => {
+                      const link = document.createElement("a");
+                      link.href = URL.createObjectURL(blob);
+                      link.download = file;
+                      link.click();
+                      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+                      setNotice(`Downloaded ${file}`);
+                    })
                     .catch(fail);
                 } else setNotice("Open a conversation first.");
               }}
