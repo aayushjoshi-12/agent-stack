@@ -25,6 +25,8 @@ from agent_stack.core.workspace import WorkspacePolicy
 from agent_stack.memory import MemoryIndex, memory_tools
 from agent_stack.memory.ideas import IdeaInbox, idea_tools
 from agent_stack.memory.store import SqliteMemoryStore
+from agent_stack.models.decisions import PREFIX as DECISIONS
+from agent_stack.models.decisions import DecisionModel, build_decision_model
 from agent_stack.models.factory import build_model
 from agent_stack.monitor import MonitorService, monitor_tools
 from agent_stack.observability.audit import AuditLogger, audit_log_path
@@ -128,6 +130,16 @@ _READ_ONLY_TOOLS = frozenset({"list_directory", "read_file", "search_files", "gr
 def _optional_model(name: str | None) -> BaseChatModel | None:
     """A side model by name, or ``None`` (failing to build it never stops the app)."""
     return _title_model(name)
+
+
+def _auto_model(name: str | None) -> BaseChatModel | DecisionModel | None:
+    """Auto mode's decider: a decision model (``decisions:<id>``, Jev) or a chat model."""
+    if name is None or not name.startswith(DECISIONS):
+        return _optional_model(name)
+    try:
+        return build_decision_model(name, os.environ.get("OPENROUTER_API_KEY"))
+    except ConfigurationError:  # no key: auto mode falls back to the rules and asking
+        return None
 
 
 def _title_model(name: str | None) -> BaseChatModel | None:
@@ -288,7 +300,7 @@ def build_application(config: AppConfig | None = None) -> Application:
         system_parts=composer,
         approvals=approvals,
         artifacts=artifacts,
-        advisor=AutoApprover(_optional_model(resolved.auto_model), workspace),
+        advisor=AutoApprover(_auto_model(resolved.auto_model), workspace),
         approval_mode=approval_mode,
         workspace_root=workspace,
     )

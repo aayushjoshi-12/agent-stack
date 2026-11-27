@@ -33,6 +33,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from agent_stack.core.approval import Advice, Verdict
+from agent_stack.models.decisions import DecisionModel
 from agent_stack.observability.redact import env_secrets, redact
 from agent_stack.tools.builtins.terminal import outside_paths
 
@@ -288,11 +289,12 @@ def rule_verdict(tool: str, args: Mapping[str, Any], root: Path) -> Advice | Non
 class AutoApprover:
     """The advisor used in auto mode."""
 
-    def __init__(self, model: BaseChatModel | None, workspace: Path) -> None:
+    def __init__(self, model: BaseChatModel | DecisionModel | None, workspace: Path) -> None:
         self._model = model
         self._root = workspace
         self._secrets = env_secrets()  # never send a known secret to the classifier's provider
         self.calls = 0  # model calls made, to see what auto mode costs
+        self.cost = 0.0  # USD the decision model reported (chat models report theirs elsewhere)
         self.rule_decisions = 0
 
     async def advise(self, tool: str, args: Mapping[str, Any], *, request: str | None) -> Advice:
@@ -303,10 +305,13 @@ class AutoApprover:
         if self._model is None:
             return Advice(Verdict.ASK, "no classifier model is configured")
         self.calls += 1
-        return _labelled("jev", await self._classify(tool, args, request))
+        if isinstance(self._model, DecisionModel):
+            return _labelled("jev", await self._decide(self._model, tool, args, request))
+        return _labelled("model", await self._classify(tool, args, request))
 
-    async def _classify(self, tool: str, args: Mapping[str, Any], request: str | None) -> Advice:
-        brief = json.dumps(
+    def _brief(self, tool: str, args: Mapping[str, Any], request: str | None) -> str:
+        """The call to judge, as JSON, with known secrets taken out."""
+        return json.dumps(
             {
                 "workspace": str(self._root),
                 "user_request": redact(request or "(not available)", self._secrets)[:1500],
@@ -315,7 +320,29 @@ class AutoApprover:
             },
             ensure_ascii=False,
         )
-        assert self._model is not None
+
+    async def _decide(
+        self, model: DecisionModel, tool: str, args: Mapping[str, Any], request: str | None
+    ) -> Advice:
+        """Ask the decision model (Jev) to pick the verdict; unsure picks become ask."""
+        try:
+            picked = await model.choose(
+                self._brief(tool, args, request), _SYSTEM_PROMPT, _VERDICT_OPTIONS
+            )
+        except Exception as exc:  # network, HTTP status, bad JSON
+            _LOG.warning("auto-mode decision model failed: %s", type(exc).__name__)
+            return Advice(Verdict.ASK, f"the decision model did not answer ({type(exc).__name__})")
+        self.cost += picked.cost
+        if picked.choice is None:
+            return Advice(Verdict.ASK, "the decision model gave no verdict")
+        sure = f"{picked.confidence:.0%} sure"
+        if picked.confidence < _MIN_CONFIDENCE:
+            return Advice(Verdict.ASK, f"unsure: it leaned to {picked.choice} ({sure})")
+        return Advice(Verdict(picked.choice), f"{_VERDICT_OPTIONS[picked.choice]} ({sure})")
+
+    async def _classify(self, tool: str, args: Mapping[str, Any], request: str | None) -> Advice:
+        brief = self._brief(tool, args, request)
+        assert isinstance(self._model, BaseChatModel)
         try:
             classifier = self._model.with_structured_output(_Decision, method="function_calling")
             decision = await asyncio.wait_for(
@@ -331,6 +358,16 @@ class AutoApprover:
             return Advice(Verdict.ASK, "the classifier's answer was not a verdict")
         reason = " ".join(decision.reason.split())[:200] or "no reason given"
         return Advice(Verdict(decision.verdict), reason)
+
+
+#: The verdicts the decision model picks from, each with what it means.
+_VERDICT_OPTIONS = {
+    "allow": "safe to run unasked: it serves the request and is contained and easy to undo",
+    "deny": "destructive or irreversible, sends out secrets or data, or was not asked for",
+    "ask": "unclear: hard to undo, reaches outside the workspace, uses the network or credentials",
+}
+#: Below this confidence the user is asked, whatever the model leaned to.
+_MIN_CONFIDENCE = 0.7
 
 
 def _labelled(source: str, advice: Advice) -> Advice:

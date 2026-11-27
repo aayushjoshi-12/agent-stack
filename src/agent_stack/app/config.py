@@ -153,10 +153,12 @@ class AppConfig:
     #: Who answers a gated call first: ``ask`` (you) or ``auto`` (a classifier model, then you when
     #: it is unsure). Switchable while running. ``AGENT_STACK_APPROVAL_MODE``.
     approval_mode: str = "auto"
-    #: The classifier model for auto mode (``AGENT_STACK_AUTO_MODEL``; ``off`` disables the model
-    #: so only the built-in rules decide and everything else is asked). Jev Router picks a model
-    #: per request and its price varies, so the rules settle the obvious cases without it.
-    auto_model: str | None = "openrouter:typesafe/jev-router"
+    #: What decides a gated call in auto mode when the built-in rules cannot
+    #: (``AGENT_STACK_AUTO_MODEL``). ``decisions:<id>`` is an OpenRouter decision model: Jev picks
+    #: allow, deny or ask in about half a second for a few thousandths of a cent. A chat model
+    #: (``provider:model``) also works, through structured output. ``off``: rules only, the rest
+    #: is asked.
+    auto_model: str | None = "decisions:~typesafe/jev-latest"
     #: Per-conversation spend cap in USD; a conversation at or over it starts no further run.
     #: ``None`` (the default) means no cap.
     budget_usd: float | None = None

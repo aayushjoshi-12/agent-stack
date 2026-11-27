@@ -74,7 +74,7 @@ def test_the_settings_are_validated_and_the_old_switch_still_works() -> None:
     assert AppConfig.from_env({"AGENT_STACK_EXTERNAL_ACCESS": "DENY"}).external_access == "deny"
     assert AppConfig.from_env({"AGENT_STACK_APPROVAL_MODE": "auto"}).approval_mode == "auto"
     assert AppConfig.from_env({"AGENT_STACK_AUTO_MODEL": "off"}).auto_model is None
-    assert AppConfig.from_env({}).auto_model == "openrouter:typesafe/jev-router"
+    assert AppConfig.from_env({}).auto_model == "decisions:~typesafe/jev-latest"
     for bad in ({"AGENT_STACK_EXTERNAL_ACCESS": "maybe"}, {"AGENT_STACK_APPROVAL_MODE": "yolo"}):
         with pytest.raises(ConfigurationError):
             AppConfig.from_env(bad)

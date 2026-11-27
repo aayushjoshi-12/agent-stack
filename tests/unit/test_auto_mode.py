@@ -23,6 +23,7 @@ from agent_stack.core.event_bus import InMemoryEventBus
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.runtime import AgentRuntime
 from agent_stack.core.session import InMemorySessionStore
+from agent_stack.models.decisions import Choice, DecisionModel
 from agent_stack.tools.executor import ToolExecutor
 from agent_stack.tools.registry import ToolRegistry
 from tests.fakes import FakeChatModel, FakeToolCallingModel, ai, call
@@ -150,7 +151,7 @@ def FakeClassifier(*replies: Any) -> FakeToolCallingModel:
 async def test_each_verdict_round_trips_through_structured_output(v: str) -> None:
     approver = AutoApprover(FakeClassifier(verdict(v, "  because\n reasons ")), ROOT)
     advice = await approver.advise("run_command", {"command": "make"}, request="build")
-    assert advice == Advice(Verdict(v), "[jev] because reasons")
+    assert advice == Advice(Verdict(v), "[model] because reasons")
 
 
 @pytest.mark.parametrize(
@@ -200,7 +201,7 @@ async def test_the_model_is_only_asked_when_rules_cannot_decide() -> None:
     )
     assert approver.calls == 0 and approver.rule_decisions == 1
     advice = await approver.advise("run_command", {"command": "pytest -q"}, request="run tests")
-    assert advice == Advice(Verdict.ALLOW, "[jev] runs the tests") and approver.calls == 1
+    assert advice == Advice(Verdict.ALLOW, "[model] runs the tests") and approver.calls == 1
     assert "run tests" in str(model.seen[0]) and "pytest -q" in str(model.seen[0])
 
 
@@ -401,4 +402,61 @@ async def test_advice_says_who_decided(tmp_path) -> None:  # type: ignore[no-unt
     ruled = await approver.advise("run_command", {"command": "git push"}, request="x")
     assert ruled.reason.startswith("[rule]")
     judged = await approver.advise("run_command", {"command": "frobnicate --now"}, request="x")
-    assert judged.reason == "[jev] fine" and approver.calls == 1
+    assert judged.reason == "[model] fine" and approver.calls == 1
+
+
+class FakeDecisions(DecisionModel):
+    """A decision model that answers from a script instead of the network."""
+
+    def __init__(self, answer: Choice | Exception) -> None:
+        super().__init__("~typesafe/jev-latest", "key")
+        self.answer = answer
+        self.asked: list[tuple[str, dict[str, str]]] = []
+
+    async def choose(self, state: str, instructions: str, options: Any) -> Choice:
+        self.asked.append((state, dict(options)))
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return self.answer
+
+
+@pytest.mark.parametrize(
+    ("answer", "verdict", "reason"),
+    [
+        (Choice("allow", 0.97, 0.00003), Verdict.ALLOW, "[jev] safe to run unasked"),
+        (Choice("deny", 0.92, 0.00003), Verdict.DENY, "[jev] destructive or irreversible"),
+        (
+            Choice("allow", 0.55, 0.00003),
+            Verdict.ASK,
+            "[jev] unsure: it leaned to allow (55% sure)",
+        ),
+        (Choice(None, 0.0, 0.00003), Verdict.ASK, "[jev] the decision model gave no verdict"),
+        (RuntimeError("502"), Verdict.ASK, "[jev] the decision model did not answer"),
+    ],
+)
+async def test_jev_decides_what_the_rules_cannot(
+    answer: Choice | Exception, verdict: Verdict, reason: str
+) -> None:
+    jev = FakeDecisions(answer)
+    approver = AutoApprover(jev, ROOT)
+
+    advice = await approver.advise(
+        "run_command", {"command": "curl -s https://example.com"}, request="check the site"
+    )
+
+    assert advice.verdict is verdict and advice.reason.startswith(reason)
+    [(state, options)] = jev.asked
+    assert "check the site" in state and "curl" in state
+    assert set(options) == {"allow", "deny", "ask"}
+    assert approver.calls == 1
+    if isinstance(answer, Choice):
+        assert approver.cost == pytest.approx(0.00003)
+
+
+async def test_the_rules_settle_a_call_without_asking_jev() -> None:
+    jev = FakeDecisions(Choice("deny", 1.0, 0.0))
+    approver = AutoApprover(jev, ROOT)
+
+    advice = await approver.advise("run_command", {"command": "ls"}, request="look")
+
+    assert advice.verdict is Verdict.ALLOW and jev.asked == [] and approver.calls == 0

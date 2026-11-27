@@ -114,7 +114,8 @@ tool call, so only use it in a container. See `docs/BENCHMARKS.md` for how it wa
 - **Auto mode** (`shift+tab` in the TUI prompt, `/mode auto`, the header button on the web). A tool
   call that would ask you is first judged by rules (catastrophic: refused; sudo, pushes,
   credentials, installs: always asked; plain reads and ordinary edits inside the workspace:
-  allowed) and then by a classifier model (`AGENT_STACK_AUTO_MODEL`, default Jev Router). The
+  allowed) and then by Jev, OpenRouter's decision model, which picks allow, deny or ask
+  (`AGENT_STACK_AUTO_MODEL`, default `decisions:~typesafe/jev-latest`; under 70% sure it asks). The
   classifier sees only your request and the call, never tool output or web pages, and anything it
   is unsure about, or any failure, comes back to you with its reason. Every decision is shown.
   It is a guard against accidents and prompt injection, not a sandbox.
