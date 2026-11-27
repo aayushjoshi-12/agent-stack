@@ -61,7 +61,8 @@ async function call<T>(conn: Conn, path: string, init: RequestInit = {}): Promis
   if (response.status === 401) throw new ApiError("The token was rejected.", 401);
   if (!response.ok) {
     const detail = await response.json().then((j: { detail?: unknown }) => String(j.detail ?? ""), () => "");
-    throw new ApiError(detail || `Request failed (${response.status})`, response.status);
+    const fallback = response.status === 429 ? "Too many requests: wait a moment and try again." : `Request failed (${response.status})`;
+    throw new ApiError(detail || fallback, response.status);
   }
   return response.status === 204 ? (undefined as T) : ((await response.json()) as T);
 }

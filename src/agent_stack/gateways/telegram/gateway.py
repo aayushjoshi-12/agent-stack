@@ -17,6 +17,7 @@ import contextlib
 import html
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -37,6 +38,7 @@ from agent_stack.gateways.base import (
     model_breakdown,
     usage_summary,
 )
+from agent_stack.gateways.ratelimit import RateLimiter
 from agent_stack.gateways.telegram.api import TelegramApi, TelegramError
 from agent_stack.gateways.telegram.render import (
     escape_fit,
@@ -50,6 +52,8 @@ __all__ = ["TelegramConfigError", "TelegramGateway", "TelegramSettings", "split_
 _LOG = logging.getLogger("agent_stack.telegram")
 #: A stranger (or a group) is logged at most once per this many seconds, per sender and reason.
 _DENIED_LOG_SECONDS = 60.0
+#: Rate limits are per this many seconds; a chat over one hears "slow down" once per window.
+_RATE_WINDOW = 60.0
 
 #: Telegram rejects messages longer than this many characters.
 MESSAGE_LIMIT = 4096
@@ -242,6 +246,10 @@ class TelegramGateway:
         self._stopped = False
         self._saved = self._read_state()
         self._denied_at: dict[tuple[int, str], float] = {}
+        config = application.config
+        self._message_limit = RateLimiter(config.rate_messages, _RATE_WINDOW, clock)
+        self._button_limit = RateLimiter(config.rate_requests, _RATE_WINDOW, clock)
+        self._slowed_at: dict[int, float] = {}
 
     # ── persisted chat state ─────────────────────────────────────────────────
     def _read_state(self) -> dict[str, dict[str, Any]]:
@@ -328,6 +336,8 @@ class TelegramGateway:
         if not self._is_owner_chat(sender, message.get("chat"), "message"):
             return
         chat_id = int(message["chat"]["id"])
+        if await self._too_fast(self._message_limit, chat_id):
+            return
         if "text" not in message:
             await self._say(self._chat(chat_id, sender), "I only understand text messages for now.")
             return
@@ -361,6 +371,21 @@ class TelegramGateway:
             return
         self._denied_at[key] = now
         _LOG.warning("ignored a %s (telegram user id %s)", reason, sender)
+
+    async def _too_fast(self, limiter: RateLimiter, chat_id: int) -> bool:
+        """Over the chat's rate: say so at most once a window, and drop the update."""
+        wait = limiter.take(str(chat_id))
+        if not wait:
+            return False
+        now = self._clock()
+        last = self._slowed_at.get(chat_id)
+        if last is None or now - last >= _RATE_WINDOW:
+            self._slowed_at[chat_id] = now
+            with contextlib.suppress(TelegramError):
+                await self._api.send_message(
+                    chat_id, f"Slow down: try again in {math.ceil(wait)}s."
+                )
+        return True
 
     def _first_time(self, key: str) -> bool:
         """Idempotency: Telegram redelivers updates after a reconnect; act on each only once."""
@@ -822,6 +847,8 @@ class TelegramGateway:
         sender = int(callback.get("from", {}).get("id", 0))
         message = callback.get("message") or {}
         if not self._is_owner_chat(sender, message.get("chat"), "button"):
+            return
+        if await self._too_fast(self._button_limit, int(message["chat"]["id"])):
             return
         chat = self._chat(int(message["chat"]["id"]), sender)
         data = str(callback.get("data", ""))

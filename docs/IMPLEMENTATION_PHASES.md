@@ -1735,19 +1735,36 @@ and compacted turns (no row) are skipped; no server change. `HistoryPanel`'s lis
 
 ---
 
-## Phase 40 — Rate limiting on the gateways
+## Phase 40 — Rate limiting on the gateways ✅
 
 **Goal.** A buggy or hostile client cannot hammer the API or the model bill.
 
 **Deliverables**
-- A small in-process token-bucket limiter (no new infrastructure) applied per principal:
-  web API (messages, inputs, everything else at a looser rate; `429` with `Retry-After`),
-  Telegram (per chat: messages and button presses; a polite "slow down" reply, at most once a
-  window). Limits in `AppConfig` (`AGENT_STACK_RATE_*`), `off` allowed.
+- `gateways/ratelimit.py`: `RateLimiter(rate, per=60, clock)`, one in-process token bucket per
+  key (holds `rate` tokens, earns `rate` back per minute); `take(key)` returns 0 or the seconds
+  until a token is back; `rate=None` is off. No new infrastructure.
+- `AppConfig.rate_messages` (`AGENT_STACK_RATE_MESSAGES`, default 30/min) for model-spending
+  actions and `rate_requests` (`AGENT_STACK_RATE_REQUESTS`, default 600/min) for everything else;
+  `off`/`0` disables. The gateways read them from `application.config` (no bootstrap change).
+- Web: a limit dependency chained on the auth check (a wrong token never drains the owner's
+  bucket), keyed by principal. Strict bucket: send message, queue input, compact, rewind, branch;
+  every other authed route the loose one. Excess: `429`, `Retry-After: <s>`, detail "Too many
+  requests: try again in Ns." `/health` and the SSE `/runs/{id}/events` are not limited (the API
+  serves no static files). `create_app(..., clock=)` for tests. `web/lib/api.ts` reads a 429
+  without detail as a sentence.
+- Telegram: per chat, after the owner check; text messages (commands too) take from the messages
+  bucket, button presses from the requests bucket. Excess: "Slow down: try again in Ns." at most
+  once per chat per 60 s window, the update otherwise ignored.
 
 **Acceptance**
-- tests: burst over the limit → 429 / refusal, recovery after the window, separate principals
-  have separate buckets; the SSE stream itself is not limited.
+- `tests/unit/test_ratelimit.py` (burst, refill, separate keys, off, config parsing),
+  `tests/integration/test_web_rate_limits.py` (429 + Retry-After, recovery on a fake clock, 401
+  spends nothing, spending calls on their own bucket, SSE unlimited, off),
+  `tests/unit/test_telegram_gateway.py` (one refusal per window, recovery, per-chat buckets,
+  buttons, off).
+- Smoke (`tmp/smoke_tests/P40-rate-limits-smoke.py`): the real `agent-stack web` with 5/1 limits:
+  `[200 x5, 429 x3]`, `Retry-After: 12`, 200 again after waiting; a second real message 429 with
+  `Retry-After: 60`; the event stream still served while the general bucket is empty.
 
 ---
 

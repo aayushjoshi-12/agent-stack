@@ -73,6 +73,18 @@ def _tool_timeout(raw: str) -> float | None:
     return seconds
 
 
+def _rate(name: str, raw: str) -> int | None:
+    if raw.strip().lower() in ("off", "0", "false", "no"):
+        return None
+    try:
+        rate = int(raw)
+    except ValueError:
+        rate = -1
+    if rate <= 0:
+        raise ConfigurationError(f"{name} must be a positive whole number or 'off'")
+    return rate
+
+
 def _approval_mode(raw: str) -> str:
     mode = raw.strip().lower()
     if mode not in ("ask", "auto"):
@@ -125,6 +137,13 @@ class AppConfig:
     #: Seconds one tool call may run before it is cut off (a command's process group killed) and
     #: the model told it timed out; None: no cap. ``AGENT_STACK_TOOL_TIMEOUT`` (``off`` allowed).
     tool_timeout_seconds: float | None = 300.0
+    #: Model-spending gateway actions (a message, a queued input, compact, rewind, branch) one
+    #: principal may make per minute, all at once if it likes; None: no limit.
+    #: ``AGENT_STACK_RATE_MESSAGES`` (``off`` allowed).
+    rate_messages: int | None = 30
+    #: Every other web API call or Telegram button press, per principal per minute; None: no
+    #: limit. The SSE event stream is never limited. ``AGENT_STACK_RATE_REQUESTS``.
+    rate_requests: int | None = 600
     #: How ``web_fetch`` gets a page: ``reader`` (a free reader service fetches it, so this machine
     #: never connects to arbitrary hosts, but that service sees the URL) or ``direct``.
     #: ``AGENT_STACK_FETCH_MODE``.
@@ -225,6 +244,12 @@ class AppConfig:
                 source.get("AGENT_STACK_MAX_RUNTIME", defaults.max_runtime_seconds)
             ),
             tool_timeout_seconds=_tool_timeout(source.get("AGENT_STACK_TOOL_TIMEOUT", "300")),
+            rate_messages=_rate(
+                "AGENT_STACK_RATE_MESSAGES", source.get("AGENT_STACK_RATE_MESSAGES", "30")
+            ),
+            rate_requests=_rate(
+                "AGENT_STACK_RATE_REQUESTS", source.get("AGENT_STACK_RATE_REQUESTS", "600")
+            ),
             external_access=_external_access(source),
             approval_mode=_approval_mode(
                 source.get("AGENT_STACK_APPROVAL_MODE", defaults.approval_mode)

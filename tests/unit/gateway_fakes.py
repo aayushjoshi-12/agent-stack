@@ -51,6 +51,8 @@ class FakeConfig:
     theme: str = "agent-stack-dark"
     context_window: int = 200_000
     budget_usd: float | None = None
+    rate_messages: int | None = 30
+    rate_requests: int | None = 600
 
 
 class FakeAgent:

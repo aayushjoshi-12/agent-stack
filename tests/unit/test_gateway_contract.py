@@ -16,6 +16,7 @@ from agent_stack.gateways.base import Gateway, MessageEnvelope
 _GATEWAY_FILES = (
     "src/agent_stack/gateways/base.py",
     "src/agent_stack/gateways/cli.py",
+    "src/agent_stack/gateways/ratelimit.py",
     "src/agent_stack/gateways/tui/__init__.py",
     "src/agent_stack/gateways/tui/app.py",
     "src/agent_stack/gateways/tui/render.py",
@@ -40,6 +41,7 @@ _ALLOWED = frozenset(
         "agent_stack.app.application",
         "agent_stack.core.events",
         "agent_stack.gateways.base",
+        "agent_stack.gateways.ratelimit",  # shared by gateways, imports nothing internal
     }
 )
 

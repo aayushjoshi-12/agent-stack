@@ -1366,3 +1366,63 @@ async def test_the_owner_in_their_private_chat_still_works_and_is_not_logged(
         await _say(gateway, "hello")
 
     assert "fine" in api.texts() and not caplog.records
+
+
+# ── rate limits (P40) ────────────────────────────────────────────────────────
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+async def test_a_chat_over_its_rate_hears_slow_down_once_a_window_and_recovers() -> None:
+    application = FakeApplication()
+    application.config.rate_messages = 2
+    clock = _Clock()
+    gateway, api = _gateway(application, clock=clock)
+
+    for _ in range(5):
+        await _say(gateway, "/help")
+    slow = [t for t in api.texts() if t.startswith("Slow down")]
+    assert slow == ["Slow down: try again in 30s."]  # once, not three times
+    assert len(api.sent) == 3  # two answers to /help, one refusal; the rest ignored
+
+    clock.now += 30
+    await _say(gateway, "/help")
+    await _say(gateway, "/help")  # over again, but still inside the refusal's window
+    assert len(api.sent) == 4
+
+    clock.now += 60  # a full bucket again, and a fresh window for the refusal
+    for _ in range(3):
+        await _say(gateway, "/help")
+    assert len(api.sent) == 7 and api.texts()[-1].startswith("Slow down")
+
+
+async def test_each_chat_has_its_own_bucket() -> None:
+    application = FakeApplication()
+    application.config.rate_messages = 1
+    settings = TelegramSettings(token=TOKEN, allowed_users=frozenset({OWNER, 8}))
+    gateway, api = _gateway(application, settings=settings, clock=_Clock())
+    await _say(gateway, "/help")
+    await _say(gateway, "/help", user=8)
+    assert [chat for chat, _, _ in api.sent] == [OWNER, 8]
+    assert not any(text.startswith("Slow down") for text in api.texts())
+
+
+async def test_button_presses_are_limited_too_and_off_disables_it() -> None:
+    application = FakeApplication()
+    application.config.rate_requests = 1
+    gateway, api = _gateway(application, clock=_Clock())
+    await gateway.handle_update(_callback("sw:5"))
+    await gateway.handle_update(_callback("sw:6"))
+    assert len(api.answers) == 1  # the second press is ignored
+    assert api.texts() == ["Slow down: try again in 60s."]
+
+    application = FakeApplication()
+    application.config.rate_messages = None
+    gateway, api = _gateway(application, clock=_Clock())
+    for _ in range(40):
+        await _say(gateway, "/help")
+    assert len(api.sent) == 40

@@ -7,7 +7,9 @@ stores. Security: the API can run tools on this machine, so
 * every route except ``/health`` needs ``Authorization: Bearer <AGENT_STACK_WEB_TOKEN>`` and the
   server refuses to start without a token (fail closed),
 * a session or run that belongs to another principal is reported as not found,
-* CORS allows only the configured origins (the Next.js dev server by default).
+* CORS allows only the configured origins (the Next.js dev server by default),
+* calls are rate limited per principal (P40): model-spending ones strictly, the rest loosely,
+  answering ``429`` with ``Retry-After``; the event stream is not limited.
 
 The event stream reads the durable event log (P29), so a client that drops and reconnects with
 ``Last-Event-ID`` (or ``?last_event_sequence=``) receives exactly the events it missed.
@@ -17,8 +19,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import secrets
-from collections.abc import AsyncIterator, Mapping
+import time
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Annotated, Any
 
@@ -37,6 +41,7 @@ from agent_stack.core.errors import (
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.run import Run
 from agent_stack.gateways.base import HistoryItem, MessageEnvelope, model_breakdown, usage_summary
+from agent_stack.gateways.ratelimit import RateLimiter
 
 __all__ = ["WebConfigError", "WebSettings", "create_app", "run_web"]
 
@@ -168,8 +173,13 @@ def _sse(event: AgentEvent) -> str:
     return f"id: {event.sequence}\nevent: {event.type}\ndata: {json.dumps(_event_json(event))}\n\n"
 
 
-def create_app(application: Application, settings: WebSettings) -> FastAPI:
-    """Build the FastAPI app over a wired ``Application``."""
+def create_app(
+    application: Application,
+    settings: WebSettings,
+    *,
+    clock: Callable[[], float] = time.monotonic,
+) -> FastAPI:
+    """Build the FastAPI app over a wired ``Application``; ``clock`` drives the rate limits."""
     api = FastAPI(title="agent-stack", docs_url=None, redoc_url=None, openapi_url=None)
     api.add_middleware(
         CORSMiddleware,
@@ -187,7 +197,23 @@ def create_app(application: Application, settings: WebSettings) -> FastAPI:
         if not ok:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing or wrong bearer token")
 
-    auth = [Depends(authorized)]
+    def limited(limiter: RateLimiter) -> Callable[..., Any]:
+        # A default, not an Annotated hint: the hint would be a string naming a local function.
+        async def check(_: None = Depends(authorized)) -> None:
+            wait = limiter.take(principal)  # after auth: a stranger cannot drain the owner's bucket
+            if wait:
+                seconds = math.ceil(wait)
+                raise HTTPException(
+                    status.HTTP_429_TOO_MANY_REQUESTS,
+                    f"Too many requests: try again in {seconds}s.",
+                    headers={"Retry-After": str(seconds)},
+                )
+
+        return check
+
+    config = application.config
+    auth = [Depends(limited(RateLimiter(config.rate_requests, clock=clock)))]
+    spend = [Depends(limited(RateLimiter(config.rate_messages, clock=clock)))]
 
     async def owned_session(session_id: str) -> None:
         session = await application.get_session(session_id)
@@ -320,7 +346,7 @@ def create_app(application: Application, settings: WebSettings) -> FastAPI:
             "after": diff.after,
         }
 
-    @api.post("/sessions/{session_id}/branch", dependencies=auth, status_code=201)
+    @api.post("/sessions/{session_id}/branch", dependencies=spend, status_code=201)
     async def branch(session_id: str, body: BranchBody) -> dict[str, str]:
         await owned_session(session_id)
         try:
@@ -361,7 +387,7 @@ def create_app(application: Application, settings: WebSettings) -> FastAPI:
         except ConfigurationError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)[:300]) from None
 
-    @api.post("/sessions/{session_id}/compact", dependencies=auth)
+    @api.post("/sessions/{session_id}/compact", dependencies=spend)
     async def compact(session_id: str, body: CompactBody) -> dict[str, int]:
         """Summarise the conversation so far in place (waits for a running turn to finish)."""
         await owned_session(session_id)
@@ -388,7 +414,7 @@ def create_app(application: Application, settings: WebSettings) -> FastAPI:
             for item in lineage
         ]
 
-    @api.post("/sessions/{session_id}/rewind", dependencies=auth)
+    @api.post("/sessions/{session_id}/rewind", dependencies=spend)
     async def rewind(session_id: str, body: RewindBody) -> dict[str, Any]:
         await owned_session(session_id)
         lineage = await application.timeline.lineage(session_id)
@@ -482,7 +508,7 @@ def create_app(application: Application, settings: WebSettings) -> FastAPI:
         except PersistenceError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
 
-    @api.post("/sessions/{session_id}/messages", dependencies=auth, status_code=202)
+    @api.post("/sessions/{session_id}/messages", dependencies=spend, status_code=202)
     async def send(session_id: str, body: MessageBody) -> dict[str, str]:
         await owned_session(session_id)
         await application.set_session_title(
@@ -510,7 +536,7 @@ def create_app(application: Application, settings: WebSettings) -> FastAPI:
             "parent_run_id": run.parent_run_id,
         }
 
-    @api.post("/runs/{run_id}/input", dependencies=auth)
+    @api.post("/runs/{run_id}/input", dependencies=spend)
     async def send_input(run_id: str, body: MessageBody) -> dict[str, bool]:
         """Queue a message into a working run; ``accepted`` is false once it has finished."""
         await owned_run(run_id)
@@ -555,7 +581,7 @@ def create_app(application: Application, settings: WebSettings) -> FastAPI:
             raise HTTPException(status.HTTP_409_CONFLICT, str(exc)[:200]) from None
         return {"approved": body.approve}
 
-    @api.get("/runs/{run_id}/events", dependencies=auth)
+    @api.get("/runs/{run_id}/events", dependencies=[Depends(authorized)])  # never limited
     async def run_events(
         run_id: str,
         last_event_id: Annotated[str | None, Header()] = None,
