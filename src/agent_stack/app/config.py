@@ -129,9 +129,6 @@ class AppConfig:
     #: this share of ``context_budget``; None turns automatic compaction off (``/compact`` still
     #: works). ``AGENT_STACK_COMPACT_AT``: a number in (0, 1], or ``off``.
     compact_at: float | None = 0.8
-    #: Model calls one run may make (tool calls are capped at twice this). The default suits
-    #: chat; a long autonomous task needs more. ``AGENT_STACK_MAX_STEPS``.
-    max_steps: int = 50
     #: Wall-clock seconds one run may take before it is stopped. ``AGENT_STACK_MAX_RUNTIME``.
     max_runtime_seconds: float = 1800.0
     #: Seconds one tool call may run before it is cut off (a command's process group killed) and
@@ -238,7 +235,6 @@ class AppConfig:
             context_window=int(source.get("AGENT_STACK_CONTEXT_WINDOW", defaults.context_window)),
             context_budget=int(source.get("AGENT_STACK_CONTEXT_BUDGET", defaults.context_budget)),
             compact_at=_compact_at(source.get("AGENT_STACK_COMPACT_AT", "0.8")),
-            max_steps=int(source.get("AGENT_STACK_MAX_STEPS", defaults.max_steps)),
             fetch_mode=_fetch_mode(source.get("AGENT_STACK_FETCH_MODE", defaults.fetch_mode)),
             max_runtime_seconds=float(
                 source.get("AGENT_STACK_MAX_RUNTIME", defaults.max_runtime_seconds)

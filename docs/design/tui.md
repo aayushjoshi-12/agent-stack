@@ -55,12 +55,20 @@ Textual breakpoints put classes on the screen (`HORIZONTAL_BREAKPOINTS`,
 | thinking | `Disclosure("think")` | collapsed, italic muted; toggles with Enter / click |
 | tool call | `Disclosure("tool")` | header `chevron · spinner/✓/✗ · name · detail · duration`; `run_command` opens while running |
 | tool output | body of the card | last 10 lines while running, last 60 when opened later; 400 lines kept, older ones counted as "earlier lines hidden"; diff-coloured when it looks like a unified diff |
-| subagent | `SubagentRow` | one row, updated in place: running spinner then ✓ done |
+| subagent | `SubagentRow` | one row, updated in place: running spinner then ✓ done, with its task; focusable, Enter or a click opens `SubagentScreen` |
 | failure | `Notice` | `$error-muted` surface with an error bar |
 
 A successful run adds no row. Finished cards fold when their output is longer than 6 lines
 (failed cards stay open); a card the user toggled keeps the user's choice. Child-run detail
 events stay out of the parent conversation.
+
+**Subagents (P48).** Their own events stay out of the conversation, but a subagent row opens
+`SubagentScreen`: a tall card with the agent, its state (`running 12s`, `done`, `failed`), its
+tool-call count and task, then its tool cards, thinking, replies and failure, and its own
+subagents as rows that open the same way. It reads the child run from the durable event log
+(`Application.replay`) every 0.5 s until the run ends, so a running subagent, a finished one and
+one in a reopened conversation (a stored `delegate` call gets a done row from the run id in its
+result) all show the same. `esc` closes it.
 
 ## Composer
 
@@ -158,5 +166,6 @@ what it uses from the rest of the app in an `if TYPE_CHECKING:` block at the top
 | `rows.py` | conversation rows: `UserMessage`, `AgentMessage`, `Notice`, `SubagentRow`, `Disclosure` |
 | `chrome.py` | `PromptArea`, `Sidebar` / `SidebarState`, `Welcome`, `HelpScreen` |
 | `screens.py` | modal screens: `ApprovalScreen`, `SessionPicker`, `RewindScreen`, `ChangesScreen`, `BranchesScreen` |
+| `subagent.py` | `SubagentScreen` (P48): one subagent's own run, read from the event log and polled while it runs |
 | `render.py` | Textual-free text helpers (shared with the line REPL) |
 | `theme.py`, `styles.tcss` | the themes and the stylesheet |

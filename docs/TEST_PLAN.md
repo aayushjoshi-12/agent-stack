@@ -63,7 +63,7 @@ and formatting), strict mypy and the whole suite. Gaps that remain:
   `test_returns_direct_model_response`, `test_executes_single_tool_call`,
   `test_executes_parallel_tool_calls`, `test_preserves_tool_call_ids`,
   `test_continues_after_tool_error`, `test_persists_messages_without_duplication`.
-- **P06** — `test_stops_after_max_steps`, `test_stops_after_max_tool_calls`,
+- **P06** — (the step and tool-call caps were removed in P48)
   `test_stops_after_runtime_deadline`, timeout/unknown-tool → error message.
 - **P08** — event ordering + sequence monotonicity.
 - **P09** — conversation round-trip, `.md` completeness, no payload columns in SQLite,

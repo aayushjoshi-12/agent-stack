@@ -16,8 +16,6 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from agent_stack.core.agent import Agent
 from agent_stack.core.errors import (
     RuntimeDeadlineExceeded,
-    StepLimitExceeded,
-    ToolCallLimitExceeded,
 )
 from agent_stack.core.limits import AgentLimits
 from agent_stack.core.runtime import AgentRuntime
@@ -126,35 +124,6 @@ async def test_tool_error_becomes_tool_message() -> None:
     tool_messages = [message for message in stored if isinstance(message, ToolMessage)]
     assert len(tool_messages) == 1
     assert tool_messages[0].status == "error"
-
-
-async def test_stops_after_max_steps() -> None:
-    store = InMemorySessionStore()
-    model = FakeChatModel(
-        [
-            ai(tool_calls=[call("echo", {"x": 1})]),
-            ai(tool_calls=[call("echo", {"x": 2})]),
-            ai(tool_calls=[call("echo", {"x": 3})]),
-        ]
-    )
-    runtime = _build_runtime(model, [EchoTool()], store, limits=AgentLimits(max_steps=1))
-
-    with pytest.raises(StepLimitExceeded):
-        await runtime.run(session_id="s1", user_id="u1", message="go")
-
-
-async def test_stops_after_max_tool_calls() -> None:
-    store = InMemorySessionStore()
-    model = FakeChatModel(
-        [
-            ai(tool_calls=[call("echo", {"x": 1}), call("echo", {"x": 2})]),
-            ai(tool_calls=[call("echo", {"x": 3})]),
-        ]
-    )
-    runtime = _build_runtime(model, [EchoTool()], store, limits=AgentLimits(max_tool_calls=2))
-
-    with pytest.raises(ToolCallLimitExceeded):
-        await runtime.run(session_id="s1", user_id="u1", message="go")
 
 
 async def test_stops_after_runtime_deadline() -> None:

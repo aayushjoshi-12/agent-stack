@@ -15,8 +15,9 @@ from textual.widgets import ContentSwitcher
 
 from agent_stack.gateways.tui.chrome import PromptArea
 from agent_stack.gateways.tui.render import tool_args_lines, tool_detail
-from agent_stack.gateways.tui.rows import AgentMessage, Disclosure, UserMessage
+from agent_stack.gateways.tui.rows import AgentMessage, Disclosure, SubagentRow, UserMessage
 from agent_stack.gateways.tui.screens import SessionPicker
+from agent_stack.gateways.tui.subagent import delegated_run
 from agent_stack.gateways.tui.tabs import Conversation, TabBar
 
 if TYPE_CHECKING:
@@ -201,6 +202,11 @@ class SessionsMixin(App[None]):
                         body=tool_args_lines(item.args),
                     )
                 )
+                child = delegated_run(item.result) if item.text == "delegate" else None
+                if child is not None:  # the stored subagent opens like a live one
+                    args = item.args or {}
+                    name, task = str(args.get("agent_name", "subagent")), str(args.get("task", ""))
+                    tab.mount(SubagentRow(name, run_id=child, task=task, done=True))
             tab.tokens += max(1, len(item.text) // 4)
         self._refresh_all()
         self.call_after_refresh(tab.scroll_end, animate=False)

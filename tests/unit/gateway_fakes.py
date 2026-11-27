@@ -181,6 +181,13 @@ class FakeApplication:
     async def get_run(self, run_id: str) -> None:
         return None
 
+    async def replay(
+        self, *, run_id: str | None = None, after_sequence: int | None = None, **_: Any
+    ) -> list[AgentEvent]:
+        """A run's logged events (the canned child stream), past ``after_sequence``."""
+        after = -1 if after_sequence is None else after_sequence
+        return [e for e in self._child_events.get(run_id or "", ()) if e.sequence > after]
+
     async def child_runs(self, parent_run_id: str) -> list[Any]:
         return []
 

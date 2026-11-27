@@ -2042,6 +2042,41 @@ its card opens a side panel that shows what it is doing, live, and what it did, 
 (`SubagentCard` task and Open), `core/run.py` (task on `subagent.started`). Tests:
 `web/lib/events.test.ts`. Smoke: `tmp/smoke_tests/P47-subagent-panel-ui.py`.
 
+## Phase 48 — No step or tool-call cap; subagents report before their time runs out; TUI subagent screen ✅
+
+**Goal.** A run is never cut off for making "too many" calls, a subagent that runs long still hands
+back what it found, and the TUI can open a subagent like the web UI.
+
+**Deliverables**
+- `AgentLimits.max_steps` / `max_tool_calls`, `StepLimitExceeded` / `ToolCallLimitExceeded` and
+  `AGENT_STACK_MAX_STEPS` are gone. A run is bounded by its time limit
+  (`AGENT_STACK_MAX_RUNTIME`), the conversation budget and cancellation.
+- The explorer gets half the run's time limit, so the parent can still use its report.
+- At 3/4 of its time a subagent is told (before its next model call) to stop and report what it
+  found, the evidence and what is unchecked. If the deadline still cuts it off (one slow call can
+  span the warning), it gets one more call, with any cut-off tool calls answered "not run", of up
+  to a quarter of its time (at least 60 s); the report is marked "(stopped at the time limit)" and
+  its usage counted. No report: the subagent fails as before. A top-level run is never nudged.
+- TUI: `SubagentRow` shows the task, is focusable and opens `SubagentScreen` (Enter or click),
+  which reads the child run's events from the log and polls while it runs. A stored `delegate`
+  call in a reopened conversation gets a done row that opens the same way.
+- A reply the event log cut short (`...[truncated N bytes]`) shows whole once the subagent has
+  finished, from its own transcript, in the TUI screen and the web panel.
+
+**Acceptance**
+- tests: the nudge reaches a subagent and not a top-level run; a subagent cut off mid-tool reports
+  through the extra call, and fails when it cannot; the P46 audit test with a deadline; TUI row to
+  screen (tool card, reply, done state, Esc) and the stored delegate row; limits removed from the
+  runtime, config, invariant and hardening tests.
+- Smoke with the real default model: a subagent past the old 100-call cap finishes (129 tool
+  calls); a subagent with a tight limit hands back a report.
+
+**Built.** `core/runtime.py` (`WRAP_UP`, `WRAP_UP_AT`, `_wrap_up`, the loop's deadline handler),
+`core/limits.py`, `core/errors.py`, `app/config.py`, `app/bootstrap.py` (explorer limits),
+`gateways/tui/subagent.py`, `rows.py` (`SubagentRow.Open`), `runs.py`, `sessions.py`,
+`styles.tcss`, `bench/harbor_agent.py`, `.env.example`. Tests: `test_subagents.py`,
+`test_hardening.py`, `test_tui.py`. Smoke: `tmp/smoke_tests/P48-subagent-wrap-up.py`.
+
 ---
 
 # Appendix A — Target file tree

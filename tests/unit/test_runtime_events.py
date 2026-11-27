@@ -13,7 +13,6 @@ from typing import Any
 import pytest
 
 from agent_stack.core.agent import Agent
-from agent_stack.core.errors import StepLimitExceeded
 from agent_stack.core.event_bus import InMemoryEventBus
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.limits import AgentLimits
@@ -157,10 +156,10 @@ async def test_no_reasoning_event_when_the_model_thinks_nothing() -> None:
 async def test_run_failed_is_emitted_and_reraised() -> None:
     store = InMemorySessionStore()
     bus = RecordingEventBus()
-    model = FakeChatModel([ai(tool_calls=[call("echo", {})]), ai(tool_calls=[call("echo", {})])])
-    runtime = _build_runtime(model, [EchoTool()], store, bus, limits=AgentLimits(max_steps=1))
+    model = FakeChatModel([ai(tool_calls=[call("echo", {})])])  # then it runs out: an error
+    runtime = _build_runtime(model, [EchoTool()], store, bus)
 
-    with pytest.raises(StepLimitExceeded):
+    with pytest.raises(AssertionError):
         await runtime.run(session_id="s1", user_id="u1", message="go")
 
     assert bus.published[-1].type is EventType.RUN_FAILED

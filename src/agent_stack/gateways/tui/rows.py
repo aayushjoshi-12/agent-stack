@@ -18,6 +18,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.css.query import NoMatches
 from textual.markup import escape
+from textual.message import Message
 from textual.widgets import Markdown, Static
 
 from agent_stack.gateways.tui.render import diff_kind
@@ -110,12 +111,26 @@ class Notice(Static):
         super().__init__(f"✗ {escape(text)}", classes="notice")
 
 
-class SubagentRow(Static):
-    """One subagent's lifecycle, updated in place (running → done)."""
+class SubagentRow(Static, can_focus=True):
+    """One subagent's lifecycle, updated in place (running → done); Enter or a click opens it."""
 
-    def __init__(self, name: str) -> None:
+    BINDINGS: ClassVar[list[Any]] = [Binding("enter", "open", "open", show=False)]
+
+    class Open(Message):
+        """Show this subagent's own run (the app pushes a ``SubagentScreen``)."""
+
+        def __init__(self, run_id: str, agent: str, task: str) -> None:
+            super().__init__()
+            self.run_id = run_id
+            self.agent = agent
+            self.brief = task
+
+    def __init__(self, name: str, *, run_id: str = "", task: str = "", done: bool = False) -> None:
         self.agent_name = name
-        self.outcome = "running"
+        self.run_id = run_id
+        self.brief = task
+        self.outcome = "completed" if done else "running"
+        self._stored = done  # from a reopened conversation: its duration is unknown
         self._t0 = time.monotonic()
         self._elapsed = 0.0
         super().__init__(classes="subagent-row")
@@ -132,6 +147,13 @@ class SubagentRow(Static):
         self._elapsed = time.monotonic() - self._t0
         self._paint(time.monotonic())
 
+    def on_click(self) -> None:
+        self.action_open()
+
+    def action_open(self) -> None:
+        if self.run_id:
+            self.post_message(self.Open(self.run_id, self.agent_name, self.brief))
+
     def tick(self, now: float) -> None:
         if self.running:
             self._paint(now)
@@ -142,10 +164,16 @@ class SubagentRow(Static):
             glyph = f"[$accent]{spinner_frame(now)}[/]"
             meta = f"running {format_duration(now - self._t0)}"
         elif self.outcome == "completed":
-            glyph, meta = "[$success]✓[/]", f"done {format_duration(self._elapsed)}"
+            took = "" if self._stored else f" {format_duration(self._elapsed)}"
+            glyph, meta = "[$success]✓[/]", f"done{took}"
         else:
             glyph, meta = "[$error]✗[/]", f"{escape(self.outcome)} {format_duration(self._elapsed)}"
-        self.update(f"  ⤷ {glyph} [bold]{name}[/] [$foreground-muted]subagent · {meta}[/]")
+        task = " ".join(self.brief.split())
+        task = f" · {escape(task[:60])}{'...' if len(task) > 60 else ''}" if task else ""
+        hint = " · enter to open" if self.run_id else ""
+        self.update(
+            f"  ⤷ {glyph} [bold]{name}[/] [$foreground-muted]subagent · {meta}{task}{hint}[/]"
+        )
 
 
 # ── collapsible cards (tool calls, thinking) ─────────────────────────────────

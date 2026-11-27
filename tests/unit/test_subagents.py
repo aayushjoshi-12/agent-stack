@@ -25,7 +25,7 @@ from agent_stack.core.factory import AgentFactory
 from agent_stack.core.limits import AgentLimits
 from agent_stack.core.run import RunManager, RunRequest, RunStatus
 from agent_stack.core.run_context import RunContext, run_context
-from agent_stack.core.runtime import AgentRuntime
+from agent_stack.core.runtime import WRAP_UP, AgentRuntime
 from agent_stack.core.session import InMemorySessionStore
 from agent_stack.gateways.base import MessageEnvelope
 from agent_stack.observability.metrics import Metrics
@@ -549,11 +549,16 @@ async def test_a_subagent_is_stored_inside_its_chat_with_an_audit_record(tmp_pat
     files = FileConversationStore(tmp_path)
 
     explorer = Agent(
-        name="explorer", model="test:model", limits=AgentLimits(max_steps=10, max_tool_calls=1)
+        name="explorer",
+        model="test:model",
+        limits=AgentLimits(max_runtime_seconds=0.3, tool_timeout_seconds=30.0),
     )
-    probe = ConcurrencyProbe(seconds=0)
-    child_model = FakeChatModel([ai(tool_calls=[call("probe", {}), call("probe", {})])])
-    child_runtime = _runtime(explorer, child_model, [probe], session_store, bus)
+    # out of time mid-tool, and its wrap-up call fails (no reply left): the child fails
+    child_model = FakeChatModel(
+        [ai(tool_calls=[call("probe", {}), call("slow", {"seconds": 5})], id="a1")]
+    )
+    tools = [ConcurrencyProbe(seconds=0), SleepTool("slow", 5.0)]
+    child_runtime = _runtime(explorer, child_model, tools, session_store, bus)
     parent_model = FakeChatModel(
         [
             ai(tool_calls=[call("delegate", {"agent_name": "explorer", "task": "look"})]),
@@ -588,7 +593,7 @@ async def test_a_subagent_is_stored_inside_its_chat_with_an_audit_record(tmp_pat
     assert record["parent_run_id"] == handle.run_id
     assert record["task"] == "look"
     assert record["status"] == "failed"
-    assert "limit" in record["error"].lower()
+    assert "runtime limit" in record["error"]
     # The parent was told how far the child got.
     assert any("1 steps, 2 tool calls" in str(m.content) for m in parent_model.calls[1])
 
@@ -603,3 +608,47 @@ def test_an_older_subagent_folder_is_still_found(tmp_path: Any) -> None:
     assert files.session_dir("c::explorer::x::helper::y") == (
         tmp_path / "sessions" / "c" / "subagents" / "explorer-x" / "subagents" / "helper-y"
     )
+
+
+async def test_a_subagent_near_its_time_limit_is_told_to_report() -> None:
+    """P48: no step or tool-call cap; at 3/4 of its time a subagent is asked for its findings."""
+    session_store = InMemorySessionStore()
+    run_store = InMemoryRunStore()
+    bus = RecordingEventBus()
+    explorer = Agent(
+        name="explorer",
+        model="test:model",
+        limits=AgentLimits(max_runtime_seconds=1.0, tool_timeout_seconds=30.0),
+    )
+    child_model = FakeChatModel(
+        [ai(tool_calls=[call("slow", {})]), ai("run.py starts runs; tests unchecked")]
+    )
+    child_runtime = _runtime(explorer, child_model, [SleepTool("slow", 0.8)], session_store, bus)
+    parent_model = FakeChatModel(
+        [
+            ai(tool_calls=[call("delegate", {"agent_name": "explorer", "task": "look"})]),
+            ai("done"),
+        ]
+    )
+    parent = Agent(
+        name="assistant",
+        model="test:model",
+        tools=(delegate,),
+        subagents=(SubAgentSpec("explorer", "Read-only exploration.", explorer),),
+    )
+    manager = RunManager(
+        runtime=_runtime(parent, parent_model, [delegate], session_store, bus),
+        run_store=run_store,
+        event_bus=bus,
+        agent_factory=FakeFactory({"explorer": child_runtime}),
+    )
+
+    handle = await manager.start(RunRequest(session_id="s1", user_id="u1", message="go"))
+    await handle.result()
+
+    [child] = await run_store.list_runs(handle.run_id)
+    assert child.status is RunStatus.COMPLETED
+    assert str(child_model.calls[1][-1].content) == WRAP_UP
+    assert "run.py starts runs" in str(parent_model.calls[1][-1].content)
+    # a top-level run is never nudged
+    assert all(str(m.content) != WRAP_UP for call_ in parent_model.calls for m in call_)

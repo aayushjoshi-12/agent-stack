@@ -265,18 +265,6 @@ async def test_inv6_every_run_ends_in_a_terminal_status_with_at_most_one_termina
     scenarios = {
         "success": (FakeChatModel([ai("ok")]), (), None, None),
         "model error": (_CrashingModel(), (), None, None),
-        "step limit": (
-            FakeChatModel([ai(tool_calls=[call("t", id=f"c{i}")]) for i in range(3)]),
-            [CountingTool("t")],
-            AgentLimits(max_steps=1),
-            None,
-        ),
-        "tool-call limit": (
-            FakeChatModel([ai(tool_calls=[call("t", id="a"), call("t", id="b")])]),
-            [CountingTool("t")],
-            AgentLimits(max_tool_calls=1),
-            None,
-        ),
         "deadline": (
             FakeChatModel([ai(tool_calls=[call("slow", id="s")])]),
             [SleepTool("slow", 5.0)],

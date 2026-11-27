@@ -35,14 +35,6 @@ class BudgetExceededError(LimitExceededError):
     """A conversation has spent its configured budget; no further run is started for it."""
 
 
-class StepLimitExceeded(LimitExceededError):
-    """Raised when the loop exceeds its maximum number of steps."""
-
-
-class ToolCallLimitExceeded(LimitExceededError):
-    """Raised when a run exceeds its maximum number of tool calls."""
-
-
 class RuntimeDeadlineExceeded(LimitExceededError):
     """The run used up ``AgentLimits.max_runtime_seconds`` of wall-clock time."""
 

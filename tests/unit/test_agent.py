@@ -26,8 +26,6 @@ def test_agent_defaults() -> None:
 
 def test_agent_limits_defaults() -> None:
     limits = AgentLimits()
-    assert limits.max_steps == 50
-    assert limits.max_tool_calls == 100
     assert limits.max_runtime_seconds == 1800.0
     assert limits.max_concurrent_tools == 8
     assert limits.max_subagent_depth == 2

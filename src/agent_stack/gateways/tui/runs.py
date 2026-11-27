@@ -22,6 +22,7 @@ from agent_stack.gateways.tui.chrome import PromptArea, Welcome
 from agent_stack.gateways.tui.render import tool_args_lines, tool_detail
 from agent_stack.gateways.tui.rows import AgentMessage, Disclosure, Notice, SubagentRow, UserMessage
 from agent_stack.gateways.tui.screens import ApprovalScreen
+from agent_stack.gateways.tui.subagent import SubagentScreen
 from agent_stack.gateways.tui.tabs import Conversation
 
 if TYPE_CHECKING:
@@ -268,11 +269,17 @@ class RunsMixin(App[None]):
         name = str(event.data.get("agent_name", "subagent"))
         if child:
             tab.last_child_id = child
-        row = SubagentRow(name)
+        row = SubagentRow(name, run_id=child, task=str(event.data.get("task", "")))
         tab.mount(row)
         if child:
             tab.subagent_rows[child] = row
         self._refresh_sidebar()
+
+    def on_subagent_row_open(self, message: SubagentRow.Open) -> None:
+        """Show what a subagent is doing (or did), from its row here or in another subagent."""
+        self.push_screen(
+            SubagentScreen(self.application, message.run_id, message.agent, message.brief)
+        )
 
     def _on_subagent_completed(self, tab: Conversation, event: AgentEvent) -> None:
         child = str(event.data.get("child_run_id", ""))

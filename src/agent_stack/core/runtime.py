@@ -44,8 +44,6 @@ from agent_stack.core.context import (
 from agent_stack.core.errors import (
     AgentStackError,
     RuntimeDeadlineExceeded,
-    StepLimitExceeded,
-    ToolCallLimitExceeded,
     error_text,
 )
 from agent_stack.core.event_bus import EventBus
@@ -163,6 +161,15 @@ class _Coalescer:
             await self._emit(self._kind, self._text)
             self._text = ""
             self._last = time.monotonic()
+
+
+#: Told to a subagent at ``WRAP_UP_AT`` of its time limit, so the parent gets its findings (P48).
+WRAP_UP = (
+    "Most of your time is used up. Stop exploring and reply now, without calling tools, with what "
+    "you found so far: the answer or partial answer, the evidence (file paths), and what is "
+    "still unchecked."
+)
+WRAP_UP_AT = 0.75
 
 
 class AgentRuntime:
@@ -335,6 +342,13 @@ class AgentRuntime:
 
         limits = self._agent.limits
         deadline = time.monotonic() + limits.max_runtime_seconds
+        # A subagent is told to report at 3/4 of its time, so it hands back what it found
+        # instead of being cut off with nothing (P48).
+        wrap_up_at = (
+            time.monotonic() + WRAP_UP_AT * limits.max_runtime_seconds
+            if parent_run_id is not None
+            else None
+        )
         step_count = 0
         tool_call_count = 0
         spiral_nudge = False
@@ -363,54 +377,261 @@ class AgentRuntime:
         )
 
         try:
-            while True:
-                self._check_cancelled(cancel)
-                # Cooperative input injection (P20): drain anything the parent (or the user,
-                # mid-run) pushed at this boundary — right before the model call, which also
-                # covers the gap between tool batches. The callable is the seam; no asyncio here.
-                await take_input(close=False)
-                if spiral_nudge:
-                    spiral_nudge = False
-                    new_messages.append(HumanMessage(content=SPIRAL_NUDGE))
-                await self._maybe_compact(
-                    resident=resident,
-                    history=history,
-                    new_messages=new_messages,
-                    memo=summary_memo,
-                    run_id=run_id,
-                    session_id=session_id,
-                    parent_run_id=parent_run_id,
-                    deadline=deadline,
-                )
-                model_input = await self._model_input(
-                    resident=resident, history=history, new_messages=new_messages, memo=summary_memo
-                )
-                response = await self._within(
-                    deadline,
-                    self._invoker(
-                        model_input,
-                        step=step_count,
-                        cancel=cancel,
+            try:
+                while True:
+                    self._check_cancelled(cancel)
+                    # Cooperative input injection (P20): drain anything the parent (or the user,
+                    # mid-run) pushed at this boundary — right before the model call, which also
+                    # covers the gap between tool batches. The callable is the seam; no asyncio here.
+                    await take_input(close=False)
+                    if spiral_nudge:
+                        spiral_nudge = False
+                        new_messages.append(HumanMessage(content=SPIRAL_NUDGE))
+                    if wrap_up_at is not None and time.monotonic() >= wrap_up_at:
+                        wrap_up_at = None
+                        new_messages.append(HumanMessage(content=WRAP_UP))
+                    await self._maybe_compact(
+                        resident=resident,
+                        history=history,
+                        new_messages=new_messages,
+                        memo=summary_memo,
                         run_id=run_id,
                         session_id=session_id,
                         parent_run_id=parent_run_id,
-                    ),
-                )
-                if not isinstance(response, AIMessage):
-                    raise AgentStackError(
-                        f"Model returned {type(response).__name__}, expected AIMessage"
+                        deadline=deadline,
                     )
+                    model_input = await self._model_input(
+                        resident=resident,
+                        history=history,
+                        new_messages=new_messages,
+                        memo=summary_memo,
+                    )
+                    response = await self._within(
+                        deadline,
+                        self._invoker(
+                            model_input,
+                            step=step_count,
+                            cancel=cancel,
+                            run_id=run_id,
+                            session_id=session_id,
+                            parent_run_id=parent_run_id,
+                        ),
+                    )
+                    if not isinstance(response, AIMessage):
+                        raise AgentStackError(
+                            f"Model returned {type(response).__name__}, expected AIMessage"
+                        )
+                    new_messages.append(response)
+                    step_count += 1
+
+                    usage = usage_data(response)
+                    if usage is not None and self._context_builder is not None:
+                        self._context_builder.calibrate(
+                            summary_memo["raw_estimate"],
+                            int(usage["input_tokens"]),
+                            self._tool_overhead,
+                        )
+                    if usage is not None:
+                        await self._emit(
+                            EventType.MODEL_USAGE,
+                            run_id=run_id,
+                            session_id=session_id,
+                            parent_run_id=parent_run_id,
+                            data=usage,
+                        )
+
+                    reasoning = reasoning_text(response)
+                    if count_second_guessing(reasoning) >= SPIRAL_THRESHOLD:
+                        spiral_nudge = True
+                    if reasoning:
+                        await self._emit(
+                            EventType.MODEL_REASONING,
+                            run_id=run_id,
+                            session_id=session_id,
+                            parent_run_id=parent_run_id,
+                            data={"text": reasoning},
+                        )
+
+                    await self._emit(
+                        EventType.ASSISTANT_MESSAGE,
+                        run_id=run_id,
+                        session_id=session_id,
+                        parent_run_id=parent_run_id,
+                        data={
+                            "content": response.content,
+                            "tool_calls": [tool_call["name"] for tool_call in response.tool_calls],
+                        },
+                    )
+
+                    await self._checkpoint(
+                        checkpoint_store,
+                        run_id=run_id,
+                        session_id=session_id,
+                        step=step_count,
+                        tool_call_count=tool_call_count,
+                        status=CheckpointStatus.AI_MESSAGE,
+                    )
+
+                    if not response.tool_calls:
+                        # A message that arrived during this last step is answered in this run;
+                        # with none waiting the inbox closes, so a late one is refused, never lost.
+                        if await take_input(close=True):
+                            continue
+                        break
+
+                    tool_call_count += len(response.tool_calls)
+
+                    # Idempotency: calls already recorded for this run (by a previous attempt
+                    # that crashed mid-loop) are skipped, so a mutating tool never runs twice.
+                    completed_ids = (
+                        await checkpoint_store.completed_tool_call_ids(run_id)
+                        if checkpoint_store is not None
+                        else set()
+                    )
+                    pending = [
+                        tool_call
+                        for tool_call in response.tool_calls
+                        if tool_call["id"] not in completed_ids
+                    ]
+
+                    for tool_call in pending:
+                        await self._emit(
+                            EventType.TOOL_STARTED,
+                            run_id=run_id,
+                            session_id=session_id,
+                            parent_run_id=parent_run_id,
+                            data={
+                                "tool": tool_call["name"],
+                                "tool_call_id": tool_call["id"],
+                                "args": dict(tool_call["args"]),
+                            },
+                        )
+
+                    # Check again right before tool execution: a cancellation requested while
+                    # the model was thinking still stops the tools from running.
+                    self._check_cancelled(cancel)
+
+                    # Human-in-the-loop (P26): gated calls wait for a decision, one at a time.
+                    # Rejected calls never execute; they become error ToolMessages. The time a
+                    # human takes is not the run's time, so it is added back to the deadline.
+                    rejected: dict[str, ToolExecutionResult] = {}
+                    asked = time.monotonic()
+                    for gated in pending:
+                        if not self._agent.tool_policy.needs_approval(
+                            str(gated["name"]), gated["args"]
+                        ):
+                            continue
+                        note: str | None = None
+                        if self._advisor is not None and (
+                            self._approval_mode is not None and self._approval_mode.value == "auto"
+                        ):
+                            advice = await self._advise(
+                                gated,
+                                request=_request_text(new_messages),
+                                run_id=run_id,
+                                session_id=session_id,
+                                parent_run_id=parent_run_id,
+                            )
+                            if advice.verdict is Verdict.ALLOW:
+                                continue
+                            if advice.verdict is Verdict.DENY:
+                                rejected[str(gated["id"])] = _rejected_result(
+                                    gated,
+                                    f"auto mode blocked this call: {advice.reason}. "
+                                    "Do not retry it unchanged; do something safer or ask the user.",
+                                )
+                                continue
+                            note = advice.reason  # ASK: the human decides, told why
+                        if self._approvals is None:
+                            # Fail closed: a gated tool with nobody to ask must not run.
+                            rejected[str(gated["id"])] = _rejected_result(
+                                gated,
+                                "this tool needs approval and no approval channel is configured",
+                            )
+                            continue
+                        status = await self._await_approval(
+                            gated,
+                            run_id=run_id,
+                            session_id=session_id,
+                            user_id=user_id,
+                            parent_run_id=parent_run_id,
+                            note=note,
+                        )
+                        if status is not ApprovalStatus.APPROVED:
+                            rejected[str(gated["id"])] = _rejected_result(gated)
+                    deadline += time.monotonic() - asked
+                    self._check_cancelled(cancel)
+                    runnable = [c for c in pending if str(c["id"]) not in rejected]
+
+                    def run_tools(batch: list[Any] = runnable) -> Awaitable[list[Any]]:
+                        return self._tool_executor.execute_many(
+                            batch,
+                            on_output=self._tool_output_emitter(
+                                run_id=run_id,
+                                session_id=session_id,
+                                parent_run_id=parent_run_id,
+                                tool_calls=batch,
+                            ),
+                        )
+
+                    executed = await self._within(deadline, run_tools)
+                    by_id = {r.tool_call_id: r for r in [*executed, *rejected.values()]}
+                    tool_results = [by_id[str(c["id"])] for c in pending]
+
+                    if checkpoint_store is not None and tool_results:
+                        # The whole batch lands in one transaction, atomically visible to recovery.
+                        await checkpoint_store.record_tool_executions(run_id, tool_results)
+
+                    for result in tool_results:
+                        await self._emit(
+                            EventType.TOOL_COMPLETED,
+                            run_id=run_id,
+                            session_id=session_id,
+                            parent_run_id=parent_run_id,
+                            data={
+                                "tool": result.tool_name,
+                                "tool_call_id": result.tool_call_id,
+                                "ok": result.success,
+                                "error": result.error,
+                            },
+                        )
+
+                    # Project executed results back into the conversation in the model's call
+                    # order; skipped calls get a placeholder (SQLite holds no tool content to
+                    # replay, so the previous result is not reconstructed here).
+                    result_by_id = {result.tool_call_id: result.message for result in tool_results}
+                    for tool_call in response.tool_calls:
+                        tool_call_id = tool_call["id"]
+                        if tool_call_id is None:
+                            raise AgentStackError("Model returned a tool call without an id")
+                        tool_message = result_by_id.get(tool_call_id)
+                        if tool_message is None:
+                            tool_message = ToolMessage(
+                                content="(skipped: already completed in a previous attempt of this run)",
+                                tool_call_id=tool_call_id,
+                            )
+                        new_messages.append(tool_message)
+
+                    if tool_results:
+                        await self._checkpoint(
+                            checkpoint_store,
+                            run_id=run_id,
+                            session_id=session_id,
+                            step=step_count,
+                            tool_call_count=tool_call_count,
+                            status=CheckpointStatus.TOOL_BATCH_COMPLETED,
+                        )
+            except RuntimeDeadlineExceeded:
+                if parent_run_id is None:
+                    raise
+                # A subagent cut off mid-call (the warning came too late) still reports.
+                wrap_up = await self._wrap_up(resident, history, new_messages, memo=summary_memo)
+                if wrap_up is None:
+                    raise
+                response = wrap_up
                 new_messages.append(response)
                 step_count += 1
-
-                usage = usage_data(response)
-                if usage is not None and self._context_builder is not None:
-                    self._context_builder.calibrate(
-                        summary_memo["raw_estimate"],
-                        int(usage["input_tokens"]),
-                        self._tool_overhead,
-                    )
-                if usage is not None:
+                if (usage := usage_data(response)) is not None:  # the wrap-up is spend too
                     await self._emit(
                         EventType.MODEL_USAGE,
                         run_id=run_id,
@@ -418,196 +639,13 @@ class AgentRuntime:
                         parent_run_id=parent_run_id,
                         data=usage,
                     )
-
-                reasoning = reasoning_text(response)
-                if count_second_guessing(reasoning) >= SPIRAL_THRESHOLD:
-                    spiral_nudge = True
-                if reasoning:
-                    await self._emit(
-                        EventType.MODEL_REASONING,
-                        run_id=run_id,
-                        session_id=session_id,
-                        parent_run_id=parent_run_id,
-                        data={"text": reasoning},
-                    )
-
                 await self._emit(
                     EventType.ASSISTANT_MESSAGE,
                     run_id=run_id,
                     session_id=session_id,
                     parent_run_id=parent_run_id,
-                    data={
-                        "content": response.content,
-                        "tool_calls": [tool_call["name"] for tool_call in response.tool_calls],
-                    },
+                    data={"content": response.content, "tool_calls": []},
                 )
-
-                await self._checkpoint(
-                    checkpoint_store,
-                    run_id=run_id,
-                    session_id=session_id,
-                    step=step_count,
-                    tool_call_count=tool_call_count,
-                    status=CheckpointStatus.AI_MESSAGE,
-                )
-
-                if not response.tool_calls:
-                    # A message that arrived during this last step is answered in this run;
-                    # with none waiting the inbox closes, so a late one is refused, never lost.
-                    if await take_input(close=True):
-                        continue
-                    break
-
-                if step_count > limits.max_steps:
-                    raise StepLimitExceeded(
-                        f"Step limit exceeded: {step_count} > {limits.max_steps}"
-                    )
-
-                tool_call_count += len(response.tool_calls)
-                if tool_call_count > limits.max_tool_calls:
-                    raise ToolCallLimitExceeded(
-                        f"Tool call limit exceeded: {tool_call_count} > {limits.max_tool_calls}"
-                    )
-
-                # Idempotency: calls already recorded for this run (by a previous attempt
-                # that crashed mid-loop) are skipped, so a mutating tool never runs twice.
-                completed_ids = (
-                    await checkpoint_store.completed_tool_call_ids(run_id)
-                    if checkpoint_store is not None
-                    else set()
-                )
-                pending = [
-                    tool_call
-                    for tool_call in response.tool_calls
-                    if tool_call["id"] not in completed_ids
-                ]
-
-                for tool_call in pending:
-                    await self._emit(
-                        EventType.TOOL_STARTED,
-                        run_id=run_id,
-                        session_id=session_id,
-                        parent_run_id=parent_run_id,
-                        data={
-                            "tool": tool_call["name"],
-                            "tool_call_id": tool_call["id"],
-                            "args": dict(tool_call["args"]),
-                        },
-                    )
-
-                # Check again right before tool execution: a cancellation requested while
-                # the model was thinking still stops the tools from running.
-                self._check_cancelled(cancel)
-
-                # Human-in-the-loop (P26): gated calls wait for a decision, one at a time.
-                # Rejected calls never execute; they become error ToolMessages. The time a
-                # human takes is not the run's time, so it is added back to the deadline.
-                rejected: dict[str, ToolExecutionResult] = {}
-                asked = time.monotonic()
-                for gated in pending:
-                    if not self._agent.tool_policy.needs_approval(
-                        str(gated["name"]), gated["args"]
-                    ):
-                        continue
-                    note: str | None = None
-                    if self._advisor is not None and (
-                        self._approval_mode is not None and self._approval_mode.value == "auto"
-                    ):
-                        advice = await self._advise(
-                            gated,
-                            request=_request_text(new_messages),
-                            run_id=run_id,
-                            session_id=session_id,
-                            parent_run_id=parent_run_id,
-                        )
-                        if advice.verdict is Verdict.ALLOW:
-                            continue
-                        if advice.verdict is Verdict.DENY:
-                            rejected[str(gated["id"])] = _rejected_result(
-                                gated,
-                                f"auto mode blocked this call: {advice.reason}. "
-                                "Do not retry it unchanged; do something safer or ask the user.",
-                            )
-                            continue
-                        note = advice.reason  # ASK: the human decides, told why
-                    if self._approvals is None:
-                        # Fail closed: a gated tool with nobody to ask must not run.
-                        rejected[str(gated["id"])] = _rejected_result(
-                            gated, "this tool needs approval and no approval channel is configured"
-                        )
-                        continue
-                    status = await self._await_approval(
-                        gated,
-                        run_id=run_id,
-                        session_id=session_id,
-                        user_id=user_id,
-                        parent_run_id=parent_run_id,
-                        note=note,
-                    )
-                    if status is not ApprovalStatus.APPROVED:
-                        rejected[str(gated["id"])] = _rejected_result(gated)
-                deadline += time.monotonic() - asked
-                self._check_cancelled(cancel)
-                runnable = [c for c in pending if str(c["id"]) not in rejected]
-
-                def run_tools(batch: list[Any] = runnable) -> Awaitable[list[Any]]:
-                    return self._tool_executor.execute_many(
-                        batch,
-                        on_output=self._tool_output_emitter(
-                            run_id=run_id,
-                            session_id=session_id,
-                            parent_run_id=parent_run_id,
-                            tool_calls=batch,
-                        ),
-                    )
-
-                executed = await self._within(deadline, run_tools)
-                by_id = {r.tool_call_id: r for r in [*executed, *rejected.values()]}
-                tool_results = [by_id[str(c["id"])] for c in pending]
-
-                if checkpoint_store is not None and tool_results:
-                    # The whole batch lands in one transaction, atomically visible to recovery.
-                    await checkpoint_store.record_tool_executions(run_id, tool_results)
-
-                for result in tool_results:
-                    await self._emit(
-                        EventType.TOOL_COMPLETED,
-                        run_id=run_id,
-                        session_id=session_id,
-                        parent_run_id=parent_run_id,
-                        data={
-                            "tool": result.tool_name,
-                            "tool_call_id": result.tool_call_id,
-                            "ok": result.success,
-                            "error": result.error,
-                        },
-                    )
-
-                # Project executed results back into the conversation in the model's call
-                # order; skipped calls get a placeholder (SQLite holds no tool content to
-                # replay, so the previous result is not reconstructed here).
-                result_by_id = {result.tool_call_id: result.message for result in tool_results}
-                for tool_call in response.tool_calls:
-                    tool_call_id = tool_call["id"]
-                    if tool_call_id is None:
-                        raise AgentStackError("Model returned a tool call without an id")
-                    tool_message = result_by_id.get(tool_call_id)
-                    if tool_message is None:
-                        tool_message = ToolMessage(
-                            content="(skipped: already completed in a previous attempt of this run)",
-                            tool_call_id=tool_call_id,
-                        )
-                    new_messages.append(tool_message)
-
-                if tool_results:
-                    await self._checkpoint(
-                        checkpoint_store,
-                        run_id=run_id,
-                        session_id=session_id,
-                        step=step_count,
-                        tool_call_count=tool_call_count,
-                        status=CheckpointStatus.TOOL_BATCH_COMPLETED,
-                    )
 
             # Persist only the messages produced by this run; the loaded history is already
             # in the store. Re-appending the full list here was the old duplication bug.
@@ -655,6 +693,45 @@ class AgentRuntime:
         if counters is not None:
             counters(step_count, tool_call_count)
         return response
+
+    async def _wrap_up(
+        self,
+        resident: Sequence[str],
+        history: Sequence[BaseMessage],
+        new_messages: list[BaseMessage],
+        *,
+        memo: dict[str, Any],
+    ) -> AIMessage | None:
+        """One more call after the deadline, asking for what was found (None if it fails).
+
+        It may take a quarter of the run's time (at least a minute): a big context is slow.
+        """
+        last = new_messages[-1] if new_messages else None
+        if isinstance(last, AIMessage):  # calls the deadline cut off still need an answer
+            for call in last.tool_calls:
+                new_messages.append(
+                    ToolMessage(content="(not run: out of time)", tool_call_id=str(call["id"]))
+                )
+        if not (new_messages and new_messages[-1].content == WRAP_UP):  # not told twice
+            new_messages.append(HumanMessage(content=WRAP_UP))
+        grace = max(60.0, self._agent.limits.max_runtime_seconds / 4)
+        try:
+            model_input = await self._model_input(
+                resident=resident, history=history, new_messages=new_messages, memo=memo
+            )
+            async with asyncio.timeout(grace):
+                reply = await self._call_model(model_input)
+        except Exception as exc:
+            _LOG.info("a subagent's report after its deadline failed: %s", error_text(exc))
+            return None
+        if not isinstance(reply, AIMessage) or not reply.text.strip():
+            return None
+        text = reply.text
+        note = "(stopped at the time limit; what it found so far)"
+        report: AIMessage = reply.model_copy(
+            update={"content": f"{note}\n\n{text}", "tool_calls": []}
+        )
+        return report
 
     async def _resident_parts(self) -> Sequence[str]:
         """The ordered resident system parts, or just the base prompt when unwired."""

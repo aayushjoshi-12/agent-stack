@@ -54,7 +54,8 @@ TabBar {
 }
 .user-message.-queued { border-left: wide $primary 50%; color: $text-muted; }
 .agent-message { margin: 1 0 0 0; padding: 0 0 0 3; }
-.subagent-row { height: 1; margin: 0; }
+.subagent-row { height: 1; margin: 0; text-wrap: nowrap; text-overflow: ellipsis; }
+.subagent-row:focus, .subagent-row:hover { background: $panel; }
 
 .notice {
     margin: 1 0 0 0;
@@ -137,7 +138,7 @@ Footer { background: $surface; }
 /* ── help overlay ───────────────────────────────────────────────────────── */
 /* Modals share one look. Declared after `Screen`, whose background would otherwise replace
    the modal's dimmed backdrop. Cards differ only in width and the colour of the left bar. */
-HelpScreen, ApprovalScreen, SessionPicker, RewindScreen, BranchesScreen {
+HelpScreen, ApprovalScreen, SessionPicker, RewindScreen, BranchesScreen, SubagentScreen {
     align: center middle;
     background: $background 70%;
 }
@@ -210,3 +211,14 @@ Screen.-hide-sidebar #sidebar { display: none; }
 #approval-note { margin-bottom: 1; }
 /* images the prompt attaches (P44): "image: name.png" under the prompt */
 #attachments { display: none; height: auto; color: $text-muted; }
+/* a subagent's own run (P48): a tall card with a scrolling log */
+#subagent-card {
+    width: 120;
+    max-width: 96%;
+    height: 90%;
+    padding: 1 2;
+    background: $surface;
+    border-left: wide $primary;
+}
+#subagent-task { margin-top: 1; max-height: 4; }
+#subagent-log { height: 1fr; margin-top: 1; }

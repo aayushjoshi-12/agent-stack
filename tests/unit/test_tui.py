@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from textual.widgets import Static
 
 from agent_stack.core.events import EventType
 from agent_stack.gateways.base import HistoryItem, SessionSummary
@@ -29,6 +30,7 @@ from agent_stack.gateways.tui.rows import (
     format_duration,
 )
 from agent_stack.gateways.tui.screens import ApprovalScreen, SessionPicker
+from agent_stack.gateways.tui.subagent import SubagentScreen
 from tests.unit.gateway_fakes import FakeApplication, event
 
 
@@ -407,6 +409,77 @@ async def test_enter_on_focused_card_header_toggles_it() -> None:
 
 
 # ── subagents ────────────────────────────────────────────────────────────────
+async def test_a_subagent_row_opens_what_the_subagent_did() -> None:
+    """P48: Enter on the row shows the child run's own tool calls and reply, read from its log."""
+    child = [
+        event(EventType.RUN_STARTED, run_id="k1", parent_run_id="run-1"),
+        event(
+            EventType.TOOL_STARTED,
+            run_id="k1",
+            parent_run_id="run-1",
+            tool="read_file",
+            tool_call_id="t1",
+            args={"path": "notes.txt"},
+        ),
+        event(
+            EventType.TOOL_COMPLETED, run_id="k1", parent_run_id="run-1", tool_call_id="t1", ok=True
+        ),
+        event(
+            EventType.ASSISTANT_MESSAGE, run_id="k1", parent_run_id="run-1", content="alpha, beta"
+        ),
+        event(EventType.RUN_COMPLETED, run_id="k1", parent_run_id="run-1"),
+    ]
+    app = _app(FakeApplication(child_events={"k1": child}))
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        app.handle_event(
+            event(
+                EventType.SUBAGENT_STARTED,
+                child_run_id="k1",
+                agent_name="explorer",
+                task="read notes.txt",
+            )
+        )
+        await _settle(pilot, 3)
+        [row] = app.tab.query(SubagentRow)
+        assert "read notes.txt" in str(row.render())
+        row.focus()
+        await pilot.press("enter")
+        await _settle(pilot, 6)
+        screen = app.screen
+        assert isinstance(screen, SubagentScreen)
+        title = str(screen.query_one("#subagent-title", Static).render())
+        assert "explorer" in title and "done" in title and "1 tool call" in title
+        [card] = screen.query(Disclosure)
+        assert card.label == "read_file" and card.status == "done"
+        assert "alpha, beta" in screen.query_one(AgentMessage).source
+        await pilot.press("escape")
+        await _settle(pilot, 2)
+        assert not isinstance(app.screen, SubagentScreen)
+
+
+async def test_a_stored_delegate_call_gets_a_subagent_row_that_opens() -> None:
+    run_id = "ab" * 16
+    history = [
+        HistoryItem("user", "look"),
+        HistoryItem(
+            "tool",
+            "delegate",
+            args={"agent_name": "explorer", "task": "find run.py"},
+            result=f"Subagent 'explorer' (run {run_id}) completed: 2 steps, 1 tool calls.\nfound",
+        ),
+    ]
+    application = FakeApplication(child_events={run_id: []})
+    application.histories["s2"] = history
+    app = _app(application)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await app._open_session("s2")
+        await _settle(pilot, 4)
+        [row] = app.tab.query(SubagentRow)
+        assert (row.run_id, row.brief, row.outcome) == (run_id, "find run.py", "completed")
+
+
 async def test_subagent_row_is_updated_in_place() -> None:
     app = _app()
 

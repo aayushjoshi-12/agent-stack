@@ -226,7 +226,12 @@ def build_application(config: AppConfig | None = None) -> Application:
         model=resolved.small_model or resolved.model,  # read-only searching: the cheap model
         tools=tuple(tool for tool in fs_tools if tool.name in _READ_ONLY_TOOLS),
         system_prompt=EXPLORER_SYSTEM_PROMPT,
-        limits=AgentLimits(tool_timeout_seconds=resolved.tool_timeout_seconds),
+        # Half the run's time: a subagent out of time reports what it found (P48) while the
+        # parent still has time to use it.
+        limits=AgentLimits(
+            max_runtime_seconds=resolved.max_runtime_seconds / 2,
+            tool_timeout_seconds=resolved.tool_timeout_seconds,
+        ),
     )
     agent = Agent(
         name="assistant",
@@ -255,8 +260,6 @@ def build_application(config: AppConfig | None = None) -> Application:
         ),
         system_prompt=DEFAULT_SYSTEM_PROMPT,
         limits=AgentLimits(
-            max_steps=resolved.max_steps,
-            max_tool_calls=2 * resolved.max_steps,
             max_runtime_seconds=resolved.max_runtime_seconds,
             tool_timeout_seconds=resolved.tool_timeout_seconds,
         ),

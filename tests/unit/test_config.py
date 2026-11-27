@@ -79,11 +79,6 @@ def test_home_and_skill_roots_come_from_env() -> None:
     assert config.skill_roots == (Path("/a/skills"), Path("/b/skills"))
 
 
-def test_max_steps_comes_from_env() -> None:
-    assert AppConfig.from_env({}).max_steps == 50
-    assert AppConfig.from_env({"AGENT_STACK_MAX_STEPS": "200"}).max_steps == 200
-
-
 def test_max_runtime_is_configurable() -> None:
     assert AppConfig.from_env({}).max_runtime_seconds == 1800.0
     assert AppConfig.from_env({"AGENT_STACK_MAX_RUNTIME": "7200"}).max_runtime_seconds == 7200.0

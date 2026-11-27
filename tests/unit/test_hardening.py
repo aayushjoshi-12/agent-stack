@@ -11,7 +11,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from agent_stack.core.agent import Agent
-from agent_stack.core.errors import StepLimitExceeded
+from agent_stack.core.errors import RuntimeDeadlineExceeded
 from agent_stack.core.event_bus import InMemoryEventBus
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.limits import AgentLimits
@@ -122,12 +122,13 @@ async def test_a_limit_failure_saves_only_a_consistent_prefix() -> None:
     model = FakeChatModel(
         [
             ai(tool_calls=[call("echo", id="c1")]),
-            ai(tool_calls=[call("echo", id="c2")]),  # over the step limit: never executed
+            ai(tool_calls=[call("slow", id="c2")]),  # cut off by the deadline: never finished
         ]
     )
-    runtime = _runtime(model, [EchoTool()], store=store, limits=AgentLimits(max_steps=1))
+    limits = AgentLimits(max_runtime_seconds=0.3, tool_timeout_seconds=30.0)
+    runtime = _runtime(model, [EchoTool(), SleepTool("slow", 5.0)], store=store, limits=limits)
 
-    with pytest.raises(StepLimitExceeded):
+    with pytest.raises(RuntimeDeadlineExceeded):
         await runtime.run(session_id="s", user_id="u", message="go")
 
     messages = await store.get_messages("s")
@@ -439,7 +440,19 @@ async def test_a_failing_subagent_is_reported_to_the_parent_not_raised() -> None
 
 async def test_a_subagent_that_times_out_is_reported_to_the_parent() -> None:
     reported = await _delegate_to(
-        FakeChatModel([ai(tool_calls=[call("slow", id="s1")]), ai("never")]),
+        FakeChatModel([ai(tool_calls=[call("slow", id="s1")]), ai("found half of it")]),
+        AgentLimits(max_runtime_seconds=0.1, tool_timeout_seconds=30.0),
+        tools=[SleepTool("slow", 5.0)],
+    )
+
+    # P48: cut off mid-tool, it still gets one call to report what it found
+    assert "stopped at the time limit" in reported
+    assert "found half of it" in reported
+
+
+async def test_a_subagent_that_times_out_and_cannot_report_is_reported_as_failed() -> None:
+    reported = await _delegate_to(
+        FakeChatModel([ai(tool_calls=[call("slow", id="s1")])]),  # nothing left to answer
         AgentLimits(max_runtime_seconds=0.1, tool_timeout_seconds=30.0),
         tools=[SleepTool("slow", 5.0)],
     )

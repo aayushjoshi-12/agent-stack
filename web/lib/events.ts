@@ -129,7 +129,7 @@ function updateTool(
 }
 
 /** The event log's cap marker on a long field (observability/audit.py `_cap`). */
-const CAPPED = /\.\.\.\[truncated \d+ bytes\]$/;
+export const CAPPED = /\.\.\.\[truncated \d+ bytes\]$/;
 
 const deltaKey = (runId: string, step: number, kind: "assistant" | "reasoning") => `delta:${runId}:${step}:${kind}`;
 

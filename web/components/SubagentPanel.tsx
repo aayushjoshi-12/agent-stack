@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect } from "react";
-import type { Conn } from "@/lib/api";
-import type { Item } from "@/lib/events";
+import { useEffect, useState } from "react";
+import { api, type Conn } from "@/lib/api";
+import { CAPPED, type Item } from "@/lib/events";
 import { useLive } from "@/lib/useLive";
 import { AssistantBubble, FailureCard, ReasoningCard, SubagentCard, ToolCard } from "./Cards";
 import { Mark, type MarkKind } from "./Mark";
@@ -38,6 +38,31 @@ export function SubagentPanel({
   }, [open.runId, follow, detach]);
 
   const { phase, items } = live.state;
+  // The event log cuts long replies short; once the run is over, show them whole from the
+  // subagent's own transcript.
+  const [whole, setWhole] = useState<string[]>([]);
+  const finished = phase === "completed" || phase === "failed" || phase === "cancelled";
+  const cut = items.some((i) => i.kind === "assistant" && CAPPED.test(i.text));
+  useEffect(() => {
+    setWhole([]);
+  }, [open.runId]);
+  useEffect(() => {
+    if (!finished || !cut) return;
+    let current = true;
+    api
+      .run(conn, open.runId)
+      .then((run) => api.session(conn, run.session_id))
+      .then((detail) => current && setWhole(detail.history.filter((h) => h.kind === "assistant").map((h) => h.text)))
+      .catch(() => {}); // the shortened text stays; it says it was cut
+    return () => {
+      current = false;
+    };
+  }, [conn, open.runId, finished, cut]);
+  const full = (text: string) => {
+    if (!CAPPED.test(text)) return text;
+    const start = text.replace(CAPPED, "");
+    return whole.find((w) => w.startsWith(start)) ?? text;
+  };
   const mark: MarkKind = phase === "running" ? "running" : phase === "completed" ? "ok" : phase === "failed" ? "failed" : "idle";
   const tools = items.filter((i) => i.kind === "tool" && i.depth === 0).length;
   return (
@@ -66,7 +91,7 @@ export function SubagentPanel({
               case "tool":
                 return <ToolCard key={item.key} tool={item} onDecide={onDecide} />;
               case "assistant":
-                return <AssistantBubble key={item.key} text={item.text} depth={0} streaming={item.streaming} />;
+                return <AssistantBubble key={item.key} text={full(item.text)} depth={0} streaming={item.streaming} />;
               case "reasoning":
                 return <ReasoningCard key={item.key} item={item} />;
               case "subagent":
