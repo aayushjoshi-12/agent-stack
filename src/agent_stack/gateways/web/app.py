@@ -18,6 +18,7 @@ The event stream reads the durable event log (P29), so a client that drops and r
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import math
 import secrets
@@ -40,7 +41,14 @@ from agent_stack.core.errors import (
 )
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.run import Run
-from agent_stack.gateways.base import HistoryItem, MessageEnvelope, model_breakdown, usage_summary
+from agent_stack.gateways.base import (
+    HistoryItem,
+    MessageEnvelope,
+    make_image,
+    model_breakdown,
+    sniff_mime,
+    usage_summary,
+)
 from agent_stack.gateways.ratelimit import RateLimiter
 from agent_stack.observability.audit import audit_record
 from agent_stack.observability.redact import env_secrets
@@ -98,6 +106,18 @@ class WebSettings:
 
 class MessageBody(BaseModel):
     text: str = Field(min_length=1, max_length=100_000)
+
+
+class ImageBody(BaseModel):
+    name: str = Field(default="image", max_length=200)
+    data: str = Field(max_length=7_100_000)  # base64 of at most 5 MB
+
+
+class SendBody(BaseModel):
+    """A new message: text, images (P44), or both."""
+
+    text: str = Field(default="", max_length=100_000)
+    images: list[ImageBody] = Field(default_factory=list, max_length=8)
 
 
 class TitleBody(BaseModel):
@@ -168,6 +188,7 @@ def _history_json(item: HistoryItem) -> dict[str, Any]:
         "text": item.text,
         "args": None if item.args is None else dict(item.args),
         "result": item.result,
+        "images": list(item.images),
     }
 
 
@@ -530,18 +551,41 @@ def create_app(
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
 
     @api.post("/sessions/{session_id}/messages", dependencies=spend, status_code=202)
-    async def send(session_id: str, body: MessageBody) -> dict[str, str]:
+    async def send(session_id: str, body: SendBody) -> dict[str, str]:
         await owned_session(session_id)
+        try:
+            images = tuple(
+                make_image(base64.b64decode(i.data, validate=True), i.name) for i in body.images
+            )
+        except ValueError as exc:  # binascii.Error is one too
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
+        if not body.text.strip() and not images:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "the message is empty")
         await application.set_session_title(
-            session_id, body.text.strip()[:80]
+            session_id, body.text.strip()[:80] or images[0].name
         )  # first message only
         try:
             handle = await application.send_message(
-                MessageEnvelope(principal=principal, session=session_id, text=body.text)
+                MessageEnvelope(
+                    principal=principal, session=session_id, text=body.text, images=images
+                )
             )
         except BudgetExceededError as exc:
             raise HTTPException(status.HTTP_402_PAYMENT_REQUIRED, str(exc)) from None
         return {"run_id": handle.run_id}
+
+    @api.get("/sessions/{session_id}/images/{name}", dependencies=auth)
+    async def image(session_id: str, name: str) -> Response:
+        """A stored image of the conversation (P44), for thumbnails in the chat."""
+        await owned_session(session_id)
+        data = await application.session_image(session_id, name)
+        if data is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such image")
+        return Response(
+            data,
+            media_type=sniff_mime(data) or "application/octet-stream",
+            headers={"Cache-Control": "private, max-age=31536000, immutable"},
+        )
 
     # ── runs ─────────────────────────────────────────────────────────────────
     @api.get("/runs/{run_id}", dependencies=auth)

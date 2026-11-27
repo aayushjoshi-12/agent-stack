@@ -24,6 +24,7 @@ from langchain_core.messages import (
 from langchain_core.messages.tool import ToolCall
 
 from agent_stack.core.errors import PersistenceError
+from agent_stack.core.images import block_name, placeholder
 
 MessageKind = Literal["human", "ai", "tool", "system", "event"]
 
@@ -36,6 +37,8 @@ class MessageRecord:
 
     ``seq`` is monotonic within a session; ``ts`` is timezone-aware. ``tool_calls`` and
     ``tool_call_id`` preserve the exact LangChain tool plumbing so a round trip is lossless.
+    A message's images are not inline: ``data["images"]`` names their files in the session's
+    ``artifacts/`` (P44), and ``content`` is the text alone.
     """
 
     seq: int
@@ -63,6 +66,7 @@ def message_to_record(
             run_id=run_id,
             kind="human",
             content=_content_to_text(msg.content),
+            data=_image_refs(msg.content),
         )
     if isinstance(msg, AIMessage):
         return MessageRecord(
@@ -81,6 +85,7 @@ def message_to_record(
             kind="tool",
             content=_content_to_text(msg.content),
             tool_call_id=msg.tool_call_id,
+            data=_image_refs(msg.content),
         )
     if isinstance(msg, SystemMessage):
         return MessageRecord(
@@ -108,6 +113,25 @@ def record_to_message(record: MessageRecord) -> BaseMessage:
     if record.kind == "system":
         return SystemMessage(content=record.content)
     raise PersistenceError(f"Record kind {record.kind!r} is not a message")
+
+
+def record_images(record: MessageRecord) -> list[str]:
+    """The stored file names of a record's images (oldest transcripts have none)."""
+    names = record.data.get("images")
+    return [str(n) for n in names] if isinstance(names, list) else []
+
+
+def record_text(record: MessageRecord) -> str:
+    """A record's text with a ``[image: name]`` line per image: what people and indexes read."""
+    marks = [placeholder(name) for name in record_images(record)]
+    return "\n".join([record.content, *marks] if record.content else marks)
+
+
+def _image_refs(content: object) -> dict[str, Any]:
+    if not isinstance(content, list):
+        return {}
+    images = [name for part in content if (name := block_name(part))]
+    return {"images": images} if images else {}
 
 
 def record_to_json(record: MessageRecord) -> str:
@@ -174,6 +198,8 @@ def _content_to_text(content: object) -> str:
                 text = part.get("text")
                 if isinstance(text, str):
                     parts.append(text)
+                elif part.get("type") == "image_url":
+                    continue  # stored as a file, named in the record's data (P44)
                 else:
                     parts.append(json.dumps(part, ensure_ascii=False, default=str))
             else:

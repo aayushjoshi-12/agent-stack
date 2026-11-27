@@ -16,12 +16,13 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.tools import BaseTool, tool
 
 from agent_stack.core.changes import ChangeRecorder
 from agent_stack.core.errors import ToolError
+from agent_stack.core.images import IMAGE_SUFFIXES, image_block, load_image
 from agent_stack.core.run_context import current_run_context
 from agent_stack.core.workspace import WorkspacePolicy
 
@@ -99,6 +100,18 @@ def _read_file(policy: WorkspacePolicy, path: str) -> str:
         )
 
     return target.read_text(encoding="utf-8", errors="replace")
+
+
+def _read_image(policy: WorkspacePolicy, path: str) -> list[dict[str, Any]]:
+    target = policy.resolve(path)
+    if not target.is_file():
+        raise ToolError(f"Not a file: {path}")
+    try:
+        image = load_image(target)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from None
+    note = f"Image file {policy.relative(target)} ({_render_size(len(image.data))})"
+    return [image_block(image.data, image.mime), {"type": "text", "text": note}]
 
 
 def _write_file(policy: WorkspacePolicy, path: str, content: str) -> str:
@@ -319,13 +332,16 @@ def filesystem_tools(
         return _list_directory(policy, path)
 
     @tool
-    async def read_file(path: str) -> str:
+    async def read_file(path: str) -> str | list[dict[str, Any]]:
         """Read a UTF-8 text file as a string. Use this instead of ``cat``/``head``/``tail``.
 
         Fails if the file does not exist or is larger than the read cap (1 MiB) — for big
         files, search first or read the relevant region. ``path`` is relative to the
-        workspace root.
+        workspace root. A PNG, JPEG, WebP or GIF image (up to 5 MB) is shown to you as an
+        image.
         """
+        if path.lower().endswith(IMAGE_SUFFIXES):
+            return _read_image(policy, path)
         text = _read_file(policy, path)
         return notes.after_read(path, text) if notes is not None else text
 

@@ -193,6 +193,7 @@ export function AssistantBubble({ text, depth = 0, streaming = false }: { text: 
 
 export function UserBubble({
   text,
+  images = [],
   queued = false,
   onEdit,
   onCancel,
@@ -200,6 +201,8 @@ export function UserBubble({
   rewinding = false,
 }: {
   text: string;
+  /** Image URLs (object URLs) shown as thumbnails above the text. */
+  images?: string[];
   queued?: boolean;
   /** A queued message only: take it back into the composer / drop it. */
   onEdit?: () => void;
@@ -238,7 +241,16 @@ export function UserBubble({
           </button>
         )}
       </div>
-      <p className="whitespace-pre-wrap break-words">{text}</p>
+      {images.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-2">
+          {images.map((src, i) => (
+            <a key={src} href={src} target="_blank" rel="noreferrer">
+              <img src={src} alt={`attached image ${i + 1}`} className="max-h-40 max-w-full border-2 border-line bg-surface object-contain" />
+            </a>
+          ))}
+        </div>
+      )}
+      {text && <p className="whitespace-pre-wrap break-words">{text}</p>}
     </section>
   );
 }

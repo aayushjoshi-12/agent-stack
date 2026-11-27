@@ -14,12 +14,18 @@ the application's resolvers (:class:`IdentityResolver` /
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping
+import re
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from agent_stack.core.events import AgentEvent
+from agent_stack.core.images import IMAGE_SUFFIXES, Image, load_image
+from agent_stack.core.images import MAX_IMAGE_BYTES as MAX_IMAGE_BYTES
+from agent_stack.core.images import make_image as make_image  # for gateways (P44)
+from agent_stack.core.images import sniff_mime as sniff_mime
 
 if TYPE_CHECKING:
     from agent_stack.app.application import Application
@@ -27,6 +33,7 @@ if TYPE_CHECKING:
 __all__ = [
     "Gateway",
     "HistoryItem",
+    "Image",
     "MessageEnvelope",
     "SessionSummary",
     "SessionUsage",
@@ -34,6 +41,8 @@ __all__ = [
     "format_cost",
     "format_tokens",
     "format_when",
+    "image_paths",
+    "load_images",
     "model_breakdown",
     "usage_summary",
 ]
@@ -45,14 +54,16 @@ class MessageEnvelope:
 
     ``principal`` is the resolved owner id, ``session`` the session to run in
     (the runtime creates the session lazily on first use), and ``text`` the
-    message. ``metadata`` carries opaque gateway extras (idempotency keys, native
-    message ids) that no consumer needs yet.
+    message. ``images`` are attached to it (P44), already read and checked by the gateway.
+    ``metadata`` carries opaque gateway extras (idempotency keys, native message ids) that no
+    consumer needs yet.
     """
 
     principal: str
     session: str
     text: str
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    images: tuple[Image, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -208,6 +219,43 @@ class HistoryItem:
     text: str
     args: Mapping[str, Any] | None = None
     result: str | None = None
+    #: A user message's images: stored file names (``Application.session_image`` serves them).
+    images: tuple[str, ...] = ()
+
+
+#: A prompt token that may name a file: ``@path``, a quoted path, or one with ``\ `` escapes.
+_PATH_TOKEN_RE = re.compile(r"""(?<!\S)(@?)(?:'([^']+)'|"([^"]+)"|((?:\\ |\S)+))""")
+
+
+def image_paths(text: str, base: Path | None = None) -> tuple[str, list[Path]]:
+    """The image files a prompt attaches, and the prompt without them (P44).
+
+    ``@path/to/img.png`` attaches a file relative to ``base`` (the working directory); a pasted
+    or dragged absolute path (``/Users/me/My\\ Shot.png``, ``'~/a b.png'``) does too. Only
+    existing PNG, JPEG, WebP or GIF files count; any other token stays in the text.
+    """
+    found: list[Path] = []
+
+    def take(match: re.Match[str]) -> str:
+        at, *raw = match.groups()
+        name = next(g for g in raw if g is not None).replace("\\ ", " ")
+        if not name.lower().endswith(IMAGE_SUFFIXES) or not (at or name.startswith(("/", "~"))):
+            return match.group(0)
+        path = Path(name).expanduser()
+        if not path.is_absolute():
+            path = (base or Path.cwd()) / path
+        if not path.is_file():
+            return match.group(0)
+        found.append(path)
+        return ""
+
+    rest = _PATH_TOKEN_RE.sub(take, text)
+    return (re.sub(r"[ \t]{2,}", " ", rest).strip() if found else text), found
+
+
+def load_images(paths: Sequence[Path]) -> tuple[Image, ...]:
+    """Read and check the attached files; ValueError names the first one that is not usable."""
+    return tuple(load_image(path) for path in paths)
 
 
 @runtime_checkable

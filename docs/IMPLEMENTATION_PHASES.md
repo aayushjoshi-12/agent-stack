@@ -1879,22 +1879,59 @@ Tests: `tests/unit/test_tracing.py` (skipped without the extra). Smoke:
 
 ---
 
-## Phase 44 — Images in (multimodal input)
+## Phase 44 — Images in (multimodal input) ✅
 
 **Goal.** A user can give the agent images, at least: the model sees them as image content.
+Decision record: ADR 019.
 
 **Deliverables**
-- Message content with image blocks (base64 data URL, PNG/JPEG/WebP/GIF, size-capped and
-  downscaled) through `send_message`, stored with the transcript (image files under the session's
-  `artifacts/`, referenced from the message, not inlined in JSONL), replayed on later turns.
-- TUI: attach by path or paste/drag a file path (`@image.png` or a pasted path) with a chip in
-  the composer; web: file picker, paste and drag-and-drop; Telegram: photos and image documents.
-- A model without vision gets a clear error (or a text note) instead of a crash. `read_file` on an
-  image and `web_screenshot` (P38) return the image to the model where it can take one.
+- Block shape, verified by real calls: an OpenAI-style `{"type": "image_url", "image_url":
+  {"url": "data:<mime>;base64,..."}}`. ChatOpenRouter converts LangChain v1 `image` blocks for user
+  messages only and sends tool content raw, so the v1 block is not seen in a ToolMessage (Haiku:
+  "can't see the image"); `image_url` works in both on Claude Haiku and Gemini Flash.
+- `core/images.py` (a leaf): `Image(data, mime, name)`, type sniffed from magic bytes
+  (PNG/JPEG/WebP/GIF), 5 MB cap (Anthropic's limit), no downscaling and no Pillow (providers
+  downscale themselves); `content_text`, `content_chars` (an image counts 1600 tokens in the
+  estimate, never its base64), `without_images`.
+- `MessageEnvelope.images` -> `send_message` -> `RunRequest.images` -> the runtime builds
+  `HumanMessage([*image blocks, text])` (a plain string when there are none).
+- Storage: images saved once as `artifacts/<sha256[:16]>.<ext>`, the transcript line keeps the
+  text and `data.images`; reading turns them back into blocks (later turns, restarts). `.md`,
+  export, chat search and history rows show `[image: <name>]`. A branch copies its images.
+  `HistoryItem.images`; `Application.session_image()`.
+- Tool results: the executor keeps image blocks of a list result (text parts still redacted and
+  capped). `read_file` on an image returns it; `web_screenshot` returns the PNG plus its text
+  (text only above 5 MB); MCP image content becomes image blocks instead of `[image]`.
+- No vision: a model call that fails with an error about images while the input has images is
+  retried once with each image replaced by `[image: <name>] (not shown: this model does not
+  accept images; switch to one that does with /model)`; the model tells the user, the stored
+  conversation keeps its images.
+- Gateways: `image_paths()` in `gateways/base.py` (`@path` or a pasted absolute path to an
+  existing image). TUI: chip under the prompt, `/image <path>`, `[image: name]` in the user row.
+  Line REPL: `@path`. Web: `POST /sessions/{id}/messages` takes `images: [{name, data}]` (base64
+  JSON, max 8), `GET /sessions/{id}/images/{name}` serves a stored image (auth, ownership, strict
+  name), history rows carry `images`; the Composer has an Image button, paste and drag-and-drop
+  with removable thumbnails; user bubbles show thumbnails (fetched with the token). Telegram:
+  photos (largest size) and image documents via `getFile`, the caption is the text.
+- Queued input (`send_input`) stays text only: a message with an image during a run is refused
+  with a note (TUI, web, Telegram).
 
 **Acceptance**
-- tests: an image reaches the model as an image block; survives a restart (stored, replayed);
-  each gateway's attach path; a smoke with a vision model describing a test image.
+- `tests/integration/test_images.py`: the model receives an image block; transcript.jsonl has no
+  base64 and names the artifact; a fresh store replays the same blocks and the next turn sends
+  them; export (md, json), search and the event log carry the placeholder; a branch keeps its
+  images; a text-only model gets one retry with placeholders; tool-result images round-trip; the
+  web upload (bad data 400, empty 422), history `images` and the image route (404 for other
+  names, 401 without the token).
+- `tests/unit/test_images.py`: type sniffing and the cap, token estimate, `image_paths`,
+  `read_file` on a PNG, MCP image blocks, TUI chip + send + `/image`, line REPL `@path`, Telegram
+  photo and document with caption, refused bad image and image during a run.
+- Smoke (`tmp/smoke_tests/P44-images-smoke.py`, `P44-images-ui.py`): a PNG with "BANANA" on red
+  described correctly by `openrouter:anthropic/claude-haiku-5.5`, recalled after a restart; the
+  default `deepseek-v4-pro` (no vision) answers that it cannot see images and to switch with
+  `/model`; `web_screenshot` then "what colour is the heading" answered green; `read_file` on the
+  PNG read "BANANA"; the web UI uploads, shows the thumbnail before and after a reload, and takes
+  a pasted image.
 
 ---
 

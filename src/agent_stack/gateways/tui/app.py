@@ -32,7 +32,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.command import Hit, Hits, Provider
 from textual.containers import Horizontal, Vertical
-from textual.widgets import ContentSwitcher, Footer, OptionList
+from textual.widgets import ContentSwitcher, Footer, OptionList, Static
 
 from agent_stack.app.application import Application, IdentityResolver
 from agent_stack.gateways.tui.chrome import HelpScreen, PromptArea, Sidebar
@@ -149,6 +149,7 @@ class TuiApp(CommandsMixin, TimelineMixin, SessionsMixin, RunsMixin, StatusMixin
                 with Vertical(id="composer"):
                     yield OptionList(id="completions")
                     yield PromptArea(id="prompt")
+                    yield Static(id="attachments")
             yield Sidebar(id="sidebar")
         yield Footer()
 

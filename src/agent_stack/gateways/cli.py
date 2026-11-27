@@ -24,7 +24,7 @@ from agent_stack.app.application import (
     parse_export_args,
 )
 from agent_stack.core.events import AgentEvent, EventType
-from agent_stack.gateways.base import MessageEnvelope, usage_summary
+from agent_stack.gateways.base import MessageEnvelope, image_paths, load_images, usage_summary
 from agent_stack.gateways.tui.render import (
     assistant_block,
     failure_block,
@@ -181,7 +181,17 @@ async def run_cli(
                 console.print(f"[red]cannot export:[/] {escape(str(exc))}")
             continue
 
-        envelope = MessageEnvelope(principal=principal_id, session=session, text=text)
+        text, paths = image_paths(text)  # "@shot.png" or a pasted path attaches it (P44)
+        try:
+            images = load_images(paths)
+        except (OSError, ValueError) as exc:
+            console.print(f"[red]cannot attach:[/] {escape(str(exc))}")
+            continue
+        for image in images:
+            console.print(f"[dim]\\[image: {escape(image.name)}][/]")
+        envelope = MessageEnvelope(
+            principal=principal_id, session=session, text=text, images=images
+        )
         try:
             async for _event in gateway.handle_message(application, envelope):
                 pass

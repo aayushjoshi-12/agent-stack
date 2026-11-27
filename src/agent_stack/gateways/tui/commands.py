@@ -11,10 +11,11 @@ from typing import TYPE_CHECKING, Any
 
 from textual.app import App
 from textual.markup import escape
-from textual.widgets import OptionList
+from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
 from agent_stack.app.application import parse_export_args
+from agent_stack.gateways.base import Image, image_paths, load_images
 from agent_stack.gateways.tui.chrome import PromptArea
 from agent_stack.gateways.tui.rows import UserMessage
 
@@ -41,7 +42,9 @@ class CommandsMixin(App[None]):
         def _refresh_all(self) -> None: ...
         def _remove_welcome(self, tab: Conversation) -> None: ...
         def _bump_tokens(self, tab: Conversation, text: str) -> None: ...
-        async def _start_run(self, tab: Conversation, text: str) -> None: ...
+        async def _start_run(
+            self, tab: Conversation, text: str, images: tuple[Image, ...] = ()
+        ) -> None: ...
         async def _open_reference(self, reference: str) -> None: ...
         async def action_new_session(self) -> None: ...
         async def action_close_tab(self) -> None: ...
@@ -66,6 +69,7 @@ class CommandsMixin(App[None]):
             "compact": ("summarise the conversation to free context: /compact [focus]", None),
             "mcp": ("MCP servers: state and tool counts", self.action_show_mcp),
             "export": ("save this conversation to a file: /export [md|json] [path]", None),
+            "image": ("attach an image: /image <path> (or type @path in the prompt)", None),
             "help": ("keyboard shortcuts", self.action_help),
             "quit": ("leave (prints how to continue)", self.action_quit_app),
         }
@@ -82,9 +86,12 @@ class CommandsMixin(App[None]):
         return entries
 
     def on_text_area_changed(self, event: Any) -> None:
-        """Show the ``/`` completion list while a command name is being typed."""
+        """Show the ``/`` completion list while a command name is being typed, and the images
+        the prompt attaches under it."""
         popup = self.query_one("#completions", OptionList)
         text = event.text_area.text
+        if event.text_area.id == "prompt":
+            self._show_attachments(text)
         if (
             event.text_area.id != "prompt"
             or not text.startswith("/")
@@ -112,6 +119,13 @@ class CommandsMixin(App[None]):
         popup.highlighted = 0
         popup.display = True
 
+    def _show_attachments(self, text: str) -> None:
+        """One chip per image the prompt attaches (``@path`` or a pasted path), before sending."""
+        chips = self.query_one("#attachments", Static)
+        names = [path.name for path in image_paths(text)[1]] if "." in text else []
+        chips.update("  ".join(f"[b]image:[/b] {escape(name)}" for name in names))
+        chips.display = bool(names)
+
     async def action_quit_app(self) -> None:
         self.exit()
 
@@ -136,6 +150,13 @@ class CommandsMixin(App[None]):
             return True
         if name == "export":
             await self._export(argument)
+            return True
+        if name == "image":  # puts "@path" in the prompt: the chip shows whether it is found
+            if argument:
+                quoted = f"'{argument}'" if " " in argument else argument
+                self.query_one("#prompt", PromptArea).insert(f"@{quoted} ")
+            else:
+                self.notify("Usage: /image <path> (PNG, JPEG, WebP or GIF)")
             return True
         entry = self._builtins().get(name)
         if entry is None:
@@ -223,7 +244,11 @@ class CommandsMixin(App[None]):
             self.exit()
             return
         command = bool(_COMMAND_RE.match(text.strip()))
+        rest, paths = image_paths(text)
         if self.tab.running and not command:
+            if paths:  # a queued message is text only
+                self.notify("Images go with a new message: send it when the run finishes.")
+                return
             await self._queue_input(text)
             return
         prompt = self.query_one("#prompt", PromptArea)
@@ -233,6 +258,11 @@ class CommandsMixin(App[None]):
             await self._run_slash(text)
             return
         if self._busy():
+            return
+        try:
+            images = load_images(paths)
+        except (OSError, ValueError) as exc:
+            self.notify(str(exc), severity="error")
             return
         self.query_one("#completions", OptionList).display = False
         prompt.clear_text()
@@ -246,9 +276,9 @@ class CommandsMixin(App[None]):
         if text.strip().startswith("asref://"):  # a pasted reference opens; it is not a prompt
             await self._open_reference(text.strip())
             return
-        await self._submit_prompt(text)
+        await self._submit_prompt(rest, images)
 
-    async def _submit_prompt(self, text: str) -> None:
+    async def _submit_prompt(self, text: str, images: tuple[Image, ...] = ()) -> None:
         tab = self.tab
         self._remove_welcome(tab)
         if tab.session_id is None:
@@ -256,17 +286,17 @@ class CommandsMixin(App[None]):
             # and quitting never leaves an empty conversation behind.
             tab.session_id = await self.application.new_session(self._principal)
         if tab.title is None:
-            tab.title = text
-            await self._name_session(tab.session_id, text)
+            tab.title = text or images[0].name
+            await self._name_session(tab.session_id, tab.title)
         self._bump_tokens(tab, text)
-        tab.mount(UserMessage(text))
+        tab.mount(UserMessage(text, images=[image.name for image in images]))
         delegated = _parse_delegation(text)
         if delegated is not None:
             # Honest delegation: the app can only start a run on the wired agent, so the
             # named subagent is reached by asking the model to delegate to it (P20).
             name, task = delegated
             text = f"Delegate this task to the `{name}` subagent: {task}"
-        await self._start_run(tab, text)
+        await self._start_run(tab, text, images)
 
     async def _queue_input(self, text: str) -> None:
         """Send a message into the working run; the model reads it before its next step."""

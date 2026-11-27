@@ -778,7 +778,7 @@ async def test_non_text_messages_get_a_polite_reply_and_strangers_none() -> None
             "message_id": 1,
             "from": {"id": OWNER},
             "chat": {"id": OWNER, "type": "private"},
-            "photo": [],
+            "sticker": {"file_id": "s1"},
         },
     }
     stranger = {
@@ -789,7 +789,7 @@ async def test_non_text_messages_get_a_polite_reply_and_strangers_none() -> None
     await gateway.handle_update(photo)
     await gateway.handle_update(stranger)
 
-    assert api.texts() == ["I only understand text messages for now."]
+    assert api.texts() == ["I understand text and images only."]
 
 
 def _many_sessions(n: int) -> list[SessionSummary]:

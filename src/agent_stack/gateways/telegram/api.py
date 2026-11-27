@@ -113,6 +113,22 @@ class TelegramApi:
             caption=caption,
         )
 
+    async def download_file(self, file_id: str, max_bytes: int) -> bytes:
+        """A file a user sent (``getFile`` then the file URL); refused when over ``max_bytes``."""
+        info = await self.call("getFile", file_id=file_id)
+        if int(info.get("file_size") or 0) > max_bytes or "file_path" not in info:
+            raise TelegramError(f"the file is over {max_bytes // 1_048_576} MB")
+        try:
+            response = await self._client.get(
+                f"/file/bot{self._token}/{info['file_path']}", timeout=60.0
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise TelegramError(f"{type(exc).__name__} downloading a file") from None
+        if len(response.content) > max_bytes:
+            raise TelegramError(f"the file is over {max_bytes // 1_048_576} MB")
+        return response.content
+
     async def set_my_commands(self, commands: list[tuple[str, str]]) -> None:
         """Publish the slash-command menu shown next to the message box."""
         await self.call(

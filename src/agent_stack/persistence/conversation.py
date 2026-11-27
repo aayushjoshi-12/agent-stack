@@ -10,7 +10,10 @@ Layout::
     ├── session.json      # metadata mirror of the SQLite row
     ├── transcript.jsonl  # append-only, one record per line
     ├── transcript.md     # human-readable rendering, append-only
-    └── artifacts/        # files created or shared in this chat
+    └── artifacts/        # files created or shared in this chat, and the chat's images
+
+An image in a message is saved once as ``artifacts/<sha256[:16]>.<ext>`` and the transcript line
+names it (``data.images``); reading the conversation turns the names back into image blocks.
 """
 
 from __future__ import annotations
@@ -23,14 +26,22 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
 
 from agent_stack.core.errors import SessionVersionConflictError
+from agent_stack.core.images import (
+    decode_image,
+    image_block,
+    image_file_name,
+    placeholder,
+    sniff_mime,
+)
 from agent_stack.core.session import Session
 from agent_stack.persistence.serializers import (
     MessageRecord,
     message_to_record,
     record_from_json,
+    record_images,
     record_to_json,
     record_to_message,
 )
@@ -47,6 +58,10 @@ class ConversationStore(Protocol):
     async def read_messages(self, session_id: str) -> list[BaseMessage]: ...
 
     def session_dir(self, session_id: str) -> Path: ...
+
+    async def image(self, session_id: str, name: str) -> bytes | None: ...
+
+    def copy_images(self, source: str, target: str, records: Sequence[MessageRecord]) -> None: ...
 
 
 class FileConversationStore:
@@ -74,8 +89,21 @@ class FileConversationStore:
         return await asyncio.to_thread(self._read_sync, session_id)
 
     async def read_messages(self, session_id: str) -> list[BaseMessage]:
-        records = await self.read(session_id)
-        return [record_to_message(record) for record in records if record.kind != "event"]
+        return await asyncio.to_thread(self._read_messages_sync, session_id)
+
+    async def image(self, session_id: str, name: str) -> bytes | None:
+        """A stored image of this session by its file name (None when there is none)."""
+        path = self.session_dir(session_id) / "artifacts" / name
+        return await asyncio.to_thread(path.read_bytes) if path.is_file() else None
+
+    def copy_images(self, source: str, target: str, records: Sequence[MessageRecord]) -> None:
+        """Copy the image files ``records`` name from one session to another (a branch)."""
+        into = self.session_dir(target) / "artifacts"
+        for name in {n for record in records for n in record_images(record)}:
+            found = self.session_dir(source) / "artifacts" / name
+            if found.is_file():
+                into.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(found, into / name)
 
     # -- SessionStore ------------------------------------------------------
 
@@ -187,9 +215,34 @@ class FileConversationStore:
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(target)
 
+    def _read_messages_sync(self, session_id: str) -> list[BaseMessage]:
+        artifacts = self.session_dir(session_id) / "artifacts"
+        messages = []
+        for record in self._read_sync(session_id):
+            if record.kind == "event":
+                continue
+            message = record_to_message(record)
+            if names := record_images(record):
+                message = _with_images(message, names, artifacts)
+            messages.append(message)
+        return messages
+
+    def _save_images(self, session_id: str, messages: list[BaseMessage]) -> None:
+        """Write each image in ``messages`` to ``artifacts/`` once, under its content hash."""
+        artifacts = self.session_dir(session_id) / "artifacts"
+        for message in messages:
+            for part in message.content if isinstance(message.content, list) else ():
+                if (decoded := decode_image(part)) is None:
+                    continue
+                target = artifacts / image_file_name(*decoded)
+                if not target.exists():
+                    artifacts.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(decoded[0])
+
     def _append_messages_sync(self, session_id: str, messages: list[BaseMessage]) -> None:
         if not messages:
             return
+        self._save_images(session_id, messages)
         existing = self._read_sync(session_id)
         start = max((record.seq for record in existing), default=0) + 1
         now = datetime.now(UTC)
@@ -201,6 +254,23 @@ class FileConversationStore:
 
     def _delete_sync(self, session_id: str) -> None:
         shutil.rmtree(self.session_dir(session_id), ignore_errors=True)
+
+
+def _with_images(message: BaseMessage, names: list[str], artifacts: Path) -> BaseMessage:
+    """``message`` with its stored images back as blocks: images first, then the text."""
+    if not isinstance(message, (HumanMessage, ToolMessage)):
+        return message
+    blocks: list[str | dict[str, Any]] = []
+    for name in names:
+        try:
+            data = (artifacts / name).read_bytes()
+        except OSError:
+            blocks.append({"type": "text", "text": placeholder(f"{name} (missing)")})
+            continue
+        blocks.append(image_block(data, sniff_mime(data) or "image/png"))
+    if isinstance(message.content, str) and message.content:
+        blocks.append({"type": "text", "text": message.content})
+    return message.model_copy(update={"content": blocks})
 
 
 def _render_record(record: MessageRecord) -> str:
@@ -229,8 +299,14 @@ def _render_record(record: MessageRecord) -> str:
         lines.append(record.content)
         lines.append("")
 
-    if record.data:
-        rendered = json.dumps(dict(record.data), ensure_ascii=False, indent=2, default=str)
+    images = record_images(record)
+    if images:
+        lines.extend(placeholder(name) for name in images)
+        lines.append("")
+
+    data = {k: v for k, v in record.data.items() if k != "images"}
+    if data:
+        rendered = json.dumps(data, ensure_ascii=False, indent=2, default=str)
         lines.append(f"```json\n{rendered}\n```")
         lines.append("")
 

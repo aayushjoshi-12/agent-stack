@@ -50,6 +50,7 @@ from agent_stack.core.errors import (
 )
 from agent_stack.core.event_bus import EventBus
 from agent_stack.core.events import AgentEvent, EventType
+from agent_stack.core.images import Image, content_text, image_block, image_count, without_images
 from agent_stack.core.locks import SessionLockManager
 from agent_stack.core.session import Session, SessionStore
 from agent_stack.core.state import Checkpoint, CheckpointStatus
@@ -251,6 +252,7 @@ class AgentRuntime:
         parent_run_id: str | None = None,
         inbox: Callable[[bool], list[str]] | None = None,
         notes: str | None = None,
+        images: Sequence[Image] = (),
     ) -> AIMessage:
         resolved_run_id = run_id or str(uuid4())
 
@@ -266,6 +268,7 @@ class AgentRuntime:
                 parent_run_id=parent_run_id,
                 inbox=inbox,
                 notes=notes,
+                images=images,
             )
 
         if self._session_lock is None:
@@ -311,6 +314,7 @@ class AgentRuntime:
         parent_run_id: str | None = None,
         inbox: Callable[[bool], list[str]] | None = None,
         notes: str | None = None,
+        images: Sequence[Image] = (),
     ) -> AIMessage:
         session = await self._session_store.get(session_id)
         if session is None:
@@ -319,7 +323,7 @@ class AgentRuntime:
         stored_version = session.version
 
         history = await self._session_store.get_messages(session_id)
-        new_messages: list[BaseMessage] = [HumanMessage(content=message)]
+        new_messages: list[BaseMessage] = [HumanMessage(content=_user_content(message, images))]
         if notes:  # background-monitor notes that waited for this turn
             new_messages.append(HumanMessage(content=notes))
 
@@ -675,7 +679,7 @@ class AgentRuntime:
                 data={"text": text, "kind": kind, "step": step},
             )
 
-        return lambda: self._stream_model(model_input, emit, cancel)
+        return lambda: self._call_model(model_input, emit, cancel)
 
     async def _stream_model(
         self,
@@ -712,6 +716,39 @@ class AgentRuntime:
         if isinstance(whole, AIMessageChunk):
             return message_chunk_to_message(whole)
         return whole
+
+    async def _call_model(
+        self,
+        model_input: list[BaseMessage],
+        emit: Callable[[str, str], Awaitable[None]] | None = None,
+        cancel: CancellationToken | None = None,
+    ) -> Any:
+        """Call the model; a model that refuses images gets one retry with them as text (P44).
+
+        The placeholders tell the model (and through it the user) why it cannot see them, so a
+        conversation with an image stays usable on a text-only model. Bounded: one retry.
+        ``emit`` streams the reply (see ``_stream_model``); without it the call is one ``ainvoke``.
+        """
+
+        async def ask(messages: list[BaseMessage]) -> Any:
+            if emit is None:
+                return await self._model.ainvoke(messages)
+            return await self._stream_model(messages, emit, cancel)
+
+        try:
+            return await ask(model_input)
+        except Exception as exc:
+            if "image" not in str(exc).lower() or not any(
+                image_count(m.content) for m in model_input
+            ):
+                raise
+            _LOG.info("the model refused images; retrying with placeholders: %s", error_text(exc))
+            return await ask(
+                [
+                    m.model_copy(update={"content": without_images(m.content, _NO_VISION)})
+                    for m in model_input
+                ]
+            )
 
     async def _maybe_compact(
         self,
@@ -785,7 +822,7 @@ class AgentRuntime:
         ask = COMPACT_PROMPT + (
             f"\n\nThe user asked the summary to focus on: {focus}" if focus else ""
         )
-        reply = await self._model.ainvoke([*model_input, HumanMessage(content=ask)])
+        reply = await self._call_model([*model_input, HumanMessage(content=ask)])
         if not isinstance(reply, AIMessage):
             raise AgentStackError(f"Model returned {type(reply).__name__}, expected AIMessage")
         usage = usage_data(reply)
@@ -1104,8 +1141,21 @@ def _request_text(messages: Sequence[BaseMessage]) -> str | None:
     """What the user asked for in this run (its first message), shortened for an advisor."""
     for message in messages:
         if isinstance(message, HumanMessage):
-            return str(message.content)[:2000]
+            return content_text(message.content)[:2000]
     return None
+
+
+_NO_VISION = " (not shown: this model does not accept images; switch to one that does with /model)"
+
+
+def _user_content(message: str, images: Sequence[Image]) -> str | list[str | dict[str, Any]]:
+    """A user turn: plain text, or the images first and then the text (as stored and replayed)."""
+    if not images:
+        return message
+    blocks: list[str | dict[str, Any]] = [image_block(i.data, i.mime) for i in images]
+    if message:
+        blocks.append({"type": "text", "text": message})
+    return blocks
 
 
 def _rejected_result(

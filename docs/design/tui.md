@@ -75,6 +75,15 @@ messages go back into the prompt. Built-in `/commands` work during a run; a skil
 [md|json] [path]` writes the conversation into the workspace (default
 `<slug-of-title>-<YYYY-MM-DD>.md`, `-2` added rather than overwrite) and notifies the path.
 
+**Images (P44).** Typing `@path/to/shot.png` (relative to the working folder) or pasting or
+dragging an absolute path (`/Users/me/My\ Shot.png`, or quoted) attaches that PNG, JPEG, WebP
+or GIF (up to 5 MB): a muted `image: shot.png` chip shows under the prompt while it is there, and
+the token is taken out of the text on send. `/image <path>` puts `@path` in the prompt. The user
+row shows `[image: shot.png]`; a reopened conversation shows the stored name. Only existing image
+files count, so `@explorer do x` delegation and plain file names in a sentence are untouched.
+While a run is active, a message with an image is not queued (queued input is text only): send
+it after the run.
+
 ## Conversations
 
 A launch always opens a **fresh draft**, never the last chat. Nothing is stored until the first

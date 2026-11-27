@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 from textual.app import App
 
 from agent_stack.core.events import AgentEvent, EventType
-from agent_stack.gateways.base import MessageEnvelope
+from agent_stack.gateways.base import Image, MessageEnvelope
 from agent_stack.gateways.tui.chrome import PromptArea, Welcome
 from agent_stack.gateways.tui.render import tool_args_lines, tool_detail
 from agent_stack.gateways.tui.rows import AgentMessage, Disclosure, Notice, SubagentRow, UserMessage
@@ -44,9 +44,11 @@ class RunsMixin(App[None]):
         def _refresh_all(self) -> None: ...
         def _refresh_sidebar(self, now: float | None = None) -> None: ...
 
-    async def _start_run(self, tab: Conversation, text: str) -> None:
+    async def _start_run(
+        self, tab: Conversation, text: str, images: tuple[Image, ...] = ()
+    ) -> None:
         envelope = MessageEnvelope(
-            principal=self._principal, session=tab.session_id or "", text=text
+            principal=self._principal, session=tab.session_id or "", text=text, images=images
         )
         handle = await self.application.send_message(envelope)
         tab.run_id = handle.run_id

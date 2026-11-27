@@ -208,3 +208,5 @@ Screen.-hide-sidebar #sidebar { display: none; }
 }
 #completions > .option-list--option-highlighted { background: $panel; text-style: bold; }
 #approval-note { margin-bottom: 1; }
+/* images the prompt attaches (P44): "image: name.png" under the prompt */
+#attachments { display: none; height: auto; color: $text-muted; }

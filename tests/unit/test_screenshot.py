@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from agent_stack.artifacts.local import LocalArtifactStore
+from agent_stack.core.images import image_block
 from agent_stack.tools.builtins.screenshot import check_screenshot_url, screenshot_tools
 from agent_stack.tools.builtins.web import WebError
 
@@ -104,11 +105,13 @@ async def test_screenshot_saves_a_png_and_reports_console_errors(
     server: str, tmp_path: Path
 ) -> None:
     (web_screenshot,) = screenshot_tools(LocalArtifactStore(tmp_path))
-    out = await web_screenshot.ainvoke({"url": server + "/", "width": 640, "height": 480})
+    image, text = await web_screenshot.ainvoke({"url": server + "/", "width": 640, "height": 480})
+    out = text["text"]
     saved = re.search(r"^Saved: (\S+)", out, re.M)
     assert saved, out
     png = Path(saved.group(1)).read_bytes()
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    assert image == image_block(png, "image/png")  # the model sees the page itself (P44)
     assert struct.unpack(">II", png[16:24]) == (640, 480)
     assert "Title: Dev page" in out and "Status: 200" in out
     assert "boom from the page" in out and "undefinedFunction" in out

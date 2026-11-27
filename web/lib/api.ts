@@ -2,7 +2,14 @@ import type { ApiEvent } from "./events.ts";
 
 export type Conn = { base: string; token: string };
 export type SessionSummary = { id: string; title: string; updated_at?: string | null; branch_of?: string | null };
-export type HistoryRow = { kind: "user" | "assistant" | "tool" | "compaction"; text: string; args: Record<string, unknown> | null; result: string | null };
+export type HistoryRow = {
+  kind: "user" | "assistant" | "tool" | "compaction";
+  text: string;
+  args: Record<string, unknown> | null;
+  result: string | null;
+  /** A user message's images: stored names, fetched with `api.image`. */
+  images?: string[];
+};
 export type SessionDetail = { id: string; title: string | null; branch_of: string | null; history: HistoryRow[] };
 export type RunInfo = { id: string; session_id: string; status: string; steps: number; tool_calls: number; error: string | null; parent_run_id: string | null };
 
@@ -100,8 +107,16 @@ export const api = {
   rename: (c: Conn, id: string, title: string) =>
     call<{ id: string }>(c, `/sessions/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ title }) }),
   remove: (c: Conn, id: string) => call<void>(c, `/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }),
-  send: (c: Conn, id: string, text: string) =>
-    call<{ run_id: string }>(c, `/sessions/${encodeURIComponent(id)}/messages`, json({ text })),
+  send: (c: Conn, id: string, text: string, images: { name: string; data: string }[] = []) =>
+    call<{ run_id: string }>(c, `/sessions/${encodeURIComponent(id)}/messages`, json({ text, images })),
+  /** A stored image of a conversation as an object URL (the route needs the bearer token). */
+  image: async (c: Conn, id: string, name: string): Promise<string> => {
+    const response = await fetch(`${c.base}/sessions/${encodeURIComponent(id)}/images/${encodeURIComponent(name)}`, {
+      headers: { Authorization: `Bearer ${c.token}` },
+    });
+    if (!response.ok) throw new ApiError(`Image failed (${response.status})`, response.status);
+    return URL.createObjectURL(await response.blob());
+  },
   branch: (c: Conn, id: string, eventId: string) =>
     call<{ id: string }>(c, `/sessions/${encodeURIComponent(id)}/branch`, json({ event_id: eventId })),
   commands: (c: Conn) => call<SlashCommand[]>(c, "/commands"),

@@ -40,6 +40,7 @@ _ALLOWED = frozenset(
     {
         "agent_stack.app.application",
         "agent_stack.core.events",
+        "agent_stack.core.images",  # the image type in MessageEnvelope (P44); a leaf module
         "agent_stack.gateways.base",
         "agent_stack.gateways.ratelimit",  # shared by gateways, imports nothing internal
     }

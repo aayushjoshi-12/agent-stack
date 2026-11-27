@@ -56,6 +56,21 @@ One JSON object per line; append-only; never rewritten. This is the source of tr
 
 `transcript.md` is a rendered view of the same stream (human-facing; may be regenerated).
 
+**Images (P44, ADR 019).** A user message or tool result with images keeps only its text in
+`content`; each image is written once to `artifacts/<sha256[:16]>.<ext>` (content addressed:
+the same image sent twice is one file) and named in `data.images`:
+
+```jsonl
+{"seq":6,"ts":"...","run_id":"","kind":"human","content":"what is this?","data":{"images":["64b72fba0d73921b.png"]}}
+```
+
+Reading the conversation turns each name back into an image block (images first, then the
+text), so later turns and a restarted process show the model the same image. A missing file
+becomes a `[image: <name> (missing)]` text part. `transcript.md`, the export (P41), the chat
+search index (P32) and history rows show `[image: <name>]`; base64 never lands in a text file,
+the event log or the audit log (no event carries message content). A branch copies the image
+files its lines name.
+
 ## 5. Interfaces
 
 ```python

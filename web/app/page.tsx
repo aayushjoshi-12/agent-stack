@@ -11,6 +11,7 @@ import { ChangesPanel } from "@/components/ChangesPanel";
 import { HistoryPanel, type HistoryTab } from "@/components/HistoryPanel";
 import { RewindMenu, type RewindMode } from "@/components/RewindMenu";
 import { formatCost, formatTokens } from "@/lib/format";
+import type { Attachment } from "@/lib/images";
 import { rewindTargets } from "@/lib/rewind";
 import type { Item, RunPhase } from "@/lib/events";
 import { useLive } from "@/lib/useLive";
@@ -63,7 +64,7 @@ export default function Page() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryRow[]>([]);
-  const [pendingUser, setPendingUser] = useState<string | null>(null);
+  const [pendingUser, setPendingUser] = useState<{ text: string; images: string[] } | null>(null);
   /** Messages sent while the run worked that the model has not read yet. */
   const [queued, setQueued] = useState<string[]>([]);
   const [error, setError] = useState("");
@@ -129,6 +130,21 @@ export default function Page() {
     },
     [conn],
   );
+
+  // The history's images (P44), fetched once each with the token and kept as object URLs.
+  const [stored, setStored] = useState<Record<string, string>>({});
+  const requested = useRef(new Set<string>());
+  useEffect(() => {
+    if (!conn || !activeId) return;
+    for (const name of history.flatMap((row) => row.images ?? [])) {
+      if (requested.current.has(name)) continue;
+      requested.current.add(name);
+      void api
+        .image(conn, activeId, name)
+        .then((url) => setStored((now) => ({ ...now, [name]: url })))
+        .catch(() => requested.current.delete(name));
+    }
+  }, [conn, activeId, history]);
 
   const live = useLive(
     conn,
@@ -334,7 +350,7 @@ export default function Page() {
   }, [live]);
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, images: Attachment[] = []) => {
       if (!conn) return;
       setError("");
       const working = activeRef.current ? runBySession.current.get(activeRef.current) : undefined;
@@ -361,8 +377,13 @@ export default function Page() {
           setHistory([]);
         }
         setForkable(null);
-        setPendingUser(text);
-        const { run_id } = await api.send(conn, id, text);
+        setPendingUser({ text, images: images.map((i) => i.url) });
+        const { run_id } = await api.send(
+          conn,
+          id,
+          text,
+          images.map(({ name, data }) => ({ name, data })),
+        );
         runBySession.current.set(id, run_id);
         live.follow(run_id);
         void refreshSessions().catch(() => undefined);
@@ -648,7 +669,12 @@ export default function Page() {
               const turn = running ? undefined : targets.get(i);
               return row.kind === "user" ? (
                 <div key={`h${i}`}>
-                  <UserBubble text={row.text} onRewind={turn && (() => setPicking(picking === i ? null : i))} rewinding={picking === i} />
+                  <UserBubble
+                    text={row.text}
+                    images={row.images?.map((name) => stored[name] ?? "").filter(Boolean)}
+                    onRewind={turn && (() => setPicking(picking === i ? null : i))}
+                    rewinding={picking === i}
+                  />
                   {turn && picking === i && (
                     <RewindMenu
                       turn={turn}
@@ -695,7 +721,7 @@ export default function Page() {
                 <ToolCard key={`h${i}`} tool={historyTool(row, i)} onOpenFile={openFile} />
               );
             })}
-            {pendingUser && <UserBubble text={pendingUser} />}
+            {pendingUser && <UserBubble text={pendingUser.text} images={pendingUser.images} />}
             {live.state.items.map((item) => {
               switch (item.kind) {
                 case "tool":
@@ -769,7 +795,8 @@ export default function Page() {
                     .catch(fail);
                 } else setNotice("Open a conversation first.");
               }}
-              onSend={(t) => void send(t)}
+              onSend={(t, attached) => void send(t, attached)}
+              onNotice={setNotice}
               onStop={() => void stop()}
             />
           </div>

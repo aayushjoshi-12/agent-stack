@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import time
 from collections import deque
+from collections.abc import Sequence
 from typing import Any, ClassVar
 
 from textual.binding import Binding
@@ -69,8 +70,9 @@ def spinner_frame(now: float) -> str:
 class UserMessage(Static):
     """What the user typed: a raised panel with an accent bar."""
 
-    def __init__(self, text: str, *, queued: bool = False) -> None:
-        shown = escape(text) + (
+    def __init__(self, text: str, *, queued: bool = False, images: Sequence[str] = ()) -> None:
+        marks = "\n".join(f"[dim]\\[image: {escape(name)}][/]" for name in images)
+        shown = "\n".join(part for part in (escape(text), marks) if part) + (
             "\n[dim]queued: read at the agent's next step · up arrow to edit or cancel[/]"
             if queued
             else ""

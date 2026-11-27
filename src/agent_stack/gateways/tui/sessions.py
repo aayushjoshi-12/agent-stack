@@ -187,7 +187,7 @@ class SessionsMixin(App[None]):
             self._remove_welcome(tab)
         for item in history:
             if item.kind == "user":
-                tab.mount(UserMessage(item.text))
+                tab.mount(UserMessage(item.text, images=item.images))
             elif item.kind == "assistant":
                 tab.mount(AgentMessage(item.text))
             elif item.kind == "compaction":

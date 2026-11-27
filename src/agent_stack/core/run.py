@@ -22,6 +22,7 @@ from agent_stack.core.cancellation import CancellationToken
 from agent_stack.core.errors import RunCancelled, error_text
 from agent_stack.core.event_bus import EventBus
 from agent_stack.core.events import AgentEvent, EventType
+from agent_stack.core.images import Image
 from agent_stack.core.run_context import RunContext, RunView, SubagentRun, run_context
 from agent_stack.core.runtime import AgentRuntime
 
@@ -80,6 +81,8 @@ class RunRequest:
     #: Tool-made text (monitor notes) the model reads as a message after ``message``. Kept apart
     #: so ``message`` stays the user's own words, which the auto-mode classifier sees.
     notes: str | None = None
+    #: Images attached to ``message`` (P44); the model sees them before the text.
+    images: tuple[Image, ...] = ()
 
 
 @dataclass
@@ -247,6 +250,7 @@ class RunManager:
                     parent_run_id=request.parent_run_id,
                     inbox=lambda close: self._drain_inbox(run.id, close=close),
                     notes=request.notes,
+                    images=request.images,
                 )
             run.status = RunStatus.COMPLETED
             return result

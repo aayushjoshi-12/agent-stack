@@ -13,6 +13,7 @@ A server that cannot start or list its tools is logged and reported, never fatal
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import logging
@@ -23,6 +24,8 @@ from pathlib import Path
 from typing import Any
 
 from langchain_core.tools import BaseTool, StructuredTool
+
+from agent_stack.core.images import image_block, make_image
 
 __all__ = ["McpManager", "McpServerConfig", "McpServerStatus", "load_mcp_config"]
 
@@ -123,13 +126,26 @@ def _text_of(result: Any) -> str:
     return "\n".join(parts)
 
 
+def _image_blocks(result: Any) -> list[dict[str, Any]]:
+    """The result's images (P44) as model image blocks; an unusable one stays ``[image]`` text."""
+    blocks = []
+    for block in result.content:
+        if getattr(block, "type", None) != "image":
+            continue
+        with contextlib.suppress(ValueError):
+            image = make_image(base64.b64decode(str(block.data), validate=True))
+            blocks.append(image_block(image.data, image.mime))
+    return blocks
+
+
 def _wrap(server: str, client: Any, tool: Any) -> BaseTool:
-    async def call(**kwargs: Any) -> str:
+    async def call(**kwargs: Any) -> str | list[Any]:
         result = await client.call_tool(tool.name, kwargs)
         text = _text_of(result)
         if result.is_error:
             raise RuntimeError(text or "the MCP tool reported an error")
-        return text
+        images = _image_blocks(result)
+        return [*images, {"type": "text", "text": text}] if images else text
 
     schema = dict(tool.input_schema or {"type": "object", "properties": {}})
     schema.setdefault("properties", {})

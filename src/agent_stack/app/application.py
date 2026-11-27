@@ -49,6 +49,7 @@ from agent_stack.core.errors import BudgetExceededError, SessionVersionConflictE
 from agent_stack.core.event_bus import EventBus
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.core.factory import AgentFactory
+from agent_stack.core.images import block_name, content_text, placeholder
 from agent_stack.core.run import Run, RunHandle, RunManager, RunRequest
 from agent_stack.core.runtime import usage_data
 from agent_stack.core.session import BranchingSessionStore, Session, SessionStore
@@ -65,7 +66,7 @@ from agent_stack.observability.metrics import Metrics
 from agent_stack.observability.redact import env_secrets, redact
 from agent_stack.persistence.event_log import EventLogStore
 from agent_stack.persistence.search import ChatSearchIndex
-from agent_stack.persistence.serializers import message_to_record, record_to_json
+from agent_stack.persistence.serializers import message_to_record, record_text, record_to_json
 from agent_stack.skills import SkillRegistry
 from agent_stack.tools.mcp import McpManager, McpServerStatus
 
@@ -129,6 +130,7 @@ class Application:
             message=text,
             parent_run_id=parent_run_id,
             notes=notes,
+            images=tuple(envelope.images),
         )
         first = parent_run_id is None and self.title_model is not None
         if first:
@@ -434,8 +436,15 @@ class Application:
     async def session_history(self, session_id: str) -> list[HistoryItem]:
         """A stored conversation as display rows: user text, assistant text, tool calls."""
         messages = await self.session_store.get_messages(session_id)
-        results = {m.tool_call_id: _text_of(m) for m in messages if isinstance(m, ToolMessage)}
+        results = {m.tool_call_id: _tool_text(m) for m in messages if isinstance(m, ToolMessage)}
         return [item for message in messages for item in _history_items(message, results)]
+
+    async def session_image(self, session_id: str, name: str) -> bytes | None:
+        """A stored image of a conversation (P44) by its file name; None when there is none."""
+        store: Any = self.session_store
+        if not _IMAGE_NAME_RE.fullmatch(name) or not hasattr(store, "image"):
+            return None
+        return cast("bytes | None", await store.image(session_id, name))
 
     async def export_session(self, session_id: str, fmt: str = "md") -> str:
         """The conversation as Markdown (``md``) or JSON (``json``), redacted like the logs."""
@@ -452,7 +461,10 @@ class Application:
             ]
             drop = {"data", "ts", "run_id"}
         rows = [
-            {k: v for k, v in json.loads(record_to_json(r)).items() if k not in drop}
+            {
+                **{k: v for k, v in json.loads(record_to_json(r)).items() if k not in drop},
+                "content": record_text(r),  # images as "[image: name]", never their data
+            }
             for r in records
         ]
         meta = {
@@ -656,15 +668,23 @@ def _clean_title(raw: str) -> str:
 
 def _text_of(message: BaseMessage) -> str:
     """A message's text, whether ``content`` is a string or a list of content blocks."""
-    content = message.content
-    if isinstance(content, str):
-        return content
-    parts = [
-        block if isinstance(block, str) else str(block.get("text", ""))
-        for block in content
-        if isinstance(block, (str, dict))
-    ]
-    return "".join(parts)
+    return content_text(message.content)
+
+
+#: A stored image's name: content hash plus extension (nothing that could leave the folder).
+_IMAGE_NAME_RE = re.compile(r"[0-9a-f]{16}\.(png|jpg|webp|gif)")
+
+
+def _image_names(content: object) -> tuple[str, ...]:
+    if not isinstance(content, list):
+        return ()
+    return tuple(name for part in content if (name := block_name(part)))
+
+
+def _tool_text(message: ToolMessage) -> str:
+    """A tool result for display: its text and a ``[image: name]`` line per image."""
+    marks = [placeholder(name) for name in _image_names(message.content)]
+    return "\n".join([_text_of(message), *marks]) if marks else _text_of(message)
 
 
 _SLASH_RE = re.compile(r"^/([A-Za-z][\w-]*)(?:\s+(.*))?$", re.DOTALL)
@@ -678,7 +698,8 @@ def _history_items(
     results = results or {}
     if isinstance(message, HumanMessage):
         text = _SKILL_BLOCK_RE.sub("", _text_of(message))  # a skill's body is not chat
-        return [HistoryItem("user", text)] if text.strip() else []
+        images = _image_names(message.content)
+        return [HistoryItem("user", text, images=images)] if text.strip() or images else []
     if isinstance(message, SystemMessage) and _text_of(message).startswith(COMPACTION_HEADER):
         # a saved compaction (P31): the summary the model continued from, without its file copies
         summary = _text_of(message).split(FILES_HEADER)[0][len(COMPACTION_HEADER) :].strip()

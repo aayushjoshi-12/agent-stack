@@ -24,6 +24,7 @@ from typing import Any, Protocol
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
 from agent_stack.core.errors import ConfigurationError
+from agent_stack.core.images import content_chars
 
 TRUNCATION_MARKER = "…[truncated]"
 
@@ -130,7 +131,7 @@ def estimate_tokens(messages: Sequence[BaseMessage], extra_chars: int = 0) -> in
     """A cheap token estimate (about four characters per token), tool-call arguments included."""
     chars = extra_chars
     for message in messages:
-        chars += len(str(message.content))
+        chars += content_chars(message.content)
         for call in getattr(message, "tool_calls", None) or ():
             chars += len(str(call.get("args", "")))
     return chars // 4
@@ -148,7 +149,7 @@ def tool_schema_tokens(tools: Sequence[Any]) -> int:
 
 def _cleared(message: ToolMessage) -> ToolMessage:
     """A stand-in for an old tool result: same call id (the pair stays valid), no payload."""
-    size = len(str(message.content))
+    size = content_chars(message.content)
     note = f"[output cleared to save context ({size} chars); run the tool again if you need it]"
     return ToolMessage(content=note, tool_call_id=message.tool_call_id, name=message.name)
 

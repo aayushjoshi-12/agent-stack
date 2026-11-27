@@ -26,6 +26,7 @@ from langchain_core.messages import ToolMessage
 from agent_stack.artifacts.base import ArtifactStore
 from agent_stack.core.context import truncate_bytes
 from agent_stack.core.errors import ToolTimeoutError
+from agent_stack.core.images import content_text, image_count, is_image_block
 from agent_stack.core.run_context import current_run_context
 from agent_stack.core.tool_stream import tool_output_sink
 from agent_stack.observability.redact import env_secrets, redact
@@ -112,6 +113,17 @@ class ToolExecutor:
             return text
         return truncate_bytes(raw, self.max_output_bytes)
 
+    async def _content_for_model(self, result: Any, tool_name: str) -> str | list[Any]:
+        """A result as model content: text via ``_for_model``; images (P44) pass as blocks."""
+        if not image_count(result):
+            return await self._for_model(str(result), tool_name)
+        return [
+            part
+            if is_image_block(part)
+            else {"type": "text", "text": await self._for_model(content_text([part]), tool_name)}
+            for part in result
+        ]
+
     async def execute_one(
         self,
         tool_call: Mapping[str, Any],
@@ -177,7 +189,8 @@ class ToolExecutor:
             tool_call_id=tool_call_id,
             tool_name=tool_name,
             message=ToolMessage(
-                content=await self._for_model(str(result), tool_name), tool_call_id=tool_call_id
+                content=await self._content_for_model(result, tool_name),
+                tool_call_id=tool_call_id,
             ),
             success=True,
         )

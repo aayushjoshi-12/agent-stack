@@ -408,6 +408,7 @@ class SqliteSessionStore:
             branch_point_event_id=branch_point_event_id,
         )
         await self._conversation.append(branch.id, records)
+        self._conversation.copy_images(session_id, branch.id, records)
         await self.save(branch)
         return branch
 
@@ -439,6 +440,7 @@ class SqliteSessionStore:
             branch_point_event_id=f"seq:{seq}",
         )
         await self._conversation.append(branch.id, keep)
+        self._conversation.copy_images(session_id, branch.id, keep)
         await self.save(branch)
         return branch
 
@@ -564,6 +566,10 @@ class SqliteSessionStore:
 
     async def get_messages(self, session_id: str) -> list[BaseMessage]:
         return await self._conversation.read_messages(session_id)
+
+    async def image(self, session_id: str, name: str) -> bytes | None:
+        """One of the session's stored images (P44), by its content-addressed file name."""
+        return await self._conversation.image(session_id, name)
 
     async def append_messages(self, session_id: str, messages: Sequence[BaseMessage]) -> None:
         await self._conversation.append_messages(session_id, messages)

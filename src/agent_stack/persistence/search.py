@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from agent_stack.persistence.conversation import FileConversationStore
-from agent_stack.persistence.serializers import MessageRecord
+from agent_stack.persistence.serializers import MessageRecord, record_text
 from agent_stack.persistence.sqlite import SqliteDatabase
 
 __all__ = ["ChatSearchIndex", "SearchHit"]
@@ -54,7 +54,8 @@ def match_query(query: str) -> str:
 def _row(record: MessageRecord) -> tuple[str, str] | None:
     """``(said, tool)`` text for one transcript line, or None for lines not worth indexing."""
     if record.kind in ("human", "system"):
-        return (record.content, "") if record.content.strip() else None
+        text = record_text(record)  # images as "[image: name]", never their data
+        return (text, "") if text.strip() else None
     if record.kind == "ai":
         calls = " ".join(
             f"{call.get('name')} {json.dumps(call.get('args'), ensure_ascii=False)}"
@@ -62,7 +63,8 @@ def _row(record: MessageRecord) -> tuple[str, str] | None:
         )
         return (record.content, calls) if record.content.strip() or calls else None
     if record.kind == "tool":
-        return ("", record.content[:_TOOL_CHARS]) if record.content.strip() else None
+        text = record_text(record)
+        return ("", text[:_TOOL_CHARS]) if text.strip() else None
     return None  # events
 
 

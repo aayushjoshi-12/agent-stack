@@ -30,11 +30,14 @@ from typing import Any
 from agent_stack.app.application import Application, LineTurn, redact_secrets
 from agent_stack.core.events import AgentEvent, EventType
 from agent_stack.gateways.base import (
+    MAX_IMAGE_BYTES,
     HistoryItem,
+    Image,
     MessageEnvelope,
     SessionSummary,
     SessionUsage,
     format_cost,
+    make_image,
     model_breakdown,
     usage_summary,
 )
@@ -87,7 +90,7 @@ _COMMANDS = [
     ("help", "Show this list"),
 ]
 _HELP = (
-    "Send a message to talk to the agent.\n\n"
+    "Send a message to talk to the agent, or a photo or image file (its caption is the text).\n\n"
     "/new  start a fresh conversation\n"
     "/sessions  browse and open any conversation (also the ones from the terminal)\n"
     "/history [n]  the latest messages of this conversation\n"
@@ -222,6 +225,17 @@ def _redact(value: Any) -> Any:
     return value
 
 
+def _image_file(message: Mapping[str, Any]) -> tuple[str, str] | None:
+    """``(file_id, name)`` of a photo (its largest size) or an image sent as a file."""
+    photos = message.get("photo")
+    if isinstance(photos, list) and photos:
+        return str(photos[-1]["file_id"]), "photo.jpg"
+    document = message.get("document")
+    if isinstance(document, Mapping) and str(document.get("mime_type", "")).startswith("image/"):
+        return str(document["file_id"]), str(document.get("file_name") or "image")
+    return None
+
+
 def _button(text: str, data: str) -> dict[str, str]:
     return {"text": text, "callback_data": data}
 
@@ -342,13 +356,31 @@ class TelegramGateway:
         chat_id = int(message["chat"]["id"])
         if await self._too_fast(self._message_limit, chat_id):
             return
-        if "text" not in message:
-            await self._say(self._chat(chat_id, sender), "I only understand text messages for now.")
+        image = _image_file(message)
+        if "text" not in message and image is None:
+            await self._say(self._chat(chat_id, sender), "I understand text and images only.")
             return
         key = f"message:{chat_id}:{message.get('message_id')}"
         if not self._first_time(key):
             return
+        if image is not None:
+            caption = str(message.get("caption") or "").strip()
+            await self._on_image(self._chat(chat_id, sender), caption, *image, key)
+            return
         await self._on_text(self._chat(chat_id, sender), str(message["text"]).strip(), key)
+
+    async def _on_image(self, chat: _Chat, caption: str, file_id: str, name: str, key: str) -> None:
+        """A photo or an image file (P44): downloaded, checked, sent with its caption."""
+        if chat.busy:  # queued input is text only
+            await self._say(chat, "A run is in progress. Send the image again when it is done.")
+            return
+        try:
+            data = await self._api.download_file(file_id, MAX_IMAGE_BYTES)
+            image = make_image(data, name)
+        except (TelegramError, ValueError) as exc:
+            await self._say(chat, f"Cannot use that image: {exc}")
+            return
+        chat.task = asyncio.create_task(self._run_message(chat, caption, key, (image,)))
 
     def _is_owner_chat(self, sender: int, chat: Mapping[str, Any] | None, what: str) -> bool:
         """Serve only an allow-listed user, and only in their own private chat.
@@ -1040,13 +1072,15 @@ class TelegramGateway:
         await self._say_html(chat, format_tool_detail(item), back)
 
     # ── one run ──────────────────────────────────────────────────────────────
-    async def _run_message(self, chat: _Chat, text: str, key: str) -> None:
+    async def _run_message(
+        self, chat: _Chat, text: str, key: str, images: tuple[Image, ...] = ()
+    ) -> None:
         try:
             await self._check_restored(chat)
             if chat.session is None:
                 chat.session = await self._app.new_session(chat.principal)
             if chat.title is None:
-                chat.title = text[:80]
+                chat.title = text[:80] or (images[0].name if images else "")
                 await self._app.set_session_title(chat.session, chat.title)
             self._save_state()
             with_typing = asyncio.create_task(self._api.send_chat_action(chat.chat_id))
@@ -1062,6 +1096,7 @@ class TelegramGateway:
                     session=chat.session,
                     text=text,
                     metadata={"idempotency_key": key},
+                    images=images,
                 )
             )
             chat.run_id = handle.run_id
