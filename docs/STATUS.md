@@ -1,12 +1,13 @@
-# Status snapshot (2026-11-26)
+# Status snapshot (2026-11-27)
 
 Where the project stands and what to do next. Written so a fresh session can pick it up
 cold. `git log` has the later truth.
 
 ## State
 
-- 749 tests, `make check` (ruff + strict mypy + pytest) green; web `npm test` and `npm run build`
-  green. Private repo, `main`. `.claude/skills/` is local only (gitignored, removed from history).
+- 856 tests, `make check` (ruff + strict mypy + pytest) green; web `npm test` (38) and
+  `npm run build` green. Optional extras: `--extra browser` (`web_screenshot`), `--extra otel`
+  (tracing); without them those tests skip. Private repo, `main`. `.claude/skills/` is local only (gitignored, removed from history).
 - Run it: `agent-stack` (TUI), `agent-stack chat` (line REPL), `agent-stack telegram`
   (bot), `agent-stack audit tail`. Default model `openrouter:deepseek/deepseek-v4-pro`
   (`AGENT_STACK_MODEL`); see `.env.example` for every variable.
@@ -22,6 +23,11 @@ cold. `git log` has the later truth.
 | Web | 24 | FastAPI + resumable SSE, Next.js UI (`web/`) |
 | Context engineering | 16, 16e, 31 | resident parts, calibrated token budget, tool-result clearing, saved compaction + `/compact` |
 | Chat search | 32 | `find_chats`: FTS5 + BM25 over every conversation's full text |
+| Live interaction | 33, 45 | messages queued into a working run (take back to edit/cancel); tokens stream to the web UI and TUI (`assistant.delta`, live-only, never logged) |
+| TUI | 33, 34 | tabs (each runs on its own), sidebar with one context meter, model, mode; split into modules by concern |
+| Tools | 35, 38, 43 | per-call timeout (`AGENT_STACK_TOOL_TIMEOUT`); `web_screenshot` (Playwright); MCP servers from `.mcp.json` as `mcp__<server>__<tool>` |
+| Models | 36, 37, 44 | classifier via `with_structured_output`; prompt-cache breakpoints (Claude, Qwen; others cache by themselves); images in (by reference under `artifacts/`, ADR 019) |
+| Gateways (more) | 39, 40, 41 | web rewind from any message; per-principal rate limits (429 / slow down); `/export md\|json` everywhere |
 
 ## Since the phases (unphased work, all in `git log`)
 
@@ -81,6 +87,10 @@ automatic memory extraction. Not yet run against a real model: compaction (tests
   cancelled mid-flight records no usage, so any partial charge for it is not counted.
 
 ## Not done
+
+- **Follow-ups from P34-P45** are drafted in `tmp/tickets/followups-P34-P39.md` (local): web cost
+  line without cache numbers, delta redaction across chunk boundaries, MCP reconnect/resources,
+  tracing of parallel tools, image downscaling and original names, and more.
 
 - **P24 Web gateway: done** (kept here for its notes). `agent-stack web` serves the API
   (`gateways/web/`): sessions, messages, a resumable SSE stream (`Last-Event-ID`), cancel (also
